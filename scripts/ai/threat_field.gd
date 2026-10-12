@@ -211,6 +211,20 @@ func _travel_days_field(
 	if _travel_cache_has(cache_key):
 		return _travel_cache_get(cache_key)
 	var dist := {start: 0.0}
+	var selected := NativeCompute.backend()
+	if selected != "gdscript":
+		dist = NativeCompute.travel_field(state, start, required_manpower, HORIZON_DAYS)
+		if selected == "compare":
+			NativeCompute.verify_equal(_travel_days_field_gdscript(state, start, required_manpower), dist, "threat travel")
+		travel_distance_cache[cache_key] = dist
+		return dist
+	dist = _travel_days_field_gdscript(state, start, required_manpower)
+	travel_distance_cache[cache_key] = dist
+	return dist
+
+
+func _travel_days_field_gdscript(state: GameState, start: int, required_manpower: int) -> Dictionary:
+	var dist := {start: 0.0}
 	var heap: Array = []
 	_heap_push(heap, [0.0, start])
 	while not heap.is_empty():
@@ -236,7 +250,6 @@ func _travel_days_field(
 			if next_dist < float(dist.get(neighbor, INF)):
 				dist[neighbor] = next_dist
 				_heap_push(heap, [next_dist, neighbor])
-	travel_distance_cache[cache_key] = dist
 	return dist
 
 

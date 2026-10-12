@@ -315,10 +315,12 @@ static func _build_structure_locked(state: GameState, use_connectivity_prefilter
 		state, occupied_edges
 	)
 	var field_cache := {}
+	var native_trade_batch := NativeCompute.begin_trade_batch(state, graph)
 	var routes := _atlas_regional_routes(state,graph) if not state.atlas_layout.is_empty() else _build_regional_routes(
 		state, graph, besieged, occupied_edges, field_cache,
 		build_profile, shared_caches, party_context
 	)
+	if native_trade_batch: NativeCompute.end_trade_batch(state)
 	if profile_enabled and not state.atlas_layout.is_empty():
 		_accumulate_build_profile(build_profile,"ai_snapshot_forecast_structure_regional_routes",Time.get_ticks_usec()-stage_started)
 
@@ -3728,6 +3730,24 @@ static func _dijkstra_field(
 	blocked_edges: Dictionary
 ) -> Dictionary:
 	if not state.atlas_layout.is_empty(): state.atlas_trade_cache.dijkstra_builds=int(state.atlas_trade_cache.get("dijkstra_builds",0))+1
+	var selected := NativeCompute.backend()
+	if selected == "gdscript":
+		return _dijkstra_field_gdscript(state, graph, starts, allowed, operational, besieged, blocked_edges)
+	var result := NativeCompute.trade_field(state, graph, starts, allowed, operational, besieged, blocked_edges)
+	if selected == "compare":
+		NativeCompute.verify_equal(_dijkstra_field_gdscript(state, graph, starts, allowed, operational, besieged, blocked_edges), result, "trade route")
+	return result
+
+
+static func _dijkstra_field_gdscript(
+	state: GameState,
+	graph: Dictionary,
+	starts: Array[int],
+	allowed: PackedByteArray,
+	operational: bool,
+	besieged: Dictionary,
+	blocked_edges: Dictionary
+) -> Dictionary:
 	var city_count := state.cities.size()
 	var dist := PackedInt64Array()
 	dist.resize(city_count)

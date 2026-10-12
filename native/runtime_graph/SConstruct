@@ -1,0 +1,24 @@
+#!/usr/bin/env python
+import os
+
+# The wrapper supplies the locked MSVC environment and exact engine API dump.
+# /fp:strict prevents reassociation and fused multiply-add in deterministic kernels.
+env = Environment(tools=["default"], PLATFORM="", ENV=dict(os.environ), MSVC_USE_SCRIPT=False)
+env = SConscript(".cache/godot-cpp/SConstruct", exports={"env": env})
+if env["platform"] != "windows" or env["arch"] != "x86_64" or not env.get("is_msvc", False):
+    raise ValueError("runtime_graph currently supports Windows x64 MSVC only")
+# The MSVC tool replaces CCFLAGS while initializing. Set strict arithmetic
+# after initialization; GodotCPP builder nodes retain this environment too.
+env.Append(CCFLAGS=["/fp:strict"])
+if "/fp:strict" not in env["CCFLAGS"] or any("/fp:fast" in str(f) for f in env["CCFLAGS"]):
+    raise ValueError("runtime_graph requires strict floating-point compilation")
+env.Append(CPPPATH=["src"])
+objects = [
+    env.SharedObject(".cache/obj/" + env["target"] + "/" + source,
+                     "src/" + source + ".cpp")
+    for source in ["register_types", "runtime_graph"]
+]
+library = env.SharedLibrary("bin/runtime_graph" + env["suffix"] + env["SHLIBSUFFIX"], objects)
+env.NoCache(library)
+SConsignFile(".cache/sconsign")
+Default(library)

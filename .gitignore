@@ -30,3 +30,8 @@ __pycache__/
 
 # Evidence source dumps are archival text, not project script resources.
 docs/**/*.gd.uid
+
+# Native runtime graph dependency checkout, isolated tools and compiled artifacts.
+/native/runtime_graph/.cache/
+/native/runtime_graph/bin/
+/native/runtime_graph/*.pdb

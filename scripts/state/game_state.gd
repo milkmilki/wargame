@@ -366,6 +366,7 @@ func apply_city_editor_changes(
 	city.terrain_height = terrain_height
 	RegionalStrategy.invalidate_geometry(self)
 	city.terrain_relief = terrain_relief
+	NativeCompute.invalidate_state(self)
 	city.terrain_output_multiplier = terrain_output_multiplier
 	city.development_gold_multiplier = development_gold_multiplier
 	city.development_food_multiplier = development_food_multiplier
@@ -433,6 +434,7 @@ func apply_edge_editor_changes(
 
 
 func _reset_world(world_seed: int) -> void:
+	NativeCompute.invalidate_state(self)
 	atlas_layout.clear(); trade_enabled = true
 	self.world_seed = world_seed
 	rng.seed = world_seed

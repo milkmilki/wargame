@@ -1,0 +1,170 @@
+{
+  "status": "pass",
+  "scope": "Actual main scene startup and screenshot; starts paused on day 0, not a simulation performance measurement.",
+  "engine": "4.7.1.stable.official.a13da4feb",
+  "native_api_version": 2,
+  "native_adapter_sha256": "fb1329b92c90b8588a0fa81b310ed8ad715b5ba40dd55cf8dc828f7adbe42d48",
+  "main_scene": "res://atlas_military.tscn",
+  "main_scene_sha256": "b4cbd044e7ae2c74527a73edd4cf736ddb16c3f7bbfd10607b8503974698beaf",
+  "project_godot_sha256": "788bfa97167404f60298d55e965fefe78b8714f8084a0d67b20a1e1d6994197a",
+  "export_configuration": {
+    "script_export_mode": "text (0)",
+    "editor/export/convert_text_resources_to_binary": false,
+    "preset_sha256": "0ae2455bca53bf2298d773b3918c38df2173a0c484fe9349fb5f64630da09641",
+    "temporary_project_sha256": "c40b7e1293cf01df94330b583fe3f4d617821f77544bcbfb805fef9c81e8d79d",
+    "project_restored": true,
+    "temporary_preset_removed": true
+  },
+  "source_release_dll_sha256": "594cc9669e3b627bc1147b168aaa29464b7421222077667f69e11597f6ab6b85",
+  "packaged_release_dll": {
+    "path": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\runtime_graph.windows.template_release.x86_64.dll",
+    "sha256": "594cc9669e3b627bc1147b168aaa29464b7421222077667f69e11597f6ab6b85"
+  },
+  "release_build_manifest": {
+    "target": "release",
+    "godot_version": "4.7.1.stable.official.a13da4feb",
+    "godot_cpp_commit": "b051e694cf493d417f5aa945c656cb77ae9011a9",
+    "msvc": "14.44",
+    "msvc_toolset": "14.44.35207",
+    "scons": "4.10.0",
+    "precision": "single",
+    "platform": "windows",
+    "architecture": "x86_64",
+    "floating_point": "/fp:strict",
+    "lto": "none",
+    "engine_sha256": "323f9c4cc5db674e98815cdd8e69da007d5efc779abedc8c0e42883b7fdea12a",
+    "api_sha256": "c5dbd0c117e67f96bd9fef2c2e2023913e1d750d072ad2417a559e698211800b",
+    "dll_sha256": "594cc9669e3b627bc1147b168aaa29464b7421222077667f69e11597f6ab6b85",
+    "source_sha256": {
+      "native/runtime_graph/dependencies.lock.json": "d191a2a7116912636ffdb7eb0c76497b34b07323e453560c10b6463618b43f78",
+      "native/runtime_graph/SConstruct": "a6674491ef9dac3fe47771f2f0064c0f71fd7c69384b31fe5736c2365612a85f",
+      "native/runtime_graph/build_profile.json": "7fed1570932453c2318b25e452f43d7ac530110b776779bb5babaa846ad6d24e",
+      "native/runtime_graph/runtime_graph.gdextension": "95e41d9aad029b6bd420951cfa1397de0a8fd4857eb8fb6fb50dc0164de5a5b5",
+      "scripts/tools/build_native_compute.py": "18d1792340006a45127cb5111da43877fa00c6ec661476383cbb1357640378d7",
+      "native/runtime_graph/src/register_types.cpp": "63d860c0fcbd0c1bd08e639e17cbebf3718438cee6a9956e4fc49c8c9544d210",
+      "native/runtime_graph/src/register_types.hpp": "3df7dbed66798b9ef3bed096b3e97a8d621a33526cdfe4d13bf3f4f9b389af39",
+      "native/runtime_graph/src/runtime_graph.cpp": "03e049b379c6298e3704b391cef1dfa33f6ea062b61ffaa63dfaed86cb692101",
+      "native/runtime_graph/src/runtime_graph.hpp": "eeb3f3cc49d26bcf31253a9bf4b25438cd5532bffec8d583787fb1deab190e55"
+    }
+  },
+  "executable": {
+    "path": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\wargame-release.exe",
+    "sha256": "76269a403bb832599edeee4432a5b7a7e88c018eb5c9c798dfd8289359b0ec07"
+  },
+  "pck": {
+    "path": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\wargame-release.pck",
+    "sha256": "be652fe62601ad4e429bd012df95e436430e39d810261e0a7f9dacc047a38a7a"
+  },
+  "atlas_cache": {
+    "path": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\inputs\\atlas-military-eurasia-mask-9d9ebdaffeb26caac950f7745d96fc6fc2330fad10276789292a6479933f2eb8.bin",
+    "sha256": "9d9ebdaffeb26caac950f7745d96fc6fc2330fad10276789292a6479933f2eb8",
+    "size_bytes": 69787896,
+    "read_only": true,
+    "source_cache_path": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\atlas-military-eurasia-mask.bin"
+  },
+  "export": {
+    "pid": 5532,
+    "exit_code": 0,
+    "argv": [
+      "D:\\ProjectICreate\\Godot_v4.7.1-stable_win64.exe",
+      "--headless",
+      "--path",
+      "D:\\ProjectICreate\\Wargame\\wargame",
+      "--export-release",
+      "WorldWarReleaseVerification",
+      "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\wargame-release.exe"
+    ],
+    "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\export.log"
+  },
+  "startup": {
+    "pid": 28168,
+    "exit_code": 0,
+    "argv": [
+      "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\wargame-release.exe",
+      "--",
+      "--atlas-cache=D:/ProjectICreate/Wargame/wargame/.dbg/wargame-release/inputs/atlas-military-eurasia-mask-9d9ebdaffeb26caac950f7745d96fc6fc2330fad10276789292a6479933f2eb8.bin",
+      "--atlas-capture=D:/ProjectICreate/Wargame/wargame/.dbg/wargame-release/main-scene-eurasia.png"
+    ],
+    "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\startup.log",
+    "requested_backend": "gdscript (release must force native)",
+    "error_lines": [],
+    "renderer": "D3D12 12_0 - Forward+ - Using Device #0: AMD - AMD Radeon RX 7600"
+  },
+  "world": {
+    "pid": 28168,
+    "seed": 1,
+    "nation_count": 40,
+    "city_count": 1192,
+    "army_count": 40,
+    "day": 0,
+    "terrain_model": "earth",
+    "settlement_mask": {
+      "east": 145.0,
+      "enabled": true,
+      "north": 55.0,
+      "south": 20.0,
+      "version": "atlas-geographic-mask-v1",
+      "west": -15.0
+    },
+    "rng_state": "4982495298212809567",
+    "source": "atlas_development_cache"
+  },
+  "session": {
+    "pid": 28168,
+    "scene": "res://atlas_military.tscn",
+    "utc": "2026-10-12T12:20:13",
+    "engine": {
+      "build": "official",
+      "hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+      "hex": 263937,
+      "major": 4,
+      "minor": 7,
+      "patch": 1,
+      "status": "stable",
+      "string": "4.7.1-stable (official)",
+      "timestamp": 0
+    },
+    "end_day": 0
+  },
+  "native_backend": {
+    "requested_environment": "gdscript",
+    "effective_backend": "native",
+    "basis": "Release backend() forces native; actual main-scene require_native succeeded, and missing packaged DLL was rejected before capture."
+  },
+  "missing_dll": {
+    "pid": 22360,
+    "exit_code": 1,
+    "argv": [
+      "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\wargame-release.exe",
+      "--",
+      "--atlas-cache=D:/ProjectICreate/Wargame/wargame/.dbg/wargame-release/inputs/atlas-military-eurasia-mask-9d9ebdaffeb26caac950f7745d96fc6fc2330fad10276789292a6479933f2eb8.bin",
+      "--atlas-capture=D:/ProjectICreate/Wargame/wargame/.dbg/wargame-release/main-scene-eurasia.png"
+    ],
+    "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\missing-dll.log",
+    "explicit_error": true,
+    "capture_reached": false,
+    "packaged_library_restored": true
+  },
+  "capture": {
+    "path": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\main-scene-eurasia.png",
+    "sha256": "ef13c6d98abe576947e5dd116d347efc582b9b7847eaabe4a4c82380249af0e5",
+    "size_bytes": 2975493,
+    "visually_reviewed": true
+  },
+  "debug_run_log": "C:\\Users\\57859\\AppData\\Roaming\\Godot\\app_userdata\\WorldWar\\debug_runs\\run-2026-10-12T12-20-13-28168-4450644.jsonl",
+  "raw_evidence": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\wargame-release\\full-game-release-raw.json",
+  "command": "& \"D:/ProjectICreate/Wargame/wargame/.dbg/wargame-release/wargame-release.exe\" -- \"--atlas-cache=D:/ProjectICreate/Wargame/wargame/.dbg/wargame-release/inputs/atlas-military-eurasia-mask-9d9ebdaffeb26caac950f7745d96fc6fc2330fad10276789292a6479933f2eb8.bin\" \"--atlas-capture=D:/ProjectICreate/Wargame/wargame/.dbg/wargame-release/main-scene-eurasia.png\"",
+  "limitations": [
+    "Startup is paused on day 0; long simulation correctness and GUI performance are verified separately.",
+    "Uses a local generated cache to bypass terrain generation; runtime EXE/PCK/DLL are a real release export.",
+    "Official template range extraction checked member CRC, size and SHA256, not the full 1.28 GB archive checksum."
+  ],
+  "snapshot_integrity": {
+    "before_sha256": "9d9ebdaffeb26caac950f7745d96fc6fc2330fad10276789292a6479933f2eb8",
+    "after_sha256": "9d9ebdaffeb26caac950f7745d96fc6fc2330fad10276789292a6479933f2eb8",
+    "unchanged": true,
+    "read_only": true
+  },
+  "reused_verified_package": true,
+  "export_tool_command": "python scripts/tools/export_native_release.py --godot D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe --verify-cache .dbg/wargame-release/inputs/atlas-military-eurasia-mask-9d9ebdaffeb26caac950f7745d96fc6fc2330fad10276789292a6479933f2eb8.bin"
+}

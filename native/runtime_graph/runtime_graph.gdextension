@@ -1,0 +1,10 @@
+[configuration]
+
+entry_symbol = "runtime_graph_library_init"
+compatibility_minimum = "4.7.1"
+reloadable = false
+
+[libraries]
+
+windows.debug.x86_64 = "res://native/runtime_graph/bin/runtime_graph.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://native/runtime_graph/bin/runtime_graph.windows.template_release.x86_64.dll"

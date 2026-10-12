@@ -1,0 +1,150 @@
+{
+  "format": "native-runtime-exact-equivalence-v1",
+  "scope": "correctness_only_concurrent_regressions_not_performance",
+  "complete": true,
+  "passed": true,
+  "current_source_sha256": "d47fd07a19ef707635ead32198a5eec47f1ff06a644c7f8bd4ba5a992f9850ce",
+  "native_source_sha256": {
+    "native/runtime_graph/src/register_types.cpp": "63d860c0fcbd0c1bd08e639e17cbebf3718438cee6a9956e4fc49c8c9544d210",
+    "native/runtime_graph/src/register_types.hpp": "3df7dbed66798b9ef3bed096b3e97a8d621a33526cdfe4d13bf3f4f9b389af39",
+    "native/runtime_graph/src/runtime_graph.cpp": "03e049b379c6298e3704b391cef1dfa33f6ea062b61ffaa63dfaed86cb692101",
+    "native/runtime_graph/src/runtime_graph.hpp": "eeb3f3cc49d26bcf31253a9bf4b25438cd5532bffec8d583787fb1deab190e55"
+  },
+  "dll_sha256": {
+    "native/runtime_graph/bin/runtime_graph.windows.template_debug.x86_64.dll": "68850b0816454b27292e177b1608061d3df4d062d59e372b77d44b0737724bcc",
+    "native/runtime_graph/bin/runtime_graph.windows.template_release.x86_64.dll": "594cc9669e3b627bc1147b168aaa29464b7421222077667f69e11597f6ab6b85"
+  },
+  "build_manifest_sha256": {
+    "native/runtime_graph/bin/runtime_graph.windows.template_debug.x86_64.build.json": "475bf6372101e9da5e9b4c4d73002de11c22255ad6308fbdbeb6971a7e1e9a08",
+    "native/runtime_graph/bin/runtime_graph.windows.template_release.x86_64.build.json": "a919d0396ed9f58ddbd6bb94bde71d85aa8c97c105c2bef4cc40ce5cae3412f9"
+  },
+  "test_input_sha256": {
+    "tests/native_runtime_equivalence.gd": "bf9a822af61ae3ecf4136e7693919a55e6e15f667a18130e4672409551d0e87e",
+    "tests/support/native_runtime_fixture.gd": "e08f2610cfac1236aaa2df893145cda0bc190e3952874eaf86e3f0334278b992",
+    "tests/atlas_military_inputs.gd": "a680455c4fa2a99c143b5a126712a8fd44824dd5ca4535b2fbe90248d658d6e5"
+  },
+  "godot_executable": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "godot_executable_sha256": "323f9c4cc5db674e98815cdd8e69da007d5efc779abedc8c0e42883b7fdea12a",
+  "world": {
+    "model": "earth",
+    "initial_nations": 40,
+    "settlement_mask": {
+      "enabled": true,
+      "south": 20,
+      "north": 55,
+      "west": -15,
+      "east": 145
+    },
+    "trade": true,
+    "rulers": true
+  },
+  "comparison": {
+    "schema": 28,
+    "every_initial_and_daily_state": true,
+    "normalization": false,
+    "encoding": "var_to_bytes",
+    "input_isolation": "independent payload.duplicate(true) for both worlds",
+    "snapshot": "NativeSnapshotBuilder.build plus rng_seed, month, war_objectives, diplomatic_relations and generation_metadata"
+  },
+  "cases": [
+    {
+      "name": "equivalence-final-365-seeds-1-7-2024",
+      "days": 365,
+      "seeds": [
+        1,
+        7,
+        2024
+      ],
+      "sliced": false,
+      "passed": true,
+      "exit_code": 0,
+      "raw_log": ".dbg/native-runtime/equivalence-final-365-seeds-1-7-2024.log",
+      "raw_log_sha256": "1dc6e8782c5b8442e56671567bd9eeb720b2c3dd8ee2ae9c950410e8ee91cfb1",
+      "command": [
+        "D:\\ProjectICreate\\Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/native_runtime_equivalence.gd",
+        "--",
+        "--days=365",
+        "--seeds=1,7,2024"
+      ],
+      "final_state_sha256_by_seed": {
+        "1": "214487144fca49ecacc22308039586d366ea86c1db16dee82b98524067243d61",
+        "7": "d8f5631db60a327e1397034e3c7407dddd6fb14d317de9d015dede69e455062d",
+        "2024": "13b5cb6aad5262556250d845f19a4c332a75a9c97ce1edd569ae86382d7eb56f"
+      },
+      "initial_raw_byte_comparisons": 3,
+      "daily_raw_byte_comparisons": 1095,
+      "source_and_dll_unchanged": true,
+      "script_errors": []
+    },
+    {
+      "name": "equivalence-final-720-seed-1",
+      "days": 720,
+      "seeds": [
+        1
+      ],
+      "sliced": false,
+      "passed": true,
+      "exit_code": 0,
+      "raw_log": ".dbg/native-runtime/equivalence-final-720-seed-1.log",
+      "raw_log_sha256": "03fee64d76647295be1277dae2a1f47e685ec9a6fed6185a5a87815a39c30de5",
+      "command": [
+        "D:\\ProjectICreate\\Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/native_runtime_equivalence.gd",
+        "--",
+        "--days=720",
+        "--seeds=1"
+      ],
+      "final_state_sha256_by_seed": {
+        "1": "6eae622d38f022a63d9509715f5bf591927d56e61af7fc8aa1b83a6b9763646f"
+      },
+      "initial_raw_byte_comparisons": 1,
+      "daily_raw_byte_comparisons": 720,
+      "source_and_dll_unchanged": true,
+      "script_errors": []
+    },
+    {
+      "name": "equivalence-final-30-sliced-seed-1",
+      "days": 30,
+      "seeds": [
+        1
+      ],
+      "sliced": true,
+      "passed": true,
+      "exit_code": 0,
+      "raw_log": ".dbg/native-runtime/equivalence-final-30-sliced-seed-1.log",
+      "raw_log_sha256": "2f688c592ae131acdcdec9b18216ee5ef6e789bd11134654c925e4f3f62ef1ef",
+      "command": [
+        "D:\\ProjectICreate\\Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "res://tests/native_runtime_equivalence.gd",
+        "--",
+        "--days=30",
+        "--seeds=1",
+        "--sliced"
+      ],
+      "final_state_sha256_by_seed": {
+        "1": "48cac1d6ce92c0c6c0a04bd0d38be0469023fdc2bde9d8e149c5a5e26cc740c4"
+      },
+      "initial_raw_byte_comparisons": 1,
+      "daily_raw_byte_comparisons": 30,
+      "source_and_dll_unchanged": true,
+      "script_errors": []
+    }
+  ],
+  "engine": "v4.7.1.stable.official.a13da4feb",
+  "initial_raw_byte_comparisons": 5,
+  "daily_raw_byte_comparisons": 1845,
+  "source_and_dll_unchanged": true
+}

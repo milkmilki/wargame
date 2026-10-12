@@ -22,6 +22,26 @@ static func dijkstra_field(
 	blocked_city_ids: Dictionary = {},
 	allowed_exit_city: int = -1
 ) -> Dictionary:
+	var selected := NativeCompute.backend()
+	if selected == "gdscript" or state.atlas_layout.is_empty():
+		return _dijkstra_field_gdscript(state, start, allowed_nation, block_contested_edges, use_danger_weight, allowed_goal, required_manpower, blocked_city_ids, allowed_exit_city)
+	var result := NativeCompute.path_field(state, start, allowed_nation, block_contested_edges, use_danger_weight, allowed_goal, required_manpower, blocked_city_ids, allowed_exit_city)
+	if selected == "compare":
+		NativeCompute.verify_equal(_dijkstra_field_gdscript(state, start, allowed_nation, block_contested_edges, use_danger_weight, allowed_goal, required_manpower, blocked_city_ids, allowed_exit_city), result, "military path")
+	return result
+
+
+static func _dijkstra_field_gdscript(
+	state: GameState,
+	start: int,
+	allowed_nation: int = -1,
+	block_contested_edges: bool = false,
+	use_danger_weight: bool = true,
+	allowed_goal: int = -1,
+	required_manpower: int = 0,
+	blocked_city_ids: Dictionary = {},
+	allowed_exit_city: int = -1
+) -> Dictionary:
 	var dist := {}
 	var prev := {}
 	var visited := {}
@@ -1295,6 +1315,24 @@ static func _supply_loss_field(
 	extra_zero_origins: Array[int] = [] as Array[int],
 	logistics: bool = false
 ) -> Dictionary:
+	var selected := NativeCompute.backend()
+	if selected == "gdscript" or state.atlas_layout.is_empty():
+		return _supply_loss_field_gdscript(state, start, nation_id, blocked_enemy_edges, blocked_edges_ready, extra_zero_origins, logistics)
+	var result := NativeCompute.supply_field(state, start, nation_id, blocked_enemy_edges, blocked_edges_ready, extra_zero_origins, logistics)
+	if selected == "compare":
+		NativeCompute.verify_equal(_supply_loss_field_gdscript(state, start, nation_id, blocked_enemy_edges, blocked_edges_ready, extra_zero_origins, logistics), result, "supply loss")
+	return result
+
+
+static func _supply_loss_field_gdscript(
+	state: GameState,
+	start: int,
+	nation_id: int,
+	blocked_enemy_edges: Dictionary = {},
+	blocked_edges_ready: bool = false,
+	extra_zero_origins: Array[int] = [] as Array[int],
+	logistics: bool = false
+) -> Dictionary:
 	var city_count := state.cities.size()
 	var dist := PackedFloat64Array()
 	dist.resize(city_count)
@@ -1469,6 +1507,12 @@ static func _enemy_occupied_edge_keys(
 	state: GameState,
 	nation_id: int
 ) -> Dictionary:
+	if NativeCompute.backend() != "gdscript":
+		return NativeCompute.enemy_occupied_edge_keys(state, nation_id)
+	return _enemy_occupied_edge_keys_gdscript(state, nation_id)
+
+
+static func _enemy_occupied_edge_keys_gdscript(state: GameState, nation_id: int) -> Dictionary:
 	var result := {}
 	if nation_id < 0:
 		return result

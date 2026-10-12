@@ -2603,7 +2603,10 @@ func _resolve_supply() -> void:
 	var supply_profile_started := (
 		Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	)
-	_prepare_supply_network_caches()
+	var native_supply_nations: Array[int] = []
+	for nation_id in _prepare_supply_network_caches():
+		if not _daily_supply_network_cache.has(nation_id): native_supply_nations.append(nation_id)
+	var native_supply_batch := NativeCompute.begin_frozen_batch(state, native_supply_nations, false, true) if not native_supply_nations.is_empty() else false
 	_record_tick_profile_stage(
 		"supply_prepare",
 		supply_profile_started
@@ -2618,6 +2621,7 @@ func _resolve_supply() -> void:
 		var plan := _build_supply_plan_for_army(army, demand_by_nation, {}, stationary_loss_cache)
 		if not plan.is_empty():
 			plans.append(plan)
+	if native_supply_batch: NativeCompute.end_frozen_batch(state)
 	_finalize_food_demand(demand_by_nation)
 	_record_tick_profile_stage(
 		"supply_build_plans",
@@ -2907,6 +2911,7 @@ func _prebuild_supply_networks_over_frames(
 			missing_ids.append(nation_id)
 	if missing_ids.is_empty():
 		return
+	var native_supply_batch := NativeCompute.begin_frozen_batch(state, missing_ids, false, true)
 	var networks: Array = []
 	networks.resize(missing_ids.size())
 	var group_indices := {}
@@ -2969,6 +2974,7 @@ func _prebuild_supply_networks_over_frames(
 				await get_tree().process_frame
 		for task_id in task_ids:
 			WorkerThreadPool.wait_for_task_completion(task_id)
+	if native_supply_batch: NativeCompute.end_frozen_batch(state)
 	for index in range(missing_ids.size()):
 		var nation_id := missing_ids[index]
 		_daily_supply_network_cache[nation_id] = (
@@ -7027,6 +7033,9 @@ func _build_ai_snapshot_threat_phase(
 	worker_high_priority: bool = true
 ) -> Dictionary:
 	_parallel_ai_context_jobs = context_jobs
+	var native_nations: Array[int] = []
+	for job in context_jobs: native_nations.append(int(job.nation_id))
+	var native_ai_batch := NativeCompute.begin_frozen_batch(state, native_nations, true, false) if not native_nations.is_empty() else false
 	# Read-only snapshot and threat construction dominates the decision cost.
 	# Runtime mode keeps rendering while deterministic worker batches complete.
 	if spread_runtime_work and not context_jobs.is_empty():
@@ -7141,6 +7150,7 @@ func _build_ai_snapshot_threat_phase(
 			Time.get_ticks_usec()
 			if tick_phase_profiling_enabled else 0
 		)
+	if native_ai_batch: NativeCompute.end_frozen_batch(state)
 	return {
 		"slice_started": runtime_slice_started,
 		"profile_stage_started": ai_profile_stage_started,

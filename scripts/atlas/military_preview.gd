@@ -30,6 +30,7 @@ func load_native(seed_value: int) -> void:
 	if not mask_error.is_empty(): status.text=mask_error; return
 	if startup_cache_writer!=null and startup_cache_writer.is_started(): startup_cache_writer.wait_to_finish()
 	generating=true; generation_index+=1; startup_profile={}
+	await _pause_previous_world()
 	var options := native_generation_options()
 	var use_cache := true
 	for argument in OS.get_cmdline_user_args():
@@ -122,6 +123,8 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 func _ready() -> void:
+	if NativeCompute.backend() != "gdscript" and not NativeCompute.require_native():
+		return
 	get_window().mouse_exited.connect(clear_city_hover)
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--atlas-capture="):
@@ -335,6 +338,7 @@ func build_view() -> void:
 
 func present_world(prepared: GameState,payload: Dictionary,source: String = "atlas_native_zhoufu") -> void:
 	# Swap only after generation succeeds; the old scenario remains intact on failure.
+	await _pause_previous_world()
 	state = prepared; military_payload = payload; historical_view = false; selected_army = -1; selected_region = -1; command_target=-1
 	trade_key.clear(); trade_hub_key.clear(); trade_center_ids.clear(); trade_lines.clear(); trade_pending=false; render_scheduler.invalidate("trade_regions")
 	if is_instance_valid(trade_hubs): trade_hubs.queue_free()
@@ -368,6 +372,12 @@ func present_world(prepared: GameState,payload: Dictionary,source: String = "atl
 		for line in Borders.build(parent_chains,parent_owners,data.mesh,raster,parent.of): overlay.state_lines.append(Geometry.points(line.pts))
 	for line in province_lines: overlay.district_lines.append(Geometry.points(line.pts))
 	status.text = "%d 州 · %d 府 · %d 交通点 · %d 条共享道路段"%[state.administrative_region_count,state.land_cities().size()-state.administrative_region_count,state.cities.size()-state.land_cities().size(),state.edges.size()]
+
+func _pause_previous_world() -> void:
+	if simulation == null: return
+	simulation.paused = true
+	if simulation.runtime_day_in_progress():
+		await simulation.runtime_day_committed
 
 func visual_data() -> Dictionary:
 	var result: Dictionary = military_payload.data.duplicate()

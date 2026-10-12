@@ -515,10 +515,24 @@ func _compute_connectivity() -> void:
 		if city.owner_nation == nation_id and city.id != capital:
 			roots.append(city.id)
 	EquivariantOrder.sort_city_ids(roots, _state, nation_id, capital)
-	for root in roots:
-		if _disc.has(root):
-			continue
-		_dfs_connectivity_iterative(root)
+	var selected := NativeCompute.backend()
+	if selected == "gdscript":
+		for root in roots:
+			if _disc.has(root):
+				continue
+			_dfs_connectivity_iterative(root)
+	else:
+		var result := NativeCompute.connectivity(self, roots)
+		if selected == "compare":
+			for root in roots:
+				if not _disc.has(root): _dfs_connectivity_iterative(root)
+			NativeCompute.verify_equal({"disc":_disc,"low":_low,"subtree":_subtree_value,"articulation":articulation_impact,"bridges":bridge_impact}, result, "strategic connectivity")
+		_disc = result.disc
+		_low = result.low
+		_subtree_value = result.subtree
+		articulation_impact = result.articulation
+		bridge_impact = result.bridges
+		_time = _disc.size()
 	var articulation_ids := articulation_impact.keys()
 	EquivariantOrder.sort_city_ids(
 		articulation_ids,
