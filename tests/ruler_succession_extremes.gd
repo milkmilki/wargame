@@ -5,6 +5,18 @@ extends SceneTree
 var _valid := true
 const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
 
+func _complete_state_fixture(state: GameState) -> void:
+	# The old grid generator assigns nations per city. These political cases
+	# require whole states: partial states are deliberately not enfeoffable.
+	var foreign_center := state.administrative_center_of(state.nations[1].capital_city_id)
+	var operations: Array[Dictionary]=[]
+	for city in state.cities:
+		var owner := 1 if state.administrative_center_of(city.id)==foreign_center else 0
+		operations.append({"city_id":city.id,"controller_id":owner,"legal_owner_id":owner,
+			"sponsor_id":-1,"stock_policy":GameState.TerritoryStockDisposition.RETURN_TO_OLD_POOL,"reason":"complete_state_test_fixture"})
+	_check(bool(state.apply_territory_transaction(operations).get("ok",false)),"complete-state fixture transaction")
+	_check(state.territory_structure_valid(),"complete-state fixture invariant")
+
 
 func _init() -> void:
 	_test_reign_distribution()
@@ -263,6 +275,7 @@ func _test_capital_income_and_succession_relocation() -> void:
 func _test_suzerainty_rulers_reuse_person_names() -> void:
 	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(71241, 2, 20)
+	_complete_state_fixture(state)
 	state._random_ruler_profiles_enabled = true
 	var region: Array[int] = []
 	for center_value in state.administrative_center_city_ids:
@@ -371,6 +384,7 @@ func _test_conqueror_war_benefits() -> void:
 func _test_puppet_enfeoffment() -> void:
 	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(84521, 2, 60)
+	_complete_state_fixture(state)
 	# This repeated-grant scenario requires existing relatives, independent
 	# of the separately tested natural possibility of a childless monarch.
 	FamilyFixture.ensure_candidates(state, 0, 5)

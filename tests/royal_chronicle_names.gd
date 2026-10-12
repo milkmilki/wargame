@@ -35,7 +35,7 @@ func rebellion(titles: bool, restored: bool = false) -> Dictionary:
 	crown.political_person_id = nation.crown_prince_person_id
 	check(SuccessionRules.begin_preparation(state, 0, challenger), "real preparation")
 	var conflict: SuccessionConflict = state.succession_conflicts[0]
-	check(SuccessionRules.launch(state, conflict), "real launch")
+	check(conflict.launched(), "real launch")
 	var sim := Simulation.new()
 	sim.setup(state)
 	return {"state": state, "sim": sim, "conflict": conflict, "rebel": rebel,
@@ -66,7 +66,7 @@ func run() -> void:
 		var x := rebellion(true, restored)
 		var before_name: String = x.challenger.name
 		var old_name: String = x.old_crown.name
-		x.sim._capture_city(x.rebel, x.state.cities[0])
+		x.conflict.pending_outcome = SuccessionConflict.Outcome.CROWN_CHANGED
 		x.sim._update_succession_conflicts()
 		var event: Dictionary = x.state.chronicle_events.back()
 		var final_title: String = x.old_crown.current_title
@@ -84,7 +84,7 @@ func run() -> void:
 		check(event.text == text_before and event.get("former_crown", {}).get("title", "") == final_title and x.state.chronicle_events.size() == 1, "later title changes never rewrite or duplicate the political event")
 		x.sim.free()
 	var ordinary := rebellion(false)
-	ordinary.sim._capture_city(ordinary.rebel, ordinary.state.cities[0])
+	ordinary.conflict.pending_outcome = SuccessionConflict.Outcome.CROWN_CHANGED
 	ordinary.sim._update_succession_conflicts()
 	var no_grant: Dictionary = ordinary.state.chronicle_events.back()
 	check(str(no_grant.text).contains("无爵宗室" + str(ordinary.challenger.name) + "兵变"), "untitled challenger is identified without inventing a title")
@@ -102,7 +102,7 @@ func run() -> void:
 	var stopped := rebellion(true)
 	stopped.conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
 	stopped.sim._update_succession_conflicts()
-	check(str(stopped.state.chronicle_events.back().text).contains("外部干扰") and bool(stopped.challenger.alive), "administrative termination is described as interruption")
+	check(str(stopped.state.chronicle_events.back().text).contains("取消") and bool(stopped.challenger.alive), "administrative termination has no political loser")
 	stopped.sim.free()
 	for failure in failures: push_error("ROYAL_CHRONICLE_NAMES_FAIL: " + failure)
 	print("ROYAL_CHRONICLE_NAMES_RESULT checks=%d failures=%d" % [checks, failures.size()])

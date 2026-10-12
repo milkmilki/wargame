@@ -1,0 +1,859 @@
+{
+  "base": "352b4e734b6de87d9a3b809b23bedba0e20b6b00",
+  "branch": "feature/civ-atlas-godot",
+  "native_schema": 28,
+  "combat_rules": 6,
+  "godot": "4.7.1 official a13da4feb",
+  "GPU": "RX 7600 / D3D12 Forward+",
+  "mask": {
+    "west": -15,
+    "east": 145,
+    "south": 20,
+    "north": 55,
+    "enabled": true
+  },
+  "trade_and_rulers": true,
+  "runs": [
+    {
+      "seed": 1,
+      "day": 10800,
+      "target_days": 10800,
+      "pid": 29100,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "tests/atlas_long_audit.gd",
+        "--",
+        "--audit-seed=1",
+        "--audit-years=30",
+        "--audit-directory=res://.dbg/family-audit-20261012-163323-1"
+      ],
+      "complete": true,
+      "hard_errors": 0,
+      "loaded_source_hashes_match": true,
+      "mean_compute_ms": 197.400750555556,
+      "mean_audit_ms": 22.8551081481481,
+      "peak_day_ms": 3637,
+      "first_365_p95_ms": 410.622,
+      "first_365_p99_ms": 1332.871,
+      "first_365_monthly_max_day_ms": {
+        "1": 2128.782,
+        "2": 675.986,
+        "3": 757.279,
+        "4": 983.833,
+        "5": 1332.871,
+        "6": 1305.23,
+        "7": 1166.089,
+        "8": 1430.025,
+        "9": 996.47,
+        "10": 1138.275,
+        "11": 1653.764,
+        "12": 1598.443,
+        "13": 291.941
+      },
+      "warnings": {
+        "army_count_above_current_cap": 17,
+        "war_preparation_two_years": 12,
+        "front_unchanged_one_year": 67
+      },
+      "politics": {
+        "active_private": 1,
+        "active_roundtrips": [
+          {
+            "challenger": 635,
+            "crown": 634,
+            "last_advanced_day": -1,
+            "nation": 94,
+            "round": 0,
+            "roundtrip": true
+          }
+        ],
+        "chronicle_kinds": {
+          "empire": 3,
+          "external_war": 222,
+          "rebellion": 21,
+          "ruler_succession": 81,
+          "succession": 19,
+          "title_ended": 5,
+          "ultimatum": 11,
+          "vassal_isolated_independence": 3
+        },
+        "day": 10800,
+        "deaths": 158,
+        "emperors": 4,
+        "families": 61,
+        "native_validation": "",
+        "people": 681,
+        "private_replays": [
+          {
+            "day": 42,
+            "nation": 25,
+            "ok": true,
+            "person": 124,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 12
+            },
+            "rounds": 12
+          },
+          {
+            "day": 61,
+            "nation": 29,
+            "ok": true,
+            "person": 142,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 92,
+            "nation": 11,
+            "ok": true,
+            "person": 57,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 2
+            },
+            "rounds": 2
+          },
+          {
+            "day": 96,
+            "nation": 31,
+            "ok": true,
+            "person": 153,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 36
+            },
+            "rounds": 36
+          },
+          {
+            "day": 206,
+            "nation": 42,
+            "ok": true,
+            "person": 200,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 26
+            },
+            "rounds": 26
+          },
+          {
+            "day": 991,
+            "nation": 49,
+            "ok": true,
+            "person": 253,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 1801,
+            "nation": 22,
+            "ok": true,
+            "person": 266,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 3332,
+            "nation": 42,
+            "ok": true,
+            "person": 271,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 2
+            },
+            "rounds": 2
+          },
+          {
+            "day": 3391,
+            "nation": 33,
+            "ok": true,
+            "person": 162,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 3891,
+            "nation": 46,
+            "ok": true,
+            "person": 247,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 21
+            },
+            "rounds": 21
+          },
+          {
+            "day": 4711,
+            "nation": 21,
+            "ok": true,
+            "person": 311,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 4771,
+            "nation": 54,
+            "ok": true,
+            "person": 305,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 5085,
+            "nation": 61,
+            "ok": true,
+            "person": 355,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 15
+            },
+            "rounds": 15
+          },
+          {
+            "day": 7471,
+            "nation": 78,
+            "ok": true,
+            "person": 467,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 7990,
+            "nation": 22,
+            "ok": true,
+            "person": 346,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 10
+            },
+            "rounds": 10
+          },
+          {
+            "day": 8161,
+            "nation": 84,
+            "ok": true,
+            "person": 510,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 8371,
+            "nation": 63,
+            "ok": true,
+            "person": 360,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 8431,
+            "nation": 78,
+            "ok": true,
+            "person": 503,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 8990,
+            "nation": 82,
+            "ok": true,
+            "person": 593,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 20
+            },
+            "rounds": 20
+          }
+        ],
+        "schema": 28,
+        "seed": 1.0,
+        "succession_outcomes": {
+          "1": 18,
+          "2": 1
+        },
+        "title_records": 87
+      },
+      "political_audit": {
+        "active": 1,
+        "delayed": 0,
+        "distribution": {
+          "central": 418,
+          "crown": 57,
+          "other_princes": 23
+        },
+        "errors": [],
+        "events": {
+          "finish": 19,
+          "launch": 20,
+          "outcome_1": 18,
+          "outcome_2": 1
+        }
+      },
+      "raw_directory": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\family-audit-20261012-163323-1",
+      "snapshot_sha256": "92b541c642af38495a194c7ebad1097a45ed94454b62438919a3f7535f68effd"
+    },
+    {
+      "seed": 7,
+      "day": 3600,
+      "target_days": 3600,
+      "pid": 11736,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "tests/atlas_long_audit.gd",
+        "--",
+        "--audit-seed=7",
+        "--audit-years=10",
+        "--audit-directory=res://.dbg/family-audit-20261012-163323-7"
+      ],
+      "complete": true,
+      "hard_errors": 0,
+      "loaded_source_hashes_match": true,
+      "mean_compute_ms": 234.668177222222,
+      "mean_audit_ms": 24.9794313888889,
+      "peak_day_ms": 4636,
+      "first_365_p95_ms": 343.201,
+      "first_365_p99_ms": 1418.362,
+      "first_365_monthly_max_day_ms": {
+        "1": 2626.162,
+        "2": 777.636,
+        "3": 898.634,
+        "4": 1418.362,
+        "5": 1282.5,
+        "6": 1119.069,
+        "7": 1295.714,
+        "8": 1606.991,
+        "9": 1091.265,
+        "10": 1021.489,
+        "11": 1588.236,
+        "12": 2253.221,
+        "13": 1185.467
+      },
+      "warnings": {
+        "army_count_above_current_cap": 9,
+        "front_unchanged_one_year": 12,
+        "war_preparation_two_years": 4
+      },
+      "politics": {
+        "active_private": 0,
+        "active_roundtrips": [],
+        "chronicle_kinds": {
+          "empire": 6,
+          "external_war": 70,
+          "rebellion": 6,
+          "ruler_succession": 29,
+          "succession": 11,
+          "title_ended": 33,
+          "ultimatum": 12,
+          "vassal_isolated_independence": 2
+        },
+        "day": 3600,
+        "deaths": 38,
+        "emperors": 6,
+        "families": 46,
+        "native_validation": "",
+        "people": 421,
+        "private_replays": [
+          {
+            "day": 151,
+            "nation": 6,
+            "ok": true,
+            "person": 32,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 344,
+            "nation": 25,
+            "ok": true,
+            "person": 123,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 14
+            },
+            "rounds": 14
+          },
+          {
+            "day": 367,
+            "nation": 44,
+            "ok": true,
+            "person": 211,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 7
+            },
+            "rounds": 7
+          },
+          {
+            "day": 631,
+            "nation": 7,
+            "ok": true,
+            "person": 36,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 661,
+            "nation": 51,
+            "ok": true,
+            "person": 235,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 721,
+            "nation": 31,
+            "ok": true,
+            "person": 156,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 871,
+            "nation": 50,
+            "ok": true,
+            "person": 217,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 961,
+            "nation": 56,
+            "ok": true,
+            "person": 242,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 2360,
+            "nation": 8,
+            "ok": true,
+            "person": 43,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 20
+            },
+            "rounds": 20
+          },
+          {
+            "day": 2401,
+            "nation": 70,
+            "ok": true,
+            "person": 349,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 2581,
+            "nation": 6,
+            "ok": true,
+            "person": 248,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          }
+        ],
+        "schema": 28,
+        "seed": 7.0,
+        "succession_outcomes": {
+          "1": 11
+        },
+        "title_records": 83
+      },
+      "political_audit": {
+        "active": 0,
+        "delayed": 0,
+        "distribution": {
+          "central": 429,
+          "crown": 100,
+          "other_princes": 52
+        },
+        "errors": [],
+        "events": {
+          "finish": 11,
+          "launch": 11,
+          "outcome_1": 11
+        }
+      },
+      "raw_directory": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\family-audit-20261012-163323-7",
+      "snapshot_sha256": "d2ddafa0eb6cf8fa8a0d8579cafcd7af27eb0a49d10c12e24097f068a7939c08"
+    },
+    {
+      "seed": 2024,
+      "day": 3600,
+      "target_days": 3600,
+      "pid": 10180,
+      "command": [
+        "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+        "--headless",
+        "--path",
+        "D:\\ProjectICreate\\Wargame\\wargame",
+        "--script",
+        "tests/atlas_long_audit.gd",
+        "--",
+        "--audit-seed=2024",
+        "--audit-years=10",
+        "--audit-directory=res://.dbg/family-audit-20261012-163323-2024"
+      ],
+      "complete": true,
+      "hard_errors": 0,
+      "loaded_source_hashes_match": true,
+      "mean_compute_ms": 212.409653333333,
+      "mean_audit_ms": 21.5803433333333,
+      "peak_day_ms": 3279,
+      "first_365_p95_ms": 388.523,
+      "first_365_p99_ms": 1344.607,
+      "first_365_monthly_max_day_ms": {
+        "1": 2053.142,
+        "2": 1119.139,
+        "3": 918.798,
+        "4": 955.068,
+        "5": 1446.485,
+        "6": 1092.495,
+        "7": 985.551,
+        "8": 1094.222,
+        "9": 1344.607,
+        "10": 1142.085,
+        "11": 2042.516,
+        "12": 1880.346,
+        "13": 217.496
+      },
+      "warnings": {
+        "army_count_above_current_cap": 11,
+        "front_unchanged_one_year": 25,
+        "war_preparation_two_years": 4
+      },
+      "politics": {
+        "active_private": 0,
+        "active_roundtrips": [],
+        "chronicle_kinds": {
+          "empire": 7,
+          "external_war": 77,
+          "rebellion": 15,
+          "ruler_succession": 31,
+          "succession": 15,
+          "title_ended": 28,
+          "ultimatum": 10,
+          "vassal_isolated_independence": 1
+        },
+        "day": 3600,
+        "deaths": 66,
+        "emperors": 9,
+        "families": 56,
+        "native_validation": "",
+        "people": 526,
+        "private_replays": [
+          {
+            "day": 60,
+            "nation": 23,
+            "ok": true,
+            "person": 118,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 30
+            },
+            "rounds": 30
+          },
+          {
+            "day": 158,
+            "nation": 27,
+            "ok": true,
+            "person": 138,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 8
+            },
+            "rounds": 8
+          },
+          {
+            "day": 201,
+            "nation": 38,
+            "ok": true,
+            "person": 195,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 21
+            },
+            "rounds": 21
+          },
+          {
+            "day": 391,
+            "nation": 42,
+            "ok": true,
+            "person": 258,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 409,
+            "nation": 25,
+            "ok": true,
+            "person": 130,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 19
+            },
+            "rounds": 19
+          },
+          {
+            "day": 631,
+            "nation": 7,
+            "ok": true,
+            "person": 285,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 631,
+            "nation": 34,
+            "ok": true,
+            "person": 177,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 939,
+            "nation": 19,
+            "ok": true,
+            "person": 99,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 39
+            },
+            "rounds": 39
+          },
+          {
+            "day": 961,
+            "nation": 43,
+            "ok": true,
+            "person": 262,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 1578,
+            "nation": 26,
+            "ok": true,
+            "person": 134,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 18
+            },
+            "rounds": 18
+          },
+          {
+            "day": 1621,
+            "nation": 68,
+            "ok": true,
+            "person": 382,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 1741,
+            "nation": 58,
+            "ok": true,
+            "person": 326,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 2491,
+            "nation": 73,
+            "ok": true,
+            "person": 427,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 2521,
+            "nation": 28,
+            "ok": true,
+            "person": 143,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          },
+          {
+            "day": 2641,
+            "nation": 40,
+            "ok": true,
+            "person": 496,
+            "result": {
+              "errors": [],
+              "ok": true,
+              "replayed": 0
+            },
+            "rounds": 0
+          }
+        ],
+        "schema": 28,
+        "seed": 2024.0,
+        "succession_outcomes": {
+          "1": 13,
+          "2": 2
+        },
+        "title_records": 131
+      },
+      "political_audit": {
+        "active": 0,
+        "delayed": 0,
+        "distribution": {
+          "central": 309,
+          "crown": 96,
+          "other_princes": 66
+        },
+        "errors": [],
+        "events": {
+          "finish": 15,
+          "launch": 15,
+          "outcome_1": 13,
+          "outcome_2": 2
+        }
+      },
+      "raw_directory": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\family-audit-20261012-163323-2024",
+      "snapshot_sha256": "238187010ab8cd616e3d6eb50213ab3f37f2842086761abae8c4bf2c18b7a38d"
+    }
+  ],
+  "ui_source_sha256": {
+    "scripts/atlas/family_model.gd": "c5255a50c283a642271d02e23faf5523978dd8467348f1d399919d0404ea6aef",
+    "scripts/atlas/family_layout.gd": "f48b69934d778e402f6a593e82f952bd843b1f0681e9ed11d1825e95bf97718c",
+    "scripts/atlas/family_canvas.gd": "25a7ff60f2510be01d924e0568c395adbb8d8778aee9bf2a7f5340e997f92d86",
+    "scripts/atlas/family_panel.gd": "3931ee6bef4eddc59af24e803c977fee322a8e40c25eddc3eb37cce32544ecfc",
+    "scripts/atlas/information_model.gd": "f5de482d5645efa230dfd3fd2a9a5d50c5e9993f151a01db190d5789740abe73",
+    "scripts/atlas/information_panel.gd": "2cbd870e0eeacc58fb4ce8b8932630ab1c06b2e435e6d372469a30c62d28f6f5",
+    "scripts/atlas/military_interface.gd": "359f5f07f55ee52ec4d3c586fc6e9c837d58bb1ab46cd912ebee23e16e9c81c0",
+    "scripts/atlas/military_preview.gd": "240e7a888766cb553df0dfec0ee77715bc40a5aa6c896525ab8187801970dd9a",
+    "tests/atlas_family_visual.gd": "08ef9c0bf4ce2a8e3b318dedd97b04c90ee9ba0dfdf16b1151eb0078def3d9b1",
+    "tests/atlas_family_canvas_gpu.gd": "d43a1ca1c95b46f04bb7ec2644411b266fc45500f332993e4fe21bec923f2c9a",
+    "tests/atlas_family_interaction.gd": "f2933447b12a075dde21bab23afb90dabd76e133451be538b7892ef28d4026f7",
+    "tests/atlas_family_runtime.gd": "255f893753c5070d202fb8478c36472ab251dbd7ca7ca85b63ef17147df47797"
+  },
+  "note": "Parallel isolated headless audits share CPU with tests and graphics. Mean/peak are computational timing; P95/P99 cover first 365 days only. Not game GUI FPS. Candidate warnings are retained, not declared fixed."
+}

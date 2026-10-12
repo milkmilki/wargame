@@ -1,0 +1,6 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+=== 包围值索引等价校验（3 seed/5国/30陆城）===
+逐项包围候选=90 战略前线候选=126
+索引 build=30 hit=133 miss=173
+ENCIRCLEMENT_INDEX_EQUIVALENT checks=398

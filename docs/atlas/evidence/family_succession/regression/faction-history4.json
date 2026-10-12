@@ -1,0 +1,35 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "vassal_faction_conflict",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2719,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\vassal_faction_conflict.log"
+    },
+    {
+      "test": "royal_chronicle_names",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2640,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\royal_chronicle_names.log"
+    },
+    {
+      "test": "political_history_test",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2719,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\political_history_test.log"
+    },
+    {
+      "test": "atlas_family_interaction",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2891,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_family_interaction.log"
+    }
+  ],
+  "failures": 0
+}

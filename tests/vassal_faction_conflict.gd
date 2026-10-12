@@ -333,9 +333,9 @@ func test_native_conflict_validation() -> void:
 	check(state.start_civil_war(1), "native fixture starts actual faction conflict")
 	var snapshot := NativeSnapshotBuilder.build(state)
 	var war_id := state.war_id_between(0, 1)
-	check(int(snapshot.get("schema_version", -1)) == 26, "faction snapshots use Native26")
+	check(int(snapshot.get("schema_version", -1)) == NativeSnapshotBuilder.SCHEMA_VERSION, "faction snapshots use the current native schema")
 	check(snapshot.get("vassal_conflicts", {}) == state.vassal_conflicts,
-		"Native26 preserves factions, leaders, loyalty, days and activity")
+		"current native snapshot preserves factions, leaders, loyalty, days and activity")
 	var snapshot_error := NativeSnapshotBuilder.succession_validation_error(snapshot)
 	check(snapshot_error.is_empty(), "valid faction snapshot passes the formal native validator: " + snapshot_error)
 	var old := snapshot.duplicate(true)
@@ -433,7 +433,7 @@ func test_explicit_external_declaration(rebel_ally: bool) -> void:
 			check(state.is_enemy(central, rebel) and state.war_id_between(central, rebel) == internal_id,
 				"explicit exterior objective never rewrites internal war edge%d/%d" % [central, rebel])
 	var snapshot_error := NativeSnapshotBuilder.succession_validation_error(NativeSnapshotBuilder.build(state))
-	check(snapshot_error.is_empty(), "explicit exterior declaration leaves a valid Native26 state: " + snapshot_error)
+	check(snapshot_error.is_empty(), "explicit exterior declaration leaves a valid native state: " + snapshot_error)
 	sim.free()
 
 

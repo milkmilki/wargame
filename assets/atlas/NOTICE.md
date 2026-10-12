@@ -8,6 +8,13 @@ Upstream code and these ports: GNU AGPL-3.0-only. Preserve the included
 LICENSE-AGPL-3.0.txt and original copyright notices when distributing.
 This notice does not relicense unrelated pre-existing game code.
 
+`scripts/atlas/family_layout.gd`, `family_canvas.gd`, and `family_panel.gd`
+adapt the contour/trunk genealogy layout and visual treatment from
+`src/gen/civ/lineageInfo.ts`, `src/ui/PeopleLineage.tsx`, and
+`src/ui/overview.css` at the same frozen commit. These native Godot ports
+remain AGPL-3.0-only. Family and succession simulation rules are the game's
+own existing rules and the changes documented in `docs/atlas/FAMILY_SUCCESSION.md`.
+
 `scripts/atlas/war_fronts.gd` ports the sided-border orientation, tooth placement,
 fantasy colours, stroke widths and zoom law from upstream
 `src/render/civ/warfare.ts` (`warFront`, `frontTeeth`, `strokeFront`, `WAR_SIZE`,

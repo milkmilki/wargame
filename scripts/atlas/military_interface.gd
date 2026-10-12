@@ -34,6 +34,8 @@ func setup(view) -> void:
 	view.info_panel.closed.connect(view.close_information)
 	view.info_panel.ruler_changed.connect(view.edit_ruler)
 	view.info_panel.pause_requested.connect(view.toggle_pause)
+	view.family_panel=preload("res://scripts/atlas/family_panel.gd").new()
+	view.family_panel.host=view; add_child(view.family_panel)
 	add_child(toolbar); var bars := VBoxContainer.new(); toolbar.add_child(bars)
 	var bar := HBoxContainer.new(); bars.add_child(bar)
 	for name_value in ["政治","地形","府辖区","宜居度","贸易区域"]: view.mode_control.add_item(name_value)

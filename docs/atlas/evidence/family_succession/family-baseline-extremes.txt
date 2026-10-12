@@ -1,0 +1,14 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+ERROR: RULER_SUCCESSION_EXTREMES_FAILED: identity fixture failed to create a complete-state vassal
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _check (res://tests/ruler_succession_extremes.gd:547)
+       [1] _test_suzerainty_rulers_reuse_person_names (res://tests/ruler_succession_extremes.gd:281)
+       [2] _init (res://tests/ruler_succession_extremes.gd:13)
+ERROR: RULER_SUCCESSION_EXTREMES_FAILED: puppet ruler did not retain exactly the capital state: initial=30 direct=[5, 12, 13, 14, 15, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29] capital_state=[19, 20, 28] grants=3
+   at: push_error (core/variant/variant_utility.cpp:1023)
+   GDScript backtrace (most recent call first):
+       [0] _check (res://tests/ruler_succession_extremes.gd:547)
+       [1] _test_puppet_enfeoffment (res://tests/ruler_succession_extremes.gd:490)
+       [2] _init (res://tests/ruler_succession_extremes.gd:17)

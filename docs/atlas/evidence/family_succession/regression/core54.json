@@ -1,0 +1,385 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "project_compile",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 11125,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\project_compile.log"
+    },
+    {
+      "test": "test_suite",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 36672,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\test_suite.log"
+    },
+    {
+      "test": "field_establishment_costs",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2641,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\field_establishment_costs.log"
+    },
+    {
+      "test": "trade_fingerprint_reuse",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 7984,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\trade_fingerprint_reuse.log"
+    },
+    {
+      "test": "capital_tax_batch",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2719,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\capital_tax_batch.log"
+    },
+    {
+      "test": "resource_capacity_batch",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3187,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\resource_capacity_batch.log"
+    },
+    {
+      "test": "ruler_modifier_table",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 578,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ruler_modifier_table.log"
+    },
+    {
+      "test": "threat_field_lazy",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2891,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\threat_field_lazy.log"
+    },
+    {
+      "test": "forecast_token_packing",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2422,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\forecast_token_packing.log"
+    },
+    {
+      "test": "supply_field_lazy_order",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 6125,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\supply_field_lazy_order.log"
+    },
+    {
+      "test": "reinforcement_fiscal_cache",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2328,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\reinforcement_fiscal_cache.log"
+    },
+    {
+      "test": "forecast_selected_rows",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2703,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\forecast_selected_rows.log"
+    },
+    {
+      "test": "trade_packed_fingerprint",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 5313,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\trade_packed_fingerprint.log"
+    },
+    {
+      "test": "campaign_enemy_memo",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2140,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\campaign_enemy_memo.log"
+    },
+    {
+      "test": "atlas_capital_hops",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_capital_hops.log"
+    },
+    {
+      "test": "movement_capacity_index_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\movement_capacity_index_equivalence.log"
+    },
+    {
+      "test": "battle_group_index_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 6593,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\battle_group_index_equivalence.log"
+    },
+    {
+      "test": "army_precontact_hold",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2969,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\army_precontact_hold.log"
+    },
+    {
+      "test": "war_count_and_conqueror",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2141,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\war_count_and_conqueror.log"
+    },
+    {
+      "test": "zhou_defection",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3078,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\zhou_defection.log"
+    },
+    {
+      "test": "field_manpower_requirements",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\field_manpower_requirements.log"
+    },
+    {
+      "test": "supply_combat_attributes",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\supply_combat_attributes.log"
+    },
+    {
+      "test": "campaign_simple_retreat",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2047,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\campaign_simple_retreat.log"
+    },
+    {
+      "test": "campaign_single_wave",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2422,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\campaign_single_wave.log"
+    },
+    {
+      "test": "campaign_defense_regroup",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2250,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\campaign_defense_regroup.log"
+    },
+    {
+      "test": "campaign_action_readiness",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\campaign_action_readiness.log"
+    },
+    {
+      "test": "campaign_staging_legality",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2031,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\campaign_staging_legality.log"
+    },
+    {
+      "test": "coalition_dispatch_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2235,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\coalition_dispatch_lifecycle.log"
+    },
+    {
+      "test": "coalition_siege_participation",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2234,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\coalition_siege_participation.log"
+    },
+    {
+      "test": "campaign_reinforcement_ownership",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2235,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\campaign_reinforcement_ownership.log"
+    },
+    {
+      "test": "chronicle_smoke",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2515,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\chronicle_smoke.log"
+    },
+    {
+      "test": "political_history_test",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2235,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\political_history_test.log"
+    },
+    {
+      "test": "regional_strategy",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2343,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\regional_strategy.log"
+    },
+    {
+      "test": "regional_access_recovery",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2422,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\regional_access_recovery.log"
+    },
+    {
+      "test": "family_tree_smoke",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2313,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\family_tree_smoke.log"
+    },
+    {
+      "test": "royal_title_origin",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2422,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\royal_title_origin.log"
+    },
+    {
+      "test": "royal_title_generations",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 9093,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\royal_title_generations.log"
+    },
+    {
+      "test": "royal_title_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3157,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\royal_title_lifecycle.log"
+    },
+    {
+      "test": "succession_virtual",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2421,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_virtual.log"
+    },
+    {
+      "test": "succession_virtual_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2813,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_virtual_lifecycle.log"
+    },
+    {
+      "test": "succession_preparation",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2609,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_preparation.log"
+    },
+    {
+      "test": "succession_conflict",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2719,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_conflict.log"
+    },
+    {
+      "test": "succession_chain",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3000,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_chain.log"
+    },
+    {
+      "test": "succession_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2813,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_lifecycle.log"
+    },
+    {
+      "test": "atlas_family_model",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3187,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_family_model.log"
+    },
+    {
+      "test": "atlas_family_runtime",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 8453,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_family_runtime.log"
+    },
+    {
+      "test": "ruler_succession_extremes",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3735,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ruler_succession_extremes.log"
+    },
+    {
+      "test": "succession_counterattack",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2718,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\succession_counterattack.log"
+    },
+    {
+      "test": "diplomatic_battle_lifecycle",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2797,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\diplomatic_battle_lifecycle.log"
+    },
+    {
+      "test": "encirclement_index_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2813,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\encirclement_index_equivalence.log"
+    },
+    {
+      "test": "diplomacy_objective_batch_cache",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3453,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\diplomacy_objective_batch_cache.log"
+    },
+    {
+      "test": "strategic_betweenness_preference",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2609,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\strategic_betweenness_preference.log"
+    },
+    {
+      "test": "war_diplomacy_runtime_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 18735,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\war_diplomacy_runtime_equivalence.log"
+    },
+    {
+      "test": "ultimatum_forecast_cache_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 11218,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ultimatum_forecast_cache_equivalence.log"
+    }
+  ],
+  "failures": 0
+}

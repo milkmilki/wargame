@@ -7,6 +7,9 @@ static func section(title: String,rows: Array) -> Dictionary:
 	return {"title":title,"rows":rows}
 static func nation_name(state: GameState,id: int) -> String:
 	return state.nations[id].name if id>=0 and id<state.nations.size() else "无归属"
+static func prince_report(state: GameState,id: int) -> Dictionary:
+	if state.has_meta("historical_prince_reports"): return state.get_meta("historical_prince_reports").get(id,{"status":"未记录","princes":[],"central":0})
+	return PrincePolitics.report(state,id,PrincePolitics.military_index(state).get(id,{}))
 static func city_name(state: GameState,id: int) -> String:
 	if id<0 or id>=state.cities.size(): return "无"
 	return "道路岔口" if state.cities[id].is_traffic else state.cities[id].name
@@ -116,10 +119,30 @@ static func nation(state: GameState,id: int) -> Dictionary:
 		if c>=0 and c<state.cities.size() and state.cities[c].owner_nation==id: stock += state.cities[c].food_storage
 	var capital := n.capital_city_id
 	var point := state.cities[capital].map_position*Vector2(2048,1024) if capital>=0 and capital<state.cities.size() else Vector2(1024,512)
-	var doc := {"title":n.name,"subtitle":"%s · 第%d天"%["帝国" if n.state_level>0 else "国家",state.day],"color":n.color,"point":point,"actions":[action("city","查看首都","city",capital),action("focus","设为中心","center"),action("player","操控此国","flag",id),action("declare","对其宣战","war",id)],"sections":[]}
+	var doc := {"title":n.name,"subtitle":"%s · 第%d天"%["帝国" if n.state_level>0 else "国家",state.day],"color":n.color,"point":point,"actions":[action("city","查看首都","city",capital),action("focus","设为中心","center"),action("player","操控此国","flag",id),action("declare","对其宣战","war",id),action("family","家族树","flag",id)],"sections":[]}
+	doc["politics_recorded"] = state.has_meta("historical_prince_reports")
 	var traits: Array[String] = []
 	for trait_id in n.ruler_traits: traits.append(RulerProfile.trait_name(trait_id))
-	doc.sections.append(section("概况",[row("状态","存续" if n.alive else "已灭亡"),row("首都",city_name(state,capital),"city",capital),row("控制治所",seats),row("控制州治",centers),row("控制府",seats-centers),row("君主",n.ruler_name if not n.ruler_name.is_empty() else "未记录"),row("君主特质","、".join(traits) if not traits.is_empty() else "无附加特质"),row("平均忠诚度","%.1f"%n.average_loyalty)]))
+	doc.sections.append(section("概况",[row("状态","存续" if n.alive else "已灭亡"),row("首都",city_name(state,capital),"city",capital),row("控制治所",seats),row("控制州治",centers),row("控制府",seats-centers),row("君主",n.ruler_name if not n.ruler_name.is_empty() else "未记录","person",n.ruler_person_id),row("君主特质","、".join(traits) if not traits.is_empty() else "无附加特质"),row("平均忠诚度","%.1f"%n.average_loyalty)]))
+	var crown := PrincePolitics.person(state,id,n.crown_prince_person_id)
+	var politics := [row("继承人",crown.get("name","未记录"),"person",n.crown_prince_person_id),
+		row("竞争状态",prince_report(state,id).get("status","未记录")),
+		row("帝国晋升",("第%d天"%n.empire_recognized_day) if n.empire_recognized_day>=0 else "尚未晋升"),
+		row("晋升条件","和平宗藩体系完成至少两个贸易区域的法理与实控整合"),
+		row("月结爵位人数","一字王%d · 郡王%d · 国公%d · 无爵%d"%[n.last_royal_title_counts[3],n.last_royal_title_counts[2],n.last_royal_title_counts[1],n.last_royal_title_counts[0]]),row("俸禄占税收","%.2f%%"%(n.last_royal_expense_basis_points/100.)),
+		row("本君主继承来源",{"crown":"太子","direct":"直系","collateral":"旁系宗室","remote":"远支"}.get(str(PrincePolitics.person(state,id,n.ruler_person_id).get("accession_source","")),"未记录"))]
+	var report_data: Dictionary = prince_report(state,id)
+	var internal: Dictionary=report_data.get("internal_battle",{})
+	if not internal.is_empty():
+		doc["notice"]="内部虚拟夺嫡：伤亡不影响真实军队，地图不生成战斗。"
+		politics.append(row("挑战皇子",PrincePolitics.person(state,id,int(internal.challenger_person_id)).get("name","未记录"),"person",int(internal.challenger_person_id)))
+		politics.append(row("守位太子",PrincePolitics.person(state,id,int(internal.crown_person_id)).get("name","未记录"),"person",int(internal.crown_person_id)))
+	for line in PrincePolitics.display_lines(report_data): politics.append(row("宗室",line))
+	for index in range(state.chronicle_events.size()-1,-1,-1):
+		var event: Dictionary=state.chronicle_events[index]
+		if event.get("kind","")=="succession" and event.get("actor_ids",[]).has(id):
+			politics.append(row("最近夺嫡结果",event.text)); break
+	doc.sections.append(section("继承与王爵",politics))
 	doc.sections.append(section("州战役",campaign_rows(state,id)))
 	var target := RegionalStrategy.target_region(state,id)
 	var integration := RegionalStrategy.integration_report(state,id,target)
@@ -178,6 +201,7 @@ static func historical(document: Dictionary,kind: String) -> Dictionary:
 	# PoliticalHistory freezes ownership, rulers, diplomacy and layout. Its view
 	# state carries some copied live fields, not a complete economic/army save.
 	var allowed := ["概况","地理与气候","选中道路"] if kind=="city" else ["概况","外交关系"] if kind=="nation" else ["道路"]
+	if kind=="nation" and document.get("politics_recorded",false): allowed.append("继承与王爵")
 	document.sections=document.sections.filter(func(s): return s.title in allowed)
 	for group in document.sections:
 		group.rows=group.rows.filter(func(r): return r.label not in ["平均忠诚度","当前通行军队","危险系数","行军时间倍率","补给损耗倍率"])

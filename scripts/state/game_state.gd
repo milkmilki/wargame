@@ -143,6 +143,7 @@ var _alliance_component_mutex := Mutex.new()
 ## 王族谱共享真源；Nation 仅保存 tree/person id，避免独立后复制谱系。
 var family_trees: Dictionary = {}
 var succession_conflicts: Dictionary = {} # original nation -> SuccessionConflict
+var next_internal_battle_id: int = 0
 var succession_events: Array[Dictionary] = []
 var next_family_tree_id: int = 0
 var next_family_person_id: int = 0
@@ -441,6 +442,7 @@ func _reset_world(world_seed: int) -> void:
 	family_trees.clear()
 	remove_meta("royal_census")
 	remove_meta("royal_reconcile_revision")
+	next_internal_battle_id = 0
 	succession_conflicts.clear()
 	succession_events.clear()
 	next_family_tree_id = 0
@@ -2587,9 +2589,8 @@ func financial_nation_of(nation_id: int) -> int:
 	return conflict.nation_id if conflict != null else nation_id
 
 
-func army_reserved_for_succession(army: Army) -> bool:
-	var conflict := succession_conflict_for_identity(army.owner_nation)
-	return conflict != null and conflict.side_for(army.id) != 0
+func army_reserved_for_succession(_army: Army) -> bool:
+	return false
 
 
 func armies_hostile(a: Army, b: Army) -> bool:

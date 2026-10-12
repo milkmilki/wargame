@@ -1,0 +1,160 @@
+{
+	"active_private": 0,
+	"active_roundtrips": [],
+	"chronicle_kinds": {
+		"empire": 6,
+		"external_war": 70,
+		"rebellion": 6,
+		"ruler_succession": 29,
+		"succession": 11,
+		"title_ended": 33,
+		"ultimatum": 12,
+		"vassal_isolated_independence": 2
+	},
+	"day": 3600,
+	"deaths": 38,
+	"emperors": 6,
+	"families": 46,
+	"native_validation": "",
+	"people": 421,
+	"private_replays": [
+		{
+			"day": 151,
+			"nation": 6,
+			"ok": true,
+			"person": 32,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 344,
+			"nation": 25,
+			"ok": true,
+			"person": 123,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 14
+			},
+			"rounds": 14
+		},
+		{
+			"day": 367,
+			"nation": 44,
+			"ok": true,
+			"person": 211,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 7
+			},
+			"rounds": 7
+		},
+		{
+			"day": 631,
+			"nation": 7,
+			"ok": true,
+			"person": 36,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 661,
+			"nation": 51,
+			"ok": true,
+			"person": 235,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 721,
+			"nation": 31,
+			"ok": true,
+			"person": 156,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 871,
+			"nation": 50,
+			"ok": true,
+			"person": 217,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 961,
+			"nation": 56,
+			"ok": true,
+			"person": 242,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 2360,
+			"nation": 8,
+			"ok": true,
+			"person": 43,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 20
+			},
+			"rounds": 20
+		},
+		{
+			"day": 2401,
+			"nation": 70,
+			"ok": true,
+			"person": 349,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 2581,
+			"nation": 6,
+			"ok": true,
+			"person": 248,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		}
+	],
+	"schema": 28,
+	"seed": 7.0,
+	"succession_outcomes": {
+		"1": 11
+	},
+	"title_records": 83
+}

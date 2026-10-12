@@ -1,8 +1,102 @@
 class_name SuccessionRules
 extends RefCounted
-
-const PREPARATION_LIMIT: int = 360
 const NO_PROGRESS_LIMIT: int = 180
+
+static func batch_context(state: GameState) -> Dictionary:
+	var owners := {}
+	for army in state.armies:
+		if army.size <= 0 or army.is_city_garrison: continue
+		if not owners.has(army.owner_nation): owners[army.owner_nation] = []
+		owners[army.owner_nation].append(army)
+	return {"owners": owners}
+
+static func proposal(state: GameState, nation_id: int, person_id: int, _committed: Array[int] = [], context: Dictionary = {}, _fixed_camp: int = -1) -> Dictionary:
+	var nation := state.nations[nation_id]
+	if nation.succession_identity or not nation.alive or nation.succession_competition_closed or not state.wars_of(nation_id).is_empty() or state.is_in_civil_war(nation_id): return {}
+	if not PrincePolitics.eligible_for_nation(PrincePolitics.person(state, nation_id, nation.crown_prince_person_id), nation_id): return {}
+	if person_id == nation.crown_prince_person_id or not nation.prince_person_ids.has(person_id) or not PrincePolitics.eligible_for_nation(PrincePolitics.person(state, nation_id, person_id), nation_id): return {}
+	if context.is_empty(): context = batch_context(state)
+	var C := 0
+	var V := 0
+	var attackers: Array[int] = []
+	var defenders: Array[int] = []
+	for army: Army in context.owners.get(nation_id, []):
+		if army.political_person_id == person_id:
+			C += army.size
+			attackers.append(army.id)
+		elif army.political_person_id == nation.crown_prince_person_id:
+			V += army.size
+			defenders.append(army.id)
+	var requirement := ceili(V * RulerProfile.campaign_requirement_multiplier(PrincePolitics.profile(state, nation_id, person_id)))
+	if C <= 0 or C < requirement: return {}
+	return {"army_ids": attackers, "crown_army_ids": defenders, "troops": C, "V": V, "R": 0, "requirement": requirement}
+
+static func begin_preparation(state: GameState, nation_id: int, person_id: int, _info: Dictionary = {}) -> bool:
+	# Revalidate even caller-provided proposals: no stale monthly eligibility.
+	if state.succession_conflicts.has(nation_id): return false
+	var info := proposal(state, nation_id, person_id)
+	if info.is_empty(): return false
+	var nation := state.nations[nation_id]
+	var conflict := SuccessionConflict.new()
+	conflict.nation_id = nation_id
+	conflict.challenger_person_id = person_id
+	conflict.crown_person_id = nation.crown_prince_person_id
+	conflict.ruler_person_id = nation.ruler_person_id
+	conflict.ruler_revision = nation.ruler_revision
+	conflict.started_day = state.day
+	conflict.last_progress_day = state.day
+	conflict.qualification = info.duplicate(true)
+	conflict.army_ids.assign(info.army_ids)
+	conflict.crown_army_ids.assign(info.crown_army_ids)
+	conflict.battle = Battle.new()
+	conflict.battle.id = state.next_internal_battle_id
+	state.next_internal_battle_id += 1
+	var seed := RulerProfile.stable_hash(state.world_seed, nation_id, "internal_succession", nation.ruler_revision)
+	conflict.battle.ensure_opening_dice(seed, true)
+	for army in state.armies:
+		var side := 1 if conflict.army_ids.has(army.id) else (2 if conflict.crown_army_ids.has(army.id) else 0)
+		if side == 0: continue
+		var copy := CombatLog._army_from_snapshot(CombatLog._side_snapshot([army] as Array[Army])[0])
+		var profile := PrincePolitics.profile(state, nation_id, person_id if side == 1 else conflict.crown_person_id)
+		copy.ruler_attack_multiplier = RulerProfile.attack_multiplier(profile)
+		copy.ruler_defense_multiplier = RulerProfile.defense_multiplier(profile)
+		copy.ruler_morale_multiplier = RulerProfile.morale_multiplier(profile)
+		copy.campaign_war_id = -1
+		copy.campaign_front_id = -1
+		copy.state = Army.State.FIGHTING
+		(conflict.battle.side_a if side == 1 else conflict.battle.side_b).append(copy)
+	state.succession_conflicts[nation_id] = conflict
+	record(state, conflict, "launch", conflict.display_report().merged(info))
+	return true
+
+static func advance(state: GameState, conflict: SuccessionConflict) -> void:
+	if conflict.pending_outcome != SuccessionConflict.Outcome.NONE: return
+	var nation := state.nations[conflict.nation_id]
+	if not nation.alive or nation.ruler_person_id != conflict.ruler_person_id or nation.ruler_revision != conflict.ruler_revision or not PrincePolitics.eligible_for_nation(PrincePolitics.person(state, nation.id, conflict.challenger_person_id), nation.id) or not PrincePolitics.eligible_for_nation(PrincePolitics.person(state, nation.id, conflict.crown_person_id), nation.id):
+		conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
+		conflict.resolution_reason = "participant_or_generation_invalid"
+		return
+	if state.day <= conflict.started_day or conflict.last_advanced_day >= state.day: return
+	conflict.last_advanced_day = state.day
+	var before := CombatLog._side_snapshot(conflict.battle.side_a) + CombatLog._side_snapshot(conflict.battle.side_b)
+	var enabled := Combat.battle_log_enabled
+	var log_count := Combat.battle_log.size()
+	Combat.battle_log_enabled = true
+	Combat.resolve_round(conflict.battle, state.day)
+	Combat.battle_log_enabled = enabled
+	for index in range(log_count, Combat.battle_log.size()):
+		var entry: Dictionary = Combat.battle_log[index].duplicate(true)
+		entry["context"] = "internal_succession"
+		entry["nation_id"] = nation.id
+		conflict.round_logs.append(entry)
+	# Private records never enter map combat streams, regardless of logging setting.
+	Combat.battle_log.resize(log_count)
+	var after := CombatLog._side_snapshot(conflict.battle.side_a) + CombatLog._side_snapshot(conflict.battle.side_b)
+	if before != after: conflict.last_progress_day = state.day
+	if conflict.battle.finished:
+		conflict.pending_outcome = SuccessionConflict.Outcome.CROWN_CHANGED if conflict.battle.winner_side == 1 else SuccessionConflict.Outcome.SUPPRESSED
+		conflict.resolution_reason = "field_victory" if conflict.battle.winner_side == 1 else "field_defeat"
+	elif state.day - conflict.last_progress_day >= NO_PROGRESS_LIMIT: fail(state, conflict, "no_progress")
 
 static func fail(state: GameState, conflict: SuccessionConflict, reason: String, battle_id: int = -1) -> bool:
 	if conflict.pending_outcome != SuccessionConflict.Outcome.NONE: return false
@@ -11,296 +105,34 @@ static func fail(state: GameState, conflict: SuccessionConflict, reason: String,
 	record(state, conflict, "result_locked", {"reason": reason, "battle_id": battle_id})
 	return true
 
-static func defense_requirement(state: GameState, conflict: SuccessionConflict) -> int:
-	var challengers := 0
-	for army in state.armies:
-		if conflict.army_ids.has(army.id) and effective(army) and army.is_at_city_node(conflict.camp_city_id): challengers += army.size
-	return ceili(challengers * RulerProfile.campaign_requirement_multiplier(PrincePolitics.profile(state, conflict.nation_id, conflict.crown_person_id)))
-
-static func attack_requirement(state: GameState, conflict: SuccessionConflict) -> int:
-	var defenders := 0
-	for army in state.armies:
-		if conflict.crown_army_ids.has(army.id) and effective(army): defenders += army.size
-	var raw := state.campaign_siege_requirement(conflict.rebel_nation_id, conflict.capital_city_id)
-	return ceili((raw + defenders) * RulerProfile.campaign_requirement_multiplier(PrincePolitics.profile(state, conflict.nation_id, conflict.challenger_person_id)))
-
-static func observe_progress(state: GameState, conflict: SuccessionConflict) -> void:
-	var positions := {}
-	for army in state.armies:
-		if conflict.side_for(army.id) == 0: continue
-		positions[army.id] = [army.location_city, army.on_edge,
-			army.move_from if army.on_edge else -1, army.move_to if army.on_edge else -1,
-			army.move_progress if army.on_edge else 0.0]
-	var battles := {}
-	for battle in state.battles:
-		if not battle.finished and conflict.contains_battle(battle): battles[battle.id] = battle.round_no
-	var garrison := state.cities[conflict.capital_city_id].garrison_manpower
-	if conflict.last_progress_day < 0 or positions != conflict.progress_positions or battles != conflict.progress_battles or garrison < conflict.progress_garrison:
-		conflict.last_progress_day = state.day
-	conflict.progress_positions = positions
-	conflict.progress_battles = battles
-	conflict.progress_garrison = garrison
-
-static func batch_context(state: GameState) -> Dictionary:
-	var owners := {}
-	var stationed := {}
-	for army in state.armies:
-		if army.size <= 0:
-			continue
-		if not owners.has(army.owner_nation):
-			owners[army.owner_nation] = [] as Array[Army]
-		owners[army.owner_nation].append(army)
-		var node := army.current_city_node()
-		if node >= 0:
-			if not stationed.has(node):
-				stationed[node] = [] as Array[Army]
-			stationed[node].append(army)
-	return {"owners": owners, "stationed": stationed, "fields": {}}
-
-static func effective(army: Army) -> bool:
-	return army.size > 0 and not army.starving and army.combat_morale() > Combat.ARMY_ROUT_THRESHOLD and army.state not in [Army.State.RECOVERING, Army.State.RETREATING]
-
-static func available(state: GameState, army: Army) -> bool:
-	return effective(army) and army.state == Army.State.IDLE and not army.on_edge and army.battle_id < 0 and army.campaign_war_id < 0 and army.campaign_front_id < 0 and not state.nations[army.owner_nation].war_preparation_army_ids.has(army.id)
-
-static func camp_valid(state: GameState, conflict: SuccessionConflict) -> bool:
-	var camp := conflict.camp_city_id
-	if camp < 0 or camp >= state.cities.size() or state.cities[camp].owner_nation != conflict.nation_id or not state.is_fu_city(camp) or state.administrative_center_of(camp) != conflict.capital_city_id or state.city_under_siege(camp):
-		return false
-	for army in state.armies:
-		if army.size > 0 and army.is_at_city_node(camp) and not conflict.army_ids.has(army.id):
-			return false
-	return true
-
-static func proposal(state: GameState, nation_id: int, person_id: int, committed: Array[int] = [], context: Dictionary = {}, fixed_camp: int = -1) -> Dictionary:
-	var nation := state.nations[nation_id]
-	var capital := nation.capital_city_id
-	if nation.succession_identity or not nation.alive or nation.succession_competition_closed or capital < 0 or not state.is_zhou_city(capital) or state.cities[capital].owner_nation != nation_id or state.city_under_siege(capital) or not state.wars_of(nation_id).is_empty() or state.is_in_civil_war(nation_id):
-		return {}
-	if person_id == nation.crown_prince_person_id or not nation.prince_person_ids.has(person_id) or not PrincePolitics.eligible_for_nation(PrincePolitics.person(state, nation_id, person_id), nation_id):
-		return {}
-	var armies: Array[Army] = []
-	var V := 0
-	if context.is_empty():
-		context = batch_context(state)
-	for army: Army in context.owners.get(nation_id, []):
-		var node := army.current_city_node()
-		if army.political_person_id == nation.crown_prince_person_id and effective(army) and node >= 0 and state.administrative_center_of(node) == capital and available(state, army):
-			V += army.size
-		var eligible_commitment := committed.has(army.id) and army.state in [Army.State.IDLE, Army.State.MOVING] and army.battle_id < 0 and army.campaign_war_id < 0 and army.campaign_front_id < 0 and not nation.war_preparation_army_ids.has(army.id)
-		if army.political_person_id == person_id and (available(state, army) if committed.is_empty() else eligible_commitment) and effective(army):
-			armies.append(army)
-	if armies.is_empty():
-		return {}
-	var best := {}
-	var field_cache: Dictionary = context.fields
-	for camp in state.administrative_members(capital):
-		if fixed_camp >= 0 and camp != fixed_camp:
-			continue
-		if not state.is_fu_city(camp) or state.cities[camp].owner_nation != nation_id or state.city_under_siege(camp):
-			continue
-		var occupied := false
-		for stationed: Army in context.stationed.get(camp, []):
-			occupied = occupied or stationed.owner_nation != nation_id or stationed.political_person_id != person_id
-		if occupied:
-			continue
-		# Only this Fu will defect. Preview the same territorial bonus as the siege.
-		var fu_count := maxi(state.administrative_members(capital).size() - 1, 1)
-		var R := ceili(maxi(state.cities[capital].garrison_manpower, 0) * (3.0 - 2.0 / fu_count))
-		var requirement := ceili((R + V) * RulerProfile.campaign_requirement_multiplier(PrincePolitics.profile(state, nation_id, person_id)))
-		var reachable: Array[int] = []
-		var troops := 0
-		for army in armies:
-			var start := army.current_city_node()
-			if start < 0:
-				start = army.move_to if army.on_edge else army.location_city
-			var key := Vector3i(nation_id, start, army.max_size)
-			if not field_cache.has(key):
-				field_cache[key] = Pathfinding.dijkstra_field(state, start, nation_id, false, true, -1, army.max_size)
-			if float(field_cache[key].dist.get(camp, INF)) < INF:
-				var camp_key := Vector3i(nation_id, camp, army.max_size)
-				if not field_cache.has(camp_key):
-					field_cache[camp_key] = Pathfinding.dijkstra_field(state, camp, nation_id, false, true, -1, army.max_size)
-				if float(field_cache[camp_key].dist.get(capital, INF)) == INF:
-					continue
-				reachable.append(army.id)
-				troops += army.size
-		if troops >= requirement and not reachable.is_empty() and (best.is_empty() or troops > int(best.troops) or (troops == int(best.troops) and camp < int(best.camp))):
-			best = {"camp": camp, "capital": capital, "army_ids": reachable, "troops": troops, "R": R, "V": V, "requirement": requirement}
-	return best
-
-static func begin_preparation(state: GameState, nation_id: int, person_id: int, info: Dictionary = {}) -> bool:
-	if state.succession_conflicts.has(nation_id):
-		return false
-	if info.is_empty():
-		info = proposal(state, nation_id, person_id)
-	if info.is_empty():
-		return false
-	var conflict := SuccessionConflict.new()
-	conflict.nation_id = nation_id
-	conflict.challenger_person_id = person_id
-	conflict.crown_person_id = state.nations[nation_id].crown_prince_person_id
-	conflict.capital_city_id = int(info.capital)
-	conflict.camp_city_id = int(info.camp)
-	conflict.army_ids.assign(info.army_ids)
-	conflict.started_day = state.day
-	conflict.qualification = info.duplicate(true)
-	state.succession_conflicts[nation_id] = conflict
-	record(state, conflict, "prepare", info)
-	return true
-
-static func launch(state: GameState, conflict: SuccessionConflict) -> bool:
-	if conflict.launched() or state.day - conflict.started_day >= PREPARATION_LIMIT:
-		return false
-	var info := proposal(state, conflict.nation_id, conflict.challenger_person_id, conflict.army_ids, {}, conflict.camp_city_id)
-	if info.is_empty() or int(info.capital) != conflict.capital_city_id or not camp_valid(state, conflict):
-		return false
-	var arrived: Array[Army] = []
-	var troops := 0
-	for army in state.armies:
-		if conflict.army_ids.has(army.id) and army.owner_nation == conflict.nation_id and army.political_person_id == conflict.challenger_person_id and available(state, army) and army.is_at_city_node(conflict.camp_city_id):
-			arrived.append(army)
-			troops += army.size
-	if troops < int(info.requirement) or arrived.is_empty() or not bool(DiplomacyAI.resource_forecast(state, conflict.nation_id).food_feasible):
-		conflict.qualification = info.duplicate(true)
-		conflict.qualification["arrived"] = troops
-		return false
-	conflict.qualification = info.duplicate(true)
-	conflict.qualification["arrived"] = troops
-	var rebel := Nation.new()
-	rebel.id = state.nations.size()
-	rebel.succession_identity = true
-	rebel.name = str(PrincePolitics.person(state, conflict.nation_id, conflict.challenger_person_id).name) + "军"
-	rebel.short_name = rebel.name
-	rebel.color = state.nations[conflict.nation_id].color.lightened(0.2)
-	rebel.ruler_name = str(PrincePolitics.person(state, conflict.nation_id, conflict.challenger_person_id).name)
-	rebel.family_tree_id = state.nations[conflict.nation_id].family_tree_id
-	rebel.ruler_person_id = conflict.challenger_person_id
-	var ruler := PrincePolitics.profile(state, conflict.nation_id, conflict.challenger_person_id)
-	rebel.ruler_archetype = ruler.ruler_archetype
-	rebel.ruler_traits.assign(ruler.ruler_traits)
-	state.nations.append(rebel)
-	conflict.rebel_nation_id = rebel.id
-	# One controller-only transaction: no capital, legal title, treasury or manpower transfer.
-	var result := state.transfer_city_control(conflict.camp_city_id, rebel.id, -1, GameState.TerritoryStockDisposition.RETURN_TO_OLD_POOL, "succession_camp")
-	if not bool(result.get("ok", false)):
-		state.nations.pop_back()
-		conflict.rebel_nation_id = -1
-		return false
-	conflict.war_id = state.next_war_id
-	state.next_war_id += 1
-	state.war_relation_ids[state._diplomacy_key(rebel.id, conflict.nation_id)] = conflict.war_id
-	for army in state.armies:
-		if conflict.army_ids.has(army.id) and not arrived.has(army):
-			army.path.clear()
-			army.ai_target_city = -1
-			army.ai_action = ActionCandidate.Kind.HOLD
-	conflict.army_ids.clear()
-	state.nations[conflict.nation_id].battle_groups = state.nations[conflict.nation_id].battle_groups.filter(func(group: BattleGroup) -> bool:
-		for army in arrived:
-			if group.id == army.battle_group_id:
-				return false
-		return true)
-	for army in arrived:
-		conflict.army_ids.append(army.id)
-		state.transfer_army_ownership(army, rebel.id)
-		state.assign_main_army_to_independent_command(army)
-	for army in state.armies:
-		var node := army.current_city_node()
-		if army.owner_nation == conflict.nation_id and army.political_person_id == conflict.crown_person_id and available(state, army) and node >= 0 and state.administrative_center_of(node) == conflict.capital_city_id:
-			conflict.crown_army_ids.append(army.id)
-	var offense := state.create_campaign_front(conflict.war_id, [rebel.id] as Array[int], rebel.id, CoalitionCampaignFront.Mode.OFFENSE, conflict.capital_city_id)
-	offense.camp_city_id = conflict.camp_city_id
-	offense.staging_city_id = conflict.camp_city_id
-	conflict.offense_front_id = offense.front_id
-	var defense := state.create_campaign_front(conflict.war_id, [conflict.nation_id] as Array[int], conflict.nation_id, CoalitionCampaignFront.Mode.DEFENSE, conflict.capital_city_id)
-	defense.staging_city_id = conflict.capital_city_id
-	conflict.defense_front_id = defense.front_id
-	for army in state.armies:
-		var side := conflict.side_for(army.id)
-		if side == 0:
-			continue
-		var front := offense if side == 1 else defense
-		front.army_assignments[army.id] = front.staging_city_id
-		army.campaign_front_id = front.front_id
-		army.campaign_war_id = conflict.war_id
-	state.diplomacy_revision += 1
-	state.refresh_derived()
-	observe_progress(state, conflict)
-	record(state, conflict, "launch", {"troops": troops, "R": info.R, "V": info.V})
-	return true
-
 static func record(state: GameState, conflict: SuccessionConflict, event: String, details: Dictionary = {}) -> void:
-	state.succession_events.append({"day": state.day, "nation_id": conflict.nation_id, "person_id": conflict.challenger_person_id, "event": event, "details": details.duplicate(true)})
+	state.succession_events.append({"day": state.day, "nation_id": conflict.nation_id, "person_id": conflict.challenger_person_id, "crown_person_id": conflict.crown_person_id, "event": event, "details": details.duplicate(true)})
 
 static func finish(state: GameState, conflict: SuccessionConflict) -> bool:
-	if conflict.pending_outcome == SuccessionConflict.Outcome.NONE:
-		return false
-	for battle in state.battles:
-		if battle.finished:
-			continue
-		if conflict.pending_outcome == SuccessionConflict.Outcome.ADMINISTRATIVE:
-			continue
-		for army in battle.side_a + battle.side_b:
-			if conflict.side_for(army.id) != 0:
-				return false
+	if conflict.pending_outcome == SuccessionConflict.Outcome.NONE: return false
 	var nation := state.nations[conflict.nation_id]
-	var challenger_name := str(PrincePolitics.person(state, nation.id, conflict.challenger_person_id).get("name", "皇子"))
-	var crown_name := str(PrincePolitics.person(state, nation.id, conflict.crown_person_id).get("name", "太子"))
-	# Freeze the old style before death/title settlement or promotion to crown prince.
-	var challenger_title := str(PrincePolitics.person(state, nation.id, conflict.challenger_person_id).get("current_title", ""))
-	if challenger_title.is_empty() or challenger_title == "无爵": challenger_title = "无爵宗室"
-	var crown_previous_title := str(PrincePolitics.person(state, nation.id, conflict.crown_person_id).get("virtual_title_name", ""))
-	var receiver := nation.id
-	if not nation.alive:
-		receiver = state.cities[conflict.capital_city_id].owner_nation
-		if receiver < 0 or receiver >= state.nations.size() or receiver == conflict.rebel_nation_id:
-			receiver = nation.id
+	var challenger := PrincePolitics.person(state, nation.id, conflict.challenger_person_id)
+	var crown := PrincePolitics.person(state, nation.id, conflict.crown_person_id)
+	var challenger_title := str(challenger.get("current_title", "无爵宗室"))
+	var crown_previous_title := str(crown.get("virtual_title_name", ""))
+	if conflict.pending_outcome == SuccessionConflict.Outcome.ADMINISTRATIVE:
+		state.succession_conflicts.erase(nation.id)
+		_record_result(state, conflict, challenger_title, str(challenger.get("name", "皇子")), str(crown.get("name", "太子")), crown_previous_title)
+		return true
 	if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED:
 		PrincePolitics.set_heir(state, nation.id, conflict.challenger_person_id)
 		nation.succession_competition_closed = true
 	elif conflict.pending_outcome == SuccessionConflict.Outcome.SUPPRESSED:
-		PrincePolitics.person(state, nation.id, conflict.challenger_person_id)["alive"] = false
+		challenger["alive"] = false
 		PrincePolitics.centralize(state, nation.id, [conflict.challenger_person_id] as Array[int])
-	else:
-		nation.succession_competition_closed = true
-	for army in state.armies:
-		if army.owner_nation == conflict.rebel_nation_id:
-			state.transfer_army_ownership(army, receiver)
-			if army.size > 0:
-				state.assign_main_army_to_independent_command(army)
-		if conflict.side_for(army.id) != 0:
-			if army.campaign_war_id == conflict.war_id:
-				army.campaign_war_id = -1
-			if army.campaign_front_id in [conflict.offense_front_id, conflict.defense_front_id]:
-				army.campaign_front_id = -1
-			army.ai_target_city = -1
-			army.ai_action = ActionCandidate.Kind.HOLD
-			# The current edge remains real; only unstarted route legs are cancelled.
-			if army.state not in [Army.State.RETREATING, Army.State.FIGHTING]:
-				army.path.clear()
-			if conflict.pending_outcome != SuccessionConflict.Outcome.SUPPRESSED or conflict.army_ids.has(army.id):
-				army.political_person_id = -1
-	if nation.succession_competition_closed:
-		PrincePolitics.centralize(state, nation.id, nation.prince_person_ids)
-	if conflict.rebel_nation_id >= 0:
-		if state.cities[conflict.camp_city_id].owner_nation == conflict.rebel_nation_id:
-			state.transfer_city_control(conflict.camp_city_id, receiver, -1, GameState.TerritoryStockDisposition.RETURN_TO_OLD_POOL, "succession_restore")
-		state.war_relation_ids.erase(state._diplomacy_key(conflict.rebel_nation_id, nation.id))
-		state.nations[conflict.rebel_nation_id].alive = false
-		state.nations[conflict.rebel_nation_id].capital_city_id = -1
-		state.nations[conflict.rebel_nation_id].battle_groups.clear()
-	state.release_campaign_front(conflict.offense_front_id)
-	state.release_campaign_front(conflict.defense_front_id)
+	# Cancellation carries no political winner and cannot close a new ruler's contest.
+	if nation.succession_competition_closed: PrincePolitics.centralize(state, nation.id, nation.prince_person_ids)
 	state.succession_conflicts.erase(nation.id)
-	if conflict.pending_outcome == SuccessionConflict.Outcome.SUPPRESSED:
-		RoyalTitles.settle_death(state, nation.id, conflict.challenger_person_id)
+	if conflict.pending_outcome == SuccessionConflict.Outcome.SUPPRESSED: RoyalTitles.settle_death(state, nation.id, conflict.challenger_person_id)
 	RoyalTitles.grant_generation(state, nation.id)
 	PrincePolitics.set_heir(state, nation.id, nation.crown_prince_person_id)
 	state.family_revision += 1
-	state.diplomacy_revision += 1
-	state.refresh_derived()
-	_record_result(state, conflict, challenger_title, challenger_name, crown_name, crown_previous_title)
+	_record_result(state, conflict, challenger_title, str(challenger.get("name", "皇子")), str(crown.get("name", "太子")), crown_previous_title)
 	return true
 
 static func _record_result(state: GameState, conflict: SuccessionConflict, challenger_title: String, challenger_name: String, crown_name: String, crown_previous_title: String) -> void:
@@ -327,13 +159,13 @@ static func _record_result(state: GameState, conflict: SuccessionConflict, chall
 			disposition = "废太子%s%s%s" % [crown_name, "仍为" if former_crown.status == "retained" else "封为", former_crown.title]
 		result_text = opening + "废皇太子%s，改立%s为皇太子；%s" % [crown_name, challenger_name, disposition]
 	elif conflict.pending_outcome == SuccessionConflict.Outcome.ADMINISTRATIVE:
-		result_text = opening + "因外部干扰而止"
+		result_text = opening + "因人物或君主代次变化而取消"
 	elif conflict.resolution_reason == "no_progress":
 		result_text = opening + "久无进展，事败"
 	elif conflict.resolution_reason == "field_defeat":
 		result_text = opening + "野战败于皇太子%s，事败" % crown_name
 	record(state, conflict, "finish", {"outcome": conflict.pending_outcome, "delayed": conflict.succession_delayed,
-		"reason": conflict.resolution_reason, "challenger_title": challenger_title, "former_crown": former_crown})
+		"reason": conflict.resolution_reason, "challenger_title": challenger_title, "former_crown": former_crown, "internal_battle": conflict.display_report(), "round_logs": conflict.round_logs})
 	state.chronicle_events.append({"day": state.day, "year": int(state.day / 360) + 1, "kind": "succession",
 		"actor_ids": [conflict.nation_id], "person_ids": [conflict.challenger_person_id, conflict.crown_person_id],
 		"result": "success" if conflict.pending_outcome == SuccessionConflict.Outcome.CROWN_CHANGED else "failure",

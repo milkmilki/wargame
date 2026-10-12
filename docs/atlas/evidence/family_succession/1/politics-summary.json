@@ -1,0 +1,266 @@
+{
+	"active_private": 1,
+	"active_roundtrips": [
+		{
+			"challenger": 635,
+			"crown": 634,
+			"last_advanced_day": -1,
+			"nation": 94,
+			"round": 0,
+			"roundtrip": true
+		}
+	],
+	"chronicle_kinds": {
+		"empire": 3,
+		"external_war": 222,
+		"rebellion": 21,
+		"ruler_succession": 81,
+		"succession": 19,
+		"title_ended": 5,
+		"ultimatum": 11,
+		"vassal_isolated_independence": 3
+	},
+	"day": 10800,
+	"deaths": 158,
+	"emperors": 4,
+	"families": 61,
+	"native_validation": "",
+	"people": 681,
+	"private_replays": [
+		{
+			"day": 42,
+			"nation": 25,
+			"ok": true,
+			"person": 124,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 12
+			},
+			"rounds": 12
+		},
+		{
+			"day": 61,
+			"nation": 29,
+			"ok": true,
+			"person": 142,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 92,
+			"nation": 11,
+			"ok": true,
+			"person": 57,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 2
+			},
+			"rounds": 2
+		},
+		{
+			"day": 96,
+			"nation": 31,
+			"ok": true,
+			"person": 153,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 36
+			},
+			"rounds": 36
+		},
+		{
+			"day": 206,
+			"nation": 42,
+			"ok": true,
+			"person": 200,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 26
+			},
+			"rounds": 26
+		},
+		{
+			"day": 991,
+			"nation": 49,
+			"ok": true,
+			"person": 253,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 1801,
+			"nation": 22,
+			"ok": true,
+			"person": 266,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 3332,
+			"nation": 42,
+			"ok": true,
+			"person": 271,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 2
+			},
+			"rounds": 2
+		},
+		{
+			"day": 3391,
+			"nation": 33,
+			"ok": true,
+			"person": 162,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 3891,
+			"nation": 46,
+			"ok": true,
+			"person": 247,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 21
+			},
+			"rounds": 21
+		},
+		{
+			"day": 4711,
+			"nation": 21,
+			"ok": true,
+			"person": 311,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 4771,
+			"nation": 54,
+			"ok": true,
+			"person": 305,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 5085,
+			"nation": 61,
+			"ok": true,
+			"person": 355,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 15
+			},
+			"rounds": 15
+		},
+		{
+			"day": 7471,
+			"nation": 78,
+			"ok": true,
+			"person": 467,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 7990,
+			"nation": 22,
+			"ok": true,
+			"person": 346,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 10
+			},
+			"rounds": 10
+		},
+		{
+			"day": 8161,
+			"nation": 84,
+			"ok": true,
+			"person": 510,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 8371,
+			"nation": 63,
+			"ok": true,
+			"person": 360,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 8431,
+			"nation": 78,
+			"ok": true,
+			"person": 503,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 0
+			},
+			"rounds": 0
+		},
+		{
+			"day": 8990,
+			"nation": 82,
+			"ok": true,
+			"person": 593,
+			"result": {
+				"errors": [],
+				"ok": true,
+				"replayed": 20
+			},
+			"rounds": 20
+		}
+	],
+	"schema": 28,
+	"seed": 1.0,
+	"succession_outcomes": {
+		"1": 18,
+		"2": 1
+	},
+	"title_records": 87
+}

@@ -1960,64 +1960,23 @@ func _succession_suzerainty_depth(nation_id: int) -> int:
 
 
 func _cancel_succession_preparation(conflict: SuccessionConflict, reason: String) -> void:
-	for army in state.armies:
-		if conflict.army_ids.has(army.id):
-			army.path.clear()
-			army.ai_target_city = -1
-			army.ai_action = ActionCandidate.Kind.HOLD
-	SuccessionRules.record(state, conflict, "cancel", {"reason": reason})
-	state.succession_conflicts.erase(conflict.nation_id)
-
+	conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
+	conflict.resolution_reason = reason
+	SuccessionRules.finish(state, conflict)
 
 func _update_succession_conflicts() -> void:
-	# Only existing records are coordinated here; proposals and routes belong to AI batches.
 	for value in state.succession_conflicts.values().duplicate():
 		var conflict := value as SuccessionConflict
+		SuccessionRules.advance(state, conflict)
+		if conflict.pending_outcome == SuccessionConflict.Outcome.NONE: continue
 		var nation := state.nations[conflict.nation_id]
-		if not conflict.launched():
-			if state.day - conflict.started_day >= SuccessionRules.PREPARATION_LIMIT or nation.capital_city_id != conflict.capital_city_id or not state.wars_of(nation.id).is_empty():
-				_cancel_succession_preparation(conflict, "expired_or_invalid")
-			continue
-		if conflict.pending_outcome == SuccessionConflict.Outcome.NONE:
-			if not nation.alive or state.cities[conflict.capital_city_id].owner_nation != nation.id or state.cities[conflict.camp_city_id].owner_nation not in [nation.id, conflict.rebel_nation_id]:
-				conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
-			elif state.cities[conflict.camp_city_id].owner_nation == nation.id:
-				conflict.pending_outcome = SuccessionConflict.Outcome.SUPPRESSED
-			else:
-				SuccessionRules.observe_progress(state, conflict)
-				if state.day - conflict.last_progress_day >= SuccessionRules.NO_PROGRESS_LIMIT:
-					SuccessionRules.fail(state, conflict, "no_progress")
-		if conflict.pending_outcome != SuccessionConflict.Outcome.NONE:
-			_stop_succession_orders(conflict)
-			for battle in state.battles:
-				if not battle.finished and conflict.contains_battle(battle):
-					var real_field := battle.city == null
-					for defender in battle.side_b:
-						real_field = real_field or (defender.size > 0 and not defender.is_city_garrison)
-					if conflict.pending_outcome == SuccessionConflict.Outcome.ADMINISTRATIVE or not real_field:
-						_finish_battle_administratively(battle)
-			if SuccessionRules.finish(state, conflict):
-				if conflict.succession_delayed and nation.alive:
-					if PrincePolitics.accede(state, nation.id):
-						state.relocate_capital(nation.id)
-						RegionalStrategy.update_target(state, nation.id, true)
-						state.refresh_derived()
-						_reset_trade_forecast_cache()
-						_ai_strategy_cache.clear()
-				_ai_last_decision_day = -1
-
-
-func _stop_succession_orders(conflict: SuccessionConflict) -> void:
-	for front_id in [conflict.offense_front_id, conflict.defense_front_id]:
-		var front := state.campaign_front(front_id)
-		if front != null:
-			front.retiring = true
-	for army in state.armies:
-		if conflict.side_for(army.id) != 0 and army.state != Army.State.FIGHTING:
-			if army.state != Army.State.RETREATING:
-				army.path.clear()
-			army.ai_target_city = -1
-			army.ai_action = ActionCandidate.Kind.HOLD
+		if SuccessionRules.finish(state, conflict) and conflict.succession_delayed and nation.alive and conflict.ruler_person_id == nation.ruler_person_id:
+			if PrincePolitics.accede(state, nation.id):
+				state.relocate_capital(nation.id)
+				RegionalStrategy.update_target(state, nation.id, true)
+				state.refresh_derived()
+				_reset_trade_forecast_cache()
+				_ai_strategy_cache.clear()
 
 
 func _succession_battle_context(battle: Battle) -> SuccessionConflict:
@@ -2064,89 +2023,6 @@ func _propose_succession_conflicts() -> void:
 				break
 
 
-func _plan_succession_conflicts() -> void:
-	if state.succession_conflicts.is_empty():
-		return
-	var armies_by_id := {}
-	var context := SuccessionRules.batch_context(state)
-	for army in state.armies:
-		armies_by_id[army.id] = army
-	for value in state.succession_conflicts.values().duplicate():
-		var conflict := value as SuccessionConflict
-		if conflict.pending_outcome != SuccessionConflict.Outcome.NONE:
-			continue
-		if not conflict.launched():
-			var info := SuccessionRules.proposal(state, conflict.nation_id, conflict.challenger_person_id, conflict.army_ids, context, conflict.camp_city_id)
-			if info.is_empty() or int(info.capital) != conflict.capital_city_id or not SuccessionRules.camp_valid(state, conflict):
-				_cancel_succession_preparation(conflict, "qualification_changed")
-				continue
-			conflict.qualification = info.duplicate(true)
-			for id in conflict.army_ids:
-				var army: Army = armies_by_id.get(id)
-				if army != null and army.state == Army.State.IDLE and not army.is_at_city_node(conflict.camp_city_id):
-					_execute_ai_candidate(army, ActionCandidate.make(ActionCandidate.Kind.REINFORCE, 2000, "继承权准备", conflict.camp_city_id))
-			if SuccessionRules.launch(state, conflict):
-				_reset_trade_forecast_cache()
-			else:
-				continue
-		var living := 0
-		for id in conflict.army_ids:
-			var army: Army = armies_by_id.get(id)
-			if army != null:
-				living += army.size
-		if living == 0:
-			conflict.pending_outcome = SuccessionConflict.Outcome.SUPPRESSED
-			continue
-		var outside := false
-		for army in state.armies:
-			if army.size <= 0 or conflict.side_for(army.id) > 0 or not state.is_enemy(conflict.nation_id, army.owner_nation):
-				continue
-			var node := army.current_city_node()
-			if node >= 0 and state.administrative_center_of(node) == conflict.capital_city_id:
-				outside = true
-		if outside:
-			conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
-			continue
-		_plan_succession_fronts(conflict)
-
-
-func _plan_succession_fronts(conflict: SuccessionConflict) -> void:
-	var offense := state.campaign_front(conflict.offense_front_id)
-	var defense := state.campaign_front(conflict.defense_front_id)
-	if offense == null or defense == null:
-		return
-	var requirement := SuccessionRules.attack_requirement(state, conflict)
-	var attack_force := _campaign_action_force(offense, conflict.capital_city_id, ActionCandidate.Kind.ATTACK, conflict.camp_city_id)
-	if offense.phase == CoalitionCampaignFront.Phase.HOLD_CAMP:
-		var ready: Array[Army] = []
-		var troops := 0
-		for army: Army in attack_force.armies:
-			if army.state == Army.State.IDLE and army.is_at_city_node(conflict.camp_city_id) and SuccessionRules.effective(army):
-				ready.append(army)
-				troops += army.size
-		attack_force = {"armies": ready, "manpower": troops}
-	var advancing := false
-	for army in attack_force.armies:
-		advancing = advancing or _campaign_army_at_or_advancing(army, conflict.capital_city_id)
-	if advancing or int(attack_force.manpower) >= requirement:
-		_dispatch_campaign_action(offense, attack_force, conflict.capital_city_id, ActionCandidate.Kind.ATTACK, CoalitionCampaignFront.Phase.ASSAULT_CENTER)
-	else:
-		for army in _campaign_plan_armies(offense):
-			_order_campaign_army(army, offense, conflict.camp_city_id, ActionCandidate.Kind.REINFORCE)
-	var threat := _siege_battle_of(state.cities[conflict.capital_city_id]) != null
-	for army in _campaign_plan_armies(offense):
-		if _campaign_army_at_or_advancing(army, conflict.capital_city_id):
-			threat = true
-	var target := conflict.capital_city_id if threat else conflict.camp_city_id
-	var kind := ActionCandidate.Kind.REINFORCE if threat else ActionCandidate.Kind.ATTACK
-	var force := _campaign_action_force(defense, target, kind)
-	var needed := SuccessionRules.defense_requirement(state, conflict)
-	if threat or int(force.manpower) >= needed:
-		_dispatch_campaign_action(defense, force, target, kind, CoalitionCampaignFront.Phase.SORTIE)
-
-
-## 即时调校当前君主，不触发继位：姓名、任期起点和继位序号保持不变。
-## 所有效果仍由 RulerProfile 纯派生，并在同一入口失效贸易与 AI 缓存。
 func set_ruler_profile(
 	nation_id: int,
 	archetype: int,
@@ -6833,7 +6709,6 @@ func _merge_parallel_threat_cache_deltas(
 
 
 func _ai_assign_targets(spread_runtime_work: bool = false) -> void:
-	_plan_succession_conflicts()
 	var frozen_army_ids := {}
 	for army in state.armies:
 		if army.size > 0:
@@ -12565,7 +12440,6 @@ func _advance_travelling_armies() -> Array[Army]:
 	#    导致相向而行的两军错身穿过、永不野战交火。故推进与到达必须分离。
 	var holding_arrivals: Array[Army] = []
 	for army in state.armies:
-		_note_external_succession_intrusion(army)
 		if not _is_travelling(army) or army.size <= 0:
 			continue   # FIGHTING 军队冻结在原地，不推进
 		var was_encounter_blocked := army.encounter_blocked
@@ -12585,18 +12459,6 @@ func _advance_travelling_armies() -> Array[Army]:
 				army.move_progress = army.hold_target_progress
 				holding_arrivals.append(army)
 	return holding_arrivals
-
-
-func _note_external_succession_intrusion(army: Army) -> void:
-	if army.size <= 0 or state.succession_conflicts.is_empty():
-		return
-	for value in state.succession_conflicts.values():
-		var conflict := value as SuccessionConflict
-		if not conflict.launched() or conflict.pending_outcome != SuccessionConflict.Outcome.NONE or conflict.side_for(army.id) > 0 or not state.is_enemy(conflict.nation_id, army.owner_nation):
-			continue
-		var node := army.current_city_node()
-		if node >= 0 and state.administrative_center_of(node) == conflict.capital_city_id:
-			conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
 
 
 func _arrive_retreating_armies() -> void:
@@ -12761,11 +12623,6 @@ func _arrive_at_node(army: Army) -> void:
 		return
 
 	var city := state.cities[arrived]
-	for value in state.succession_conflicts.values():
-		var conflict := value as SuccessionConflict
-		if conflict.launched() and conflict.side_for(army.id) == 0 and state.is_enemy(conflict.nation_id, army.owner_nation) and state.administrative_center_of(arrived) == conflict.capital_city_id:
-			conflict.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
-	_update_succession_conflicts()
 	if army.ai_action == ActionCandidate.Kind.RETREAT and army.campaign_front_id < 0:
 		army.location_city = arrived
 		army.move_from = arrived
@@ -13223,13 +13080,6 @@ func _block_passthrough() -> void:
 ## - side_b 否则是同一战争阵营的敌对挑战者共同体；
 ## - 与当前围城无敌对关系的无关方撤回。
 func _start_or_join_siege(attacker: Army, city: City, edge: Edge) -> void:
-	var internal := _succession_city_context(city.id)
-	if internal != null and internal.side_for(attacker.id) == 0:
-		if state.financial_nation_of(attacker.owner_nation) == internal.nation_id:
-			_settle_idle(attacker, city.id)
-			return
-		internal.pending_outcome = SuccessionConflict.Outcome.ADMINISTRATIVE
-		_update_succession_conflicts()
 	var siege := _siege_battle_of(city)
 	if siege == null and not state.is_enemy(attacker.owner_nation, city.owner_nation):
 		_retreat_to_friendly(attacker)
@@ -13470,9 +13320,6 @@ func _resolve_combat_round(
 	if battle.side_size(battle.side_a) > 0 and battle.side_size(battle.side_b) > 0:
 		battle.ensure_opening_dice(state.world_seed, battle.uses_field_combat_rules())
 	Combat.resolve_round(battle, state.day)
-	if succession != null and field_rules and battle.finished and battle.winner_side in [1, 2] and challenger_side > 0 and battle.winner_side != challenger_side:
-		if SuccessionRules.fail(state, succession, "field_defeat", battle.id):
-			_stop_succession_orders(succession)
 	var counted := {}
 	for side in [battle.side_a, battle.side_b, battle.routed_a, battle.routed_b]:
 		for army_value in side:
@@ -13857,10 +13704,6 @@ func _attach_city_garrison(battle: Battle) -> Army:
 			clampf(battle.city.garrison_supply_ratio, 0.0, 1.0)
 		)
 	)
-	var conflict := _succession_city_context(battle.city.id)
-	if conflict != null and battle.city.id == conflict.capital_city_id:
-		garrison.city_garrison_combat_multiplier /= maxf(battle.city.ruler_city_defense_multiplier, 0.1)
-		garrison.city_garrison_combat_multiplier *= RulerProfile.city_defense_multiplier(PrincePolitics.profile(state, conflict.nation_id, conflict.crown_person_id))
 	garrison.state = Army.State.FIGHTING
 	garrison.battle_id = battle.id
 	garrison.location_city = battle.city.id
@@ -14274,15 +14117,6 @@ func _capture_city(
 	if owner_override >= 0:
 		claimant = owner_override
 	if claimant < 0 or claimant >= state.nations.size():
-		return
-	var conflict := _succession_city_context(city.id)
-	if conflict != null and ((city.id == conflict.capital_city_id and claimant == conflict.rebel_nation_id) or (city.id == conflict.camp_city_id and claimant == conflict.nation_id)):
-		if conflict.pending_outcome != SuccessionConflict.Outcome.NONE:
-			return
-		conflict.pending_outcome = SuccessionConflict.Outcome.CROWN_CHANGED if city.id == conflict.capital_city_id else SuccessionConflict.Outcome.SUPPRESSED
-		if city.id == conflict.camp_city_id:
-			state.transfer_city_control(city.id, conflict.nation_id, -1, GameState.TerritoryStockDisposition.RETURN_TO_OLD_POOL, "succession_camp_taken")
-		_stop_succession_orders(conflict)
 		return
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
@@ -14947,16 +14781,9 @@ func _edge_key_of(a: int, b: int) -> int:
 ## 移除 size<=0 的军队，并释放它们占用的边。
 func _purge_dead_armies() -> void:
 	var survivors: Array[Army] = []
-	var living_challengers := {}
 	for army in state.armies:
 		if army.size > 0:
 			survivors.append(army)
-			if state.is_succession_identity(army.owner_nation):
-				living_challengers[army.owner_nation] = true
 		else:
 			_release_edge(army)   # 幂等释放
 	state.armies = survivors
-	for value in state.succession_conflicts.values():
-		var conflict := value as SuccessionConflict
-		if conflict.launched() and conflict.pending_outcome == SuccessionConflict.Outcome.NONE and not living_challengers.has(conflict.rebel_nation_id):
-			conflict.pending_outcome = SuccessionConflict.Outcome.SUPPRESSED

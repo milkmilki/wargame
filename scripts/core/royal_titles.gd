@@ -112,7 +112,7 @@ static func _grant(state: GameState, member: Dictionary, rank: int, payer: int, 
 static func reconcile(state: GameState) -> void:
 	if state == null or state.has_meta("historical_prince_reports") or state.has_meta("ruler_accession_in_progress"):
 		return
-	if int(state.get_meta("royal_reconcile_revision", -1)) == state.family_revision:
+	if int(state.get_meta("royal_reconcile_revision", -1)) == state.family_revision and int(state.get_meta("royal_reconcile_ownership", -1)) == state.ownership_revision:
 		return
 	for nation in state.nations:
 		if not nation.alive or nation.succession_identity:
@@ -126,9 +126,15 @@ static func reconcile(state: GameState) -> void:
 		var members: Dictionary = tree.members
 		for id in members.keys():
 			var member: Dictionary = members[id]
+			# Territorial extinction need not run annex(): several conquerors can
+			# divide a country. Close its institution without moving its people.
+			var origin := int(member.get("title_origin_nation_id", -1))
+			if int(member.get("title_rank", 0)) > 0 and origin >= 0 and origin < state.nations.size() and not state.nations[origin].alive:
+				end_title(state, member, "institution_extinct")
 			if effective_rank(state, member) > 0 and bool(member.get("title_adult", false)):
 				_generate_children(state, member)
 	state.set_meta("royal_reconcile_revision", state.family_revision)
+	state.set_meta("royal_reconcile_ownership", state.ownership_revision)
 
 static func grant_generation(state: GameState, nation_id: int) -> void:
 	var nation := state.nations[nation_id]

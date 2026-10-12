@@ -1,0 +1,5 @@
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+COALITION_SIEGE_METRIC first=0 blockade_days=60 rejected_retreat_days=0 captured_by=0
+COALITION_SIEGE_METRIC first=1 blockade_days=60 rejected_retreat_days=0 captured_by=0
+COALITION_SIEGE_RESULT checks=30 failures=0

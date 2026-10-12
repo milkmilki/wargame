@@ -1,0 +1,63 @@
+{
+  "godot": "D:/ProjectICreate/Godot_v4.7.1-stable_win64.exe",
+  "days": 35,
+  "results": [
+    {
+      "test": "atlas_runtime_equivalence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 203984,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_runtime_equivalence.log"
+    },
+    {
+      "test": "atlas_territory_transactions",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2813,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_territory_transactions.log"
+    },
+    {
+      "test": "ruler_enfeoff_accession",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 3265,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ruler_enfeoff_accession.log"
+    },
+    {
+      "test": "ruler_extinction",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2625,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\ruler_extinction.log"
+    },
+    {
+      "test": "royal_titles",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2813,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\royal_titles.log"
+    },
+    {
+      "test": "empire_recognition",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2812,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\empire_recognition.log"
+    },
+    {
+      "test": "atlas_information_panel",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 2719,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_information_panel.log"
+    },
+    {
+      "test": "atlas_military_persistence",
+      "ok": true,
+      "exit_code": 0,
+      "elapsed_ms": 47078,
+      "log": "D:\\ProjectICreate\\Wargame\\wargame\\.dbg\\regression\\atlas_military_persistence.log"
+    }
+  ],
+  "failures": 0
+}

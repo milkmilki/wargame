@@ -13,6 +13,7 @@ func _init() -> void:
 	_test_foreign_annex(false)
 	_test_foreign_annex(true)
 	_test_finance_history()
+	_test_extinction_without_annexation()
 	for failure in failures:
 		push_error("ROYAL_TITLE_LIFECYCLE_FAIL: " + failure)
 	print("ROYAL_TITLE_LIFECYCLE_RESULT checks=%d failures=%d" % [checks, failures.size()])
@@ -26,6 +27,31 @@ func fixture() -> GameState:
 		for b in range(a + 1, state.nations.size()):
 			state.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	return state
+
+func _test_extinction_without_annexation() -> void:
+	var state := fixture()
+	promote(state, 0)
+	var members: Dictionary = FamilyTree.tree_for_nation(state, 0).members
+	var titled: Array[int] = []
+	for id in members:
+		if RoyalTitles.effective_rank(state, members[id]) > 0: titled.append(id)
+	check(not titled.is_empty(), "extinction fixture contains active domestic titles")
+	var operations: Array[Dictionary] = []
+	for city in state.land_cities_of(0):
+		operations.append({"city_id":city.id,"controller_id":1,"legal_owner_id":1,"sponsor_id":-1,
+			"stock_policy":GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL,"reason":"extinction_without_annexation"})
+	state.day = 30
+	var result := state.apply_territory_transaction(operations)
+	check(bool(result.get("ok",false)), "real territorial loss transaction succeeds: %s" % result)
+	check(not state.nations[0].alive and state.nations[0].absorbed_into_nation_id < 0, "territorial extinction without household annexation")
+	RoyalTitles.reconcile(state)
+	for id in titled:
+		check(int(members[id].title_rank) == 0, "extinct institution closes active title %d" % id)
+		check(members[id].title_history.back().end_day == 30 and members[id].title_history.back().end_reason == "institution_extinct", "extinct institution archives actual closing date %d" % id)
+	var before := state.family_trees.duplicate(true)
+	RoyalTitles.reconcile(state)
+	check(state.family_trees == before, "extinction reconciliation is idempotent")
+	check(NativeSnapshotBuilder.succession_validation_error(NativeSnapshotBuilder.build(state)).is_empty(), "extinct unannexed dynasty remains restorable")
 
 func promote(state: GameState, nation_id: int) -> void:
 	state.region_ids.fill(-1)

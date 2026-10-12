@@ -372,7 +372,7 @@ static func report(state: GameState, nation_id: int, troops: Dictionary = {}) ->
 	var conflict: SuccessionConflict = state.succession_conflicts.get(nation_id)
 	var status := "本代竞争结束" if nation.succession_competition_closed else "未发动争夺"
 	if conflict != null:
-		status = "继承权战争" if conflict.launched() else "秘密集结"
+		status = "内部虚拟夺嫡"
 		if conflict.succession_delayed:
 			status += "（继位延期）"
 	var result := ""
@@ -383,14 +383,19 @@ static func report(state: GameState, nation_id: int, troops: Dictionary = {}) ->
 			break
 	return {"princes": princes, "central": int(troops.get(-1, 0)), "total": total, "status": status, "result": result,
 		"has_crown": eligible_for_nation(person(state, nation_id, nation.crown_prince_person_id), nation_id),
-		"qualification": conflict.qualification.duplicate(true) if conflict != null else {}}
+		"qualification": conflict.qualification.duplicate(true) if conflict != null else {},
+		"internal_battle": conflict.display_report() if conflict != null else {}}
 
 static func display_lines(report_data: Dictionary) -> Array[String]:
 	var lines: Array[String] = ["%s    中央直属 %d人" % [report_data.status, report_data.central]]
 	if not bool(report_data.get("has_crown", true)): lines.append("无继承人 · 到期按宗室继承规则择嗣")
 	var qualification: Dictionary = report_data.get("qualification", {})
 	if not qualification.is_empty():
-		lines.append("起事门槛 %d人（R=%d，V=%d）    已到场 %d人" % [qualification.requirement, qualification.R, qualification.V, qualification.get("arrived", 0)])
+		lines.append("起事门槛 %d人（太子掌兵%d人）" % [qualification.requirement, qualification.V])
+	var internal: Dictionary = report_data.get("internal_battle", {})
+	if not internal.is_empty():
+		lines.append("虚拟夺嫡 · 第%d回合 · 皇子%d人 / 太子%d人" % [internal.round, internal.troops_a, internal.troops_b])
+		lines.append("双方士气 %.2f / %.2f · 伤亡不影响真实军队" % [internal.morale_a, internal.morale_b])
 	if not str(report_data.get("result", "")).is_empty():
 		lines.append("最近争夺：" + str(report_data.result))
 	for prince in report_data.princes:

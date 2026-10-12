@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 27
+const SCHEMA_VERSION: int = 28
 const ROYAL_NATION_FIELDS := ["state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]
 
 
@@ -106,26 +106,19 @@ static func succession_validation_error(snapshot: Dictionary) -> String:
 		if conflict_nation < 0 or conflict_nation >= count or conflict_nations.has(conflict_nation):
 			return "Invalid succession conflict nation"
 		conflict_nations[conflict_nation] = true
-		for city_key in ["capital_city_id", "camp_city_id"]:
-			var city_id := int(conflict.get(city_key, -1))
-			if city_id < 0 or city_id >= city_count:
-				return "Invalid succession conflict city reference"
-		var rebel_id := int(conflict.get("rebel_nation_id", -1))
-		if rebel_id >= count or rebel_id == conflict_nation:
-			return "Invalid succession rebel identity reference"
-		if rebel_id >= 0 and not bool(nations.succession_identity[rebel_id]):
-			return "Succession rebel is not a temporary identity"
 		var conflict_members: Dictionary = trees.get(nations.family_tree_ids[conflict_nation], {})
 		for person_key in ["challenger_person_id", "crown_person_id"]:
 			var person_id := int(conflict.get(person_key, -1))
 			if person_id < 0 or not conflict_members.has(person_id):
 				return "Invalid succession conflict person reference"
-		for army_key in ["army_ids", "crown_army_ids"]:
-			for raw_army_id in conflict.get(army_key, []):
-				var conflict_army_id := int(raw_army_id)
-				if not army_ids.has(conflict_army_id) or conflict_armies.has(conflict_army_id):
-					return "Invalid succession conflict army reference"
-				conflict_armies[conflict_army_id] = true
+		var battle: Variant = conflict.get("battle")
+		if not battle is Dictionary or int(battle.get("kind", -1)) != Battle.Kind.FIELD or int(battle.get("id", -1)) < 0:
+			return "Invalid private succession battle"
+		for side in ["side_a", "side_b"]:
+			if not battle.get(side) is Array: return "Invalid private army table"
+			for army in battle[side]:
+				if not army is Dictionary or int(army.get("size", -1)) < 0 or bool(army.get("is_city_garrison", true)):
+					return "Invalid private army"
 	return ""
 
 static func vassal_validation_error(snapshot: Dictionary) -> String:
@@ -325,6 +318,7 @@ static func build(state: GameState) -> Dictionary:
 		"family_revision": state.family_revision,
 		"family_trees": _build_family_trees(state),
 		"succession_conflicts": _build_succession_conflicts(state),
+		"next_internal_battle_id": state.next_internal_battle_id,
 		"succession_events": state.succession_events.duplicate(true),
 		"chronicle_events": state.chronicle_events.duplicate(true),
 		"war_chronicle_contexts": state.war_chronicle_contexts.duplicate(true),
@@ -350,14 +344,7 @@ static func _build_succession_conflicts(state: GameState) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
 	var ids := state.succession_conflicts.keys()
 	ids.sort()
-	for nation_id in ids:
-		var conflict := state.succession_conflicts[nation_id] as SuccessionConflict
-		var record := {}
-		for property in conflict.get_property_list():
-			if (int(property.usage) & PROPERTY_USAGE_SCRIPT_VARIABLE) != 0:
-				var value = conflict.get(property.name)
-				record[property.name] = value.duplicate(true) if value is Array or value is Dictionary else value
-		result.append(record)
+	for nation_id in ids: result.append(state.succession_conflicts[nation_id].snapshot())
 	return result
 
 

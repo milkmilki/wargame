@@ -1,0 +1,31 @@
+{
+	"click_selected": 2400,
+	"fixture": "synthetic 5000 people / 25 generations / 200 root branches",
+	"godot": {
+		"build": "official",
+		"hash": "a13da4feb8d8aefc283c3763d33a2f170a18d541",
+		"hex": 263937,
+		"major": 4,
+		"minor": 7,
+		"patch": 1,
+		"status": "stable",
+		"string": "4.7.1-stable (official)",
+		"timestamp": 0
+	},
+	"gpu": "AMD Radeon RX 7600",
+	"layout_ms": 100.07,
+	"layouts_before_after": [
+		1,
+		1
+	],
+	"note": "Isolated family canvas on real GPU; includes concurrent headless audits. Not map/game FPS.",
+	"pan_frame_max_ms": 24.57,
+	"pan_frame_p95_ms": 10.842,
+	"pan_samples": 120,
+	"scale_fit": 0.0186425866588989,
+	"viewport": [
+		1280,
+		720
+	],
+	"visible_max": 48
+}

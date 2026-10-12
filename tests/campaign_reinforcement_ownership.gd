@@ -127,53 +127,45 @@ func _test_other_front_and_parallel_lock() -> void:
 		check(not front.combat_report_locked, "last report releases lock")
 	sim.free()
 
+func _private_contest(state: GameState, guard: Army, reserve: Army) -> SuccessionConflict:
+	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.NEUTRAL)
+	preload("res://tests/ruler_family_fixture.gd").ensure_candidates(state,1)
+	var nation:=state.nations[1]
+	guard.political_person_id=nation.crown_prince_person_id
+	reserve.political_person_id=nation.prince_person_ids[1]
+	check(SuccessionRules.begin_preparation(state,1,reserve.political_person_id),"create authentic private contest in peace")
+	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.WAR)
+	return state.succession_conflicts.get(1)
+
 func _test_succession_priority() -> void:
-	var state: GameState = Direct.fixture()
-	var attacker: Army = Direct.army(state, 0, 3, 30000)
-	var guard: Army = Direct.army(state, 1, 3, 1000)
-	var reserve: Army = Direct.army(state, 1, 4, 30000)
-	var conflict := SuccessionConflict.new()
-	conflict.nation_id = 1
-	conflict.rebel_nation_id = 0
-	conflict.capital_city_id = 3
-	conflict.camp_city_id = 2
-	conflict.war_id = state.war_id_between(0, 1)
-	conflict.army_ids = [attacker.id]
-	conflict.crown_army_ids = [guard.id, reserve.id]
-	state.succession_conflicts[1] = conflict
-	var battle := siege(state, attacker, guard)
-	var sim := Simulation.new()
-	sim.setup(state)
-	var plan := CityDefensePlan.new()
-	plan.view = sim._build_ai_view(1)
-	sim._advance_priority_city_defense(battle, plan)
-	check(reserve.state == Army.State.MOVING, "succession priority entry still dispatches real participant")
-	check(reserve.campaign_front_id == -1 and sim._succession_battle_context(battle) == conflict, "succession dispatch stays isolated from ordinary fronts")
+	var state: GameState=Direct.fixture()
+	var attacker: Army=Direct.army(state,0,3,30000)
+	var guard: Army=Direct.army(state,1,3,1000)
+	var reserve: Army=Direct.army(state,1,4,30000)
+	var sim:=Simulation.new(); sim.setup(state)
+	var conflict:=_private_contest(state,guard,reserve)
+	var battle:=siege(state,attacker,guard)
+	var plan:=CityDefensePlan.new(); plan.view=sim._build_ai_view(1)
+	sim._advance_priority_city_defense(battle,plan)
+	check(sim._succession_battle_context(battle)==null,"map siege never acquires private context")
+	check(not state.army_reserved_for_succession(reserve),"real reserve still belongs to normal military AI")
+	if conflict!=null:
+		check(conflict.battle.side_a[0]!=reserve and conflict.battle.side_a[0].size==30000,"reinforcement cannot alter combat copy")
+		check(conflict.battle.city==null and conflict.battle.edge==null,"no private campaign location")
 	sim.free()
 
 func _test_succession_nearby() -> void:
-	var state: GameState = Direct.fixture()
-	var attacker: Army = Direct.army(state, 0, 3, 30000)
-	var guard: Army = Direct.army(state, 1, 3, 1000)
-	var reserve: Army = Direct.army(state, 1, 4, 30000)
-	for troop in [attacker, guard, reserve]:
-		troop.battle_group_id = troop.id
-	var conflict := SuccessionConflict.new()
-	conflict.nation_id = 1
-	conflict.rebel_nation_id = 0
-	conflict.capital_city_id = 3
-	conflict.camp_city_id = 2
-	conflict.war_id = state.war_id_between(0, 1)
-	conflict.army_ids = [attacker.id]
-	conflict.crown_army_ids = [guard.id, reserve.id]
-	state.succession_conflicts[1] = conflict
-	siege(state, attacker, guard)
-	var sim := Simulation.new()
-	sim.setup(state)
+	var state: GameState=Direct.fixture()
+	var attacker: Army=Direct.army(state,0,3,30000)
+	var guard: Army=Direct.army(state,1,3,1000)
+	var reserve: Army=Direct.army(state,1,4,30000)
+	for troop in [attacker,guard,reserve]: troop.battle_group_id=troop.id
+	var sim:=Simulation.new(); sim.setup(state)
+	var conflict:=_private_contest(state,guard,reserve)
+	siege(state,attacker,guard)
 	sim._resolve_nearby_main_battle_reinforcements()
-	check(reserve.state == Army.State.MOVING and reserve.ai_target_city == 3,
-		"succession retains real nearby reinforcement dispatch")
-	check(reserve.campaign_front_id == -1, "succession nearby entry remains outside ordinary fronts")
+	check(not state.army_reserved_for_succession(reserve),"nearby dispatch uses ordinary army ownership")
+	if conflict!=null: check(conflict.battle.round_no==0 and conflict.battle.side_size(conflict.battle.side_a)==30000,"real dispatch does not advance or reinforce private combat")
 	sim.free()
 
 

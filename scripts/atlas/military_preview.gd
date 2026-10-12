@@ -3,6 +3,10 @@ const MilitaryMap = preload("res://scripts/atlas/military_map.gd")
 const Overlay = preload("res://scripts/atlas/military_overlay.gd")
 const WarFronts = preload("res://scripts/atlas/war_fronts.gd")
 const Information = preload("res://scripts/atlas/information_model.gd")
+const FamilyModel = preload("res://scripts/atlas/family_model.gd")
+var family_panel: Control
+var committed_information := {}
+var committed_information_key: Array=[]
 const Interface = preload("res://scripts/atlas/military_interface.gd")
 const StartupCache = preload("res://scripts/atlas/startup_cache.gd")
 const Selection = preload("res://scripts/atlas/map_selection.gd")
@@ -169,21 +173,33 @@ func information_source() -> GameState:
 func information_document() -> Dictionary:
 	var source := information_source()
 	if source==null: return {}
+	var document_key: Array=[source.get_instance_id(),information_kind,information_id,historical_view]
+	if not historical_view and simulation!=null and simulation.runtime_day_in_progress():
+		if document_key!=committed_information_key: return {}
+		var frozen: Dictionary=committed_information.duplicate(true)
+		for group in frozen.get("sections",[]):
+			if group.has("ruler"): group.ruler.disabled=true
+		for command in frozen.get("actions",[]):
+			if command.key in ["order","player","declare","select_army"]: command.disabled=true
+		return frozen
 	var doc := {}
 	match information_kind:
 		"city": doc=Information.city(source,information_id)
 		"nation": doc=Information.nation(source,information_id)
 		"army": doc=Information.army(source,information_id)
 		"road": doc=Information.road(source,information_id)
+		"person":
+			if family_panel!=null and not family_panel.model.is_empty(): doc=FamilyModel.person_document(family_panel.model,information_id)
 	if doc.is_empty(): return doc
 	if information_kind=="city" and information_road>=0 and information_road<source.edges.size():
 		doc.sections.append(Information.section("选中道路",[Information.row("查看道路详情","道路 %d"%information_road,"road",information_road)]))
-	doc.notice="历史回看 · 政治快照 · 军事操作已禁用" if historical_view else information_message
+	doc.notice="历史回看 · 政治快照 · 军事操作已禁用" if historical_view else (information_message if not information_message.is_empty() else doc.get("notice",""))
 	for action in doc.actions:
 		if action.key in ["order","player","declare","select_army"]:
 			action.disabled=action.disabled or historical_view or (simulation!=null and simulation.runtime_day_in_progress())
 		if action.key=="declare": action.disabled=action.disabled or action.id==int(player_nation.value) or not source.nations[action.id].alive or source.is_enemy(int(player_nation.value),action.id)
 	if historical_view: doc=Information.historical(doc,information_kind)
+	committed_information=doc.duplicate(true); committed_information_key=document_key
 	for group in doc.sections:
 		if group.has("ruler"): group.ruler.disabled=group.ruler.disabled or not ruler_edit_available()
 	return doc
@@ -202,13 +218,24 @@ func edit_ruler(id: int, archetype: int, traits: Array[String]) -> bool:
 	return changed
 
 func show_information(kind: String,id: int) -> void:
+	if kind=="person":
+		var source := information_source()
+		var nation := information_id if information_kind=="nation" else diplomatic_observer
+		if family_panel!=null and source!=null and nation>=0: family_panel.open(nation,id)
+		return
 	pending_selection.clear()
 	information_kind=kind; information_id=id; information_message=""
 	var source := information_source()
 	if kind=="nation": set_diplomatic_observer(id)
 	elif kind=="city" and source!=null and id>=0 and id<source.cities.size(): set_diplomatic_observer(source.cities[id].owner_nation)
 	selected_region=id if kind=="city" else -1
-	if info_panel!=null: info_panel.show_document(information_document())
+	if info_panel!=null:
+		var document:=information_document()
+		if document.is_empty() and simulation!=null and simulation.runtime_day_in_progress():
+			await simulation.runtime_day_committed
+			if information_kind!=kind or information_id!=id: return
+			document=information_document()
+		info_panel.show_document(document)
 
 func close_information() -> void:
 	pending_selection.clear()
@@ -253,6 +280,7 @@ func information_notify(message: String) -> void:
 
 func information_action(key: String,id: int) -> void:
 	match key:
+		"family": if family_panel!=null: family_panel.open(id)
 		"city","nation": show_information(key,id)
 		"focus":
 			var doc := information_document()
@@ -476,6 +504,9 @@ func order_to_inspected() -> void:
 	command_target=selected_region; order_selected()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if family_panel!=null and family_panel.visible:
+		if event is InputEventKey and event.pressed and event.keycode==KEY_ESCAPE: family_panel.close()
+		get_viewport().set_input_as_handled(); return
 	if event is InputEventKey and time_key(event): return
 	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_RIGHT and event.pressed:
 		if historical_view or generating or not view_ready or political_pending: return

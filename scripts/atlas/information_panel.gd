@@ -132,7 +132,10 @@ func _process(delta: float):
 	if not visible or not provider.is_valid(): return
 	refresh_elapsed+=delta
 	if refresh_elapsed<.5: return
-	refresh_elapsed=0.; show_document(provider.call())
+	refresh_elapsed=0.
+	var next: Dictionary=provider.call()
+	# Providers may wait for a coherent day commit. Keep the last document.
+	if not next.is_empty(): show_document(next)
 func _unhandled_key_input(event: InputEvent):
 	if visible and event is InputEventKey and event.pressed and event.keycode==KEY_ESCAPE:
 		dismiss(); get_viewport().set_input_as_handled()

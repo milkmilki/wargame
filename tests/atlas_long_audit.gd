@@ -1,7 +1,8 @@
 extends SceneTree
 ## Manual long-run audit (not part of the quick regression suite).
 ## --audit-years=30; 360 simulation days/year. Evidence stays under .dbg/.
-const DIRECTORY := "res://.dbg/atlas-eurasia-thirty-year"
+var DIRECTORY := "res://.dbg/atlas-eurasia-thirty-year"
+var audit_seed := 1
 var state: GameState
 var sim: Simulation
 var run_log := DebugRunLog.new()
@@ -55,6 +56,14 @@ func front_row(front: CoalitionCampaignFront) -> Dictionary:
 func snapshot(name_value: String):
 	FileAccess.open(DIRECTORY+"/"+name_value+".snapshot",FileAccess.WRITE).store_var(NativeSnapshotBuilder.build(state),false)
 func daily_audit():
+	for value in state.succession_conflicts.values():
+		var conflict:=value as SuccessionConflict
+		if conflict.battle==null or state.battles.has(conflict.battle): fail("internal_battle_namespace",{"nation":conflict.nation_id})
+		elif conflict.battle.edge!=null or conflict.battle.city!=null: fail("internal_battle_map_context",{"nation":conflict.nation_id})
+		else:
+			for army in conflict.battle.side_a+conflict.battle.side_b:
+				if state.armies.has(army) or army.is_city_garrison: fail("internal_battle_real_army",{"army":army.id})
+		if conflict.last_advanced_day>state.day: fail("internal_battle_future_round",{"nation":conflict.nation_id})
 	if not state.territory_structure_valid(): fail("territory_invariant")
 	if not state._battle_group_structure_valid(): fail("battle_group_invariant")
 	if not state.suzerainty_structure_valid(): fail("suzerainty_invariant",{"reason":state.suzerainty_structure_error()})
@@ -107,6 +116,8 @@ func daily_audit():
 			if army.size>0 and (not ids.has(army.id) or army.battle_id!=battle.id): fail("battle_army_binding",{"battle":battle.id,"army":army.id,"binding":army.battle_id})
 	max_armies=maxi(max_armies,state.armies.size()); max_fronts=maxi(max_fronts,state.campaign_fronts.size()); max_battles=maxi(max_battles,state.battles.size()); max_wars=maxi(max_wars,active_wars.size())
 func monthly_audit():
+	var native_error := NativeSnapshotBuilder.succession_validation_error(NativeSnapshotBuilder.build(state))
+	if not native_error.is_empty(): fail("native_snapshot_validation", {"reason":native_error})
 	var fronts: Array=[]; var nations: Array=[]; var owners_by_nation := {}; var active_wars := {}
 	for city in state.land_cities():
 		if not owners_by_nation.has(city.owner_nation): owners_by_nation[city.owner_nation]=[]
@@ -139,7 +150,10 @@ func report() -> Dictionary:
 	var alive: Array=[]
 	for nation in state.nations:
 		if nation.alive: alive.append(nation.id)
-	return {"seed":state.world_seed,"day":state.day,"target_days":years*Simulation.DAYS_PER_YEAR,"elapsed_ms":Time.get_ticks_msec()-started,"peak_day_ms":peak_day_ms,"mean_simulation_ms":float(simulation_usec)/maxi(1,state.day)/1000.,"mean_audit_ms":float(audit_usec)/maxi(1,state.day)/1000.,"source_hashes":source_hashes,"model_parameters":model_parameters(),"initial_nations":initial_alive,"alive_nations":alive,"wars_seen":war_seen.size(),"wars_ended":ended_wars.size(),"fronts_seen":front_seen.size(),"battles_seen":battle_seen.size(),"armies_seen":army_seen.size(),"max_armies":max_armies,"max_fronts":max_fronts,"max_battles":max_battles,"max_wars":max_wars,"nation_max_armies":nation_max_armies,"hard_errors":hard_errors,"candidates":warnings,"debug_run":ProjectSettings.globalize_path(run_log.path),"generation":state.generation_metadata,"mode":"headless_sync_daily","complete":state.day==years*Simulation.DAYS_PER_YEAR and hard_errors.is_empty()}
+	var politics:=preload("res://tests/succession_audit.gd").inspect(state)
+	var people:=0
+	for tree in state.family_trees.values(): people+=tree.members.size()
+	return {"seed":state.world_seed,"day":state.day,"target_days":years*Simulation.DAYS_PER_YEAR,"elapsed_ms":Time.get_ticks_msec()-started,"peak_day_ms":peak_day_ms,"mean_simulation_ms":float(simulation_usec)/maxi(1,state.day)/1000.,"mean_audit_ms":float(audit_usec)/maxi(1,state.day)/1000.,"source_hashes":source_hashes,"model_parameters":model_parameters(),"initial_nations":initial_alive,"alive_nations":alive,"wars_seen":war_seen.size(),"wars_ended":ended_wars.size(),"fronts_seen":front_seen.size(),"battles_seen":battle_seen.size(),"armies_seen":army_seen.size(),"max_armies":max_armies,"max_fronts":max_fronts,"max_battles":max_battles,"max_wars":max_wars,"nation_max_armies":nation_max_armies,"people":people,"politics":politics,"hard_errors":hard_errors,"candidates":warnings,"debug_run":ProjectSettings.globalize_path(run_log.path),"generation":state.generation_metadata,"mode":"headless_sync_daily","complete":state.day==years*Simulation.DAYS_PER_YEAR and hard_errors.is_empty()}
 func write_status() -> void:
 	# Serialize before opening the destination. Publish a complete replacement,
 	# so interruption cannot truncate the last readable checkpoint to zero bytes.
@@ -153,17 +167,19 @@ func write_status() -> void:
 func run():
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--audit-years="): years=int(argument.get_slice("=",1))
+		if argument.begins_with("--audit-seed="): audit_seed=int(argument.get_slice("=",1))
+		if argument.begins_with("--audit-directory="): DIRECTORY=argument.get_slice("=",1)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(DIRECTORY))
 	# The prior run must be archived before restarting. Do not expose its final
 	# report/snapshot as evidence for this new process while the first month runs.
 	for name_value in ["report.json", "latest.snapshot", "final.snapshot"]:
 		var previous_path: String = DIRECTORY+"/"+name_value
 		if FileAccess.file_exists(previous_path): DirAccess.remove_absolute(ProjectSettings.globalize_path(previous_path))
-	var payload: Dictionary=preload("res://tests/atlas_military_inputs.gd").eurasia_military()
+	var payload: Dictionary=preload("res://tests/atlas_military_inputs.gd").eurasia_military(audit_seed)
 	state=GameState.new(); state.generate_from_atlas(payload)
 	sim=Simulation.new(); root.add_child(sim); sim.setup(state); sim.paused=true
 	sim.tick_phase_profiling_enabled=true; sim.runtime_stage_profiling_enabled=true; sim.ai_snapshot_substage_profiling_enabled=true
-	for path in ["scripts/state/game_state.gd","scripts/simulation/simulation.gd","scripts/simulation/rules/supply_rules.gd","scripts/core/pathfinding.gd","scripts/ai/ai_world_view.gd","tests/atlas_long_audit.gd","scripts/ai/diplomacy_ai.gd","scripts/atlas/settlement_mask.gd","tests/atlas_military_inputs.gd"]:
+	for path in ["scripts/state/game_state.gd","scripts/simulation/simulation.gd","scripts/simulation/rules/supply_rules.gd","scripts/core/pathfinding.gd","scripts/ai/ai_world_view.gd","tests/atlas_long_audit.gd","scripts/ai/diplomacy_ai.gd","scripts/atlas/settlement_mask.gd","tests/atlas_military_inputs.gd","scripts/model/succession_conflict.gd","scripts/simulation/rules/succession_rules.gd","scripts/core/prince_politics.gd","scripts/core/royal_titles.gd","scripts/core/family_tree.gd","scripts/core/empire_status.gd","scripts/core/native_snapshot_builder.gd","scripts/core/combat.gd"]:
 		source_hashes[path]=FileAccess.get_sha256("res://"+path)
 	initial_alive=state.nations.size(); started=Time.get_ticks_msec()
 	event_file=FileAccess.open(DIRECTORY+"/events.jsonl",FileAccess.WRITE)
