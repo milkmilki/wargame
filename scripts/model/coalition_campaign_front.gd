@@ -18,6 +18,10 @@ enum Phase {
 	CLEANUP,
 	HOLD_AND_REINFORCE,
 	SORTIE,
+	BLOCKADE_RAID,
+	BLOCKADE_ONLY,
+	DEFENSE_REGROUP,
+	RELIEVE_CENTER,
 }
 
 var front_id: int = -1
@@ -32,9 +36,13 @@ var anchor_nation_id: int = -1
 var mode: int = Mode.OFFENSE
 var phase: int = Phase.ASSEMBLE
 var staging_city_id: int = -1
+var entry_city_id: int = -2 # -2 unresolved, -1 no legal entry; fixed per front.
 var camp_city_id: int = -1
 var tactical_target_city_ids: Array[int] = []
 var army_assignments: Dictionary = {} # army_id -> tactical city_id
+enum DetachmentStatus { OUTBOUND, RETURNING, COMPLETE, FAILED }
+var detachments: Dictionary = {} # army_id -> {target, status}; no retry/retarget.
+var rally_revision: Array = [] # transient validation cache, not a second location.
 var failed_until_day: int = -1
 ## 强攻阶段连续无法对州治下达任何进攻令的决策日计数；达到阈值即回驻营
 ## 重整。瞬态字段，不参与快照序列化。

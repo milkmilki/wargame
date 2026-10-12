@@ -26,6 +26,10 @@ const CAMPAIGN_PHASE_NAMES := {
 	CoalitionCampaignFront.Phase.CLEANUP:"清理残部",
 	CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE:"固守增援",
 	CoalitionCampaignFront.Phase.SORTIE:"出击反攻",
+	CoalitionCampaignFront.Phase.BLOCKADE_RAID:"封锁并分遣",
+	CoalitionCampaignFront.Phase.BLOCKADE_ONLY:"持续封锁",
+	CoalitionCampaignFront.Phase.DEFENSE_REGROUP:"后方重整",
+	CoalitionCampaignFront.Phase.RELIEVE_CENTER:"集中解围",
 }
 static func campaign_rows(state: GameState,nation_id: int) -> Array:
 	var fronts:=state.campaign_fronts_for_nation(nation_id)
@@ -58,6 +62,10 @@ static func campaign_rows(state: GameState,nation_id: int) -> Array:
 			row("驻营地",city_name(state,front.camp_city_id),"city",settlement_id(state,front.camp_city_id)),
 			row("重试等待","至第%d天"%front.failed_until_day if front.failed_until_day>state.day else "无"),
 		])
+		if front.mode==CoalitionCampaignFront.Mode.OFFENSE:
+			var counts: Array[int]=[0,0,0,0]
+			for task in front.detachments.values(): counts[int(task.status)]+=1
+			rows.append(row("单轮分遣","%s · 出征%d／归队中%d／已归队%d／结束%d"%["已使用" if state.campaign_raid_used(front) else "未启动",counts[0],counts[1],counts[2],counts[3]]))
 		if front.tactical_target_city_ids.is_empty(): rows.append(row("战术目标","未指定"))
 		else:
 			for target in front.tactical_target_city_ids:
@@ -111,16 +119,20 @@ static func nation(state: GameState,id: int) -> Dictionary:
 	var doc := {"title":n.name,"subtitle":"%s · 第%d天"%["帝国" if n.state_level>0 else "国家",state.day],"color":n.color,"point":point,"actions":[action("city","查看首都","city",capital),action("focus","设为中心","center"),action("player","操控此国","flag",id),action("declare","对其宣战","war",id)],"sections":[]}
 	var traits: Array[String] = []
 	for trait_id in n.ruler_traits: traits.append(RulerProfile.trait_name(trait_id))
-	doc.sections.append(section("概况",[row("状态","存续" if n.alive else "已灭亡"),row("首都",city_name(state,capital),"city",capital),row("控制治所",seats),row("控制州治",centers),row("控制府",seats-centers),row("君主",n.ruler_name if not n.ruler_name.is_empty() else "未记录"),row("君主特质","、".join(traits) if not traits.is_empty() else "中性"),row("平均忠诚度","%.1f"%n.average_loyalty)]))
+	doc.sections.append(section("概况",[row("状态","存续" if n.alive else "已灭亡"),row("首都",city_name(state,capital),"city",capital),row("控制治所",seats),row("控制州治",centers),row("控制府",seats-centers),row("君主",n.ruler_name if not n.ruler_name.is_empty() else "未记录"),row("君主特质","、".join(traits) if not traits.is_empty() else "无附加特质"),row("平均忠诚度","%.1f"%n.average_loyalty)]))
 	doc.sections.append(section("州战役",campaign_rows(state,id)))
 	var target := RegionalStrategy.target_region(state,id)
 	var integration := RegionalStrategy.integration_report(state,id,target)
-	doc.sections.append(section("君主与经营区域",[
+	var ruler_section := section("君主与经营区域",[
 		row("君主类型",RulerProfile.archetype_name(n.ruler_archetype)),row("特质","、".join(traits) if not traits.is_empty() else "无"),
 		row("贸易政策",RulerProfile.trade_policy_name(n.trade_policy)),row("就任日期","第%d天"%n.ruler_started_day),
 		row("经营区域",str(target+1) if target>=0 else "无"),row("区域锚点",city_name(state,n.strategic_region_anchor_city_id),"city",n.strategic_region_anchor_city_id),
 		row("区域整合","%d / %d 治所"%[integration.integrated,integration.total]),
-		row("主动扩张", "允许在经营区域内选择目标" if RulerProfile.offensive_allowed(n) else "仅允许收复或内战目标")]))
+		row("主动扩张", "允许在经营区域内选择目标" if RulerProfile.offensive_allowed(n) else "仅允许收复或内战目标")])
+	ruler_section.ruler={"id":id,"archetype":n.ruler_archetype,"traits":n.ruler_traits.duplicate(),"disabled":not n.alive}
+	# Preserve text rows for copying; the inspector replaces them with controls.
+	ruler_section.rows[0].ruler_field=true;ruler_section.rows[1].ruler_field=true
+	doc.sections.append(ruler_section)
 	doc.sections.append(section("国库与人口库",[row("金钱库存",n.treasury_gold),row("可用人口库",n.manpower_pool),row("粮仓库存",stock)]))
 	doc.sections.append(section("最近月度结算",[row("野战军维护费",n.last_field_army_upkeep),row("守军维护费",n.last_garrison_upkeep),row("全军维护费",n.last_military_upkeep),row("欠付军费",n.unpaid_military_upkeep),row("军费支付率","%.0f%%"%(n.military_payment_ratio*100)),row("预计粮食月产",n.last_food_estimated_production),row("预计粮食月需",n.last_food_estimated_consumption),row("预计粮食结余",n.last_food_estimated_balance)]))
 	var relations: Array = []

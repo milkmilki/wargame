@@ -87,7 +87,7 @@ func _init() -> void:
 	for army in attackers:
 		_place_idle(army, entry_id)
 	sim._manage_administrative_campaign(plan)
-	_check(plan.phase == CoalitionCampaignFront.Phase.RAID_FU, "入口府易手后必须建立大营并分遣占府")
+	_check(plan.phase == CoalitionCampaignFront.Phase.HOLD_CAMP, "入口府易手后只集结，城下野战结束前不分遣")
 	_check(plan.camp_city_id == entry_id, "入口府必须成为大营")
 	_check(plan.tactical_target_city_ids.size() <= 2, "同时最多只能有两个属府目标")
 	_check(

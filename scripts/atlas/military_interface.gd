@@ -32,6 +32,8 @@ func setup(view) -> void:
 	view.info_panel.provider=view.information_document
 	view.info_panel.navigate.connect(view.show_information); view.info_panel.act.connect(view.information_action)
 	view.info_panel.closed.connect(view.close_information)
+	view.info_panel.ruler_changed.connect(view.edit_ruler)
+	view.info_panel.pause_requested.connect(view.toggle_pause)
 	add_child(toolbar); var bars := VBoxContainer.new(); toolbar.add_child(bars)
 	var bar := HBoxContainer.new(); bars.add_child(bar)
 	for name_value in ["政治","地形","府辖区","宜居度","贸易区域"]: view.mode_control.add_item(name_value)

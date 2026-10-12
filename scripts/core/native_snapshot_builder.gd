@@ -3,13 +3,15 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 26
+const SCHEMA_VERSION: int = 27
 const ROYAL_NATION_FIELDS := ["state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]
 
 
 static func succession_validation_error(snapshot: Dictionary) -> String:
 	if int(snapshot.get("schema_version", -1)) != SCHEMA_VERSION:
 		return "Incompatible native snapshot schema"
+	var campaign_error:=campaign_validation_error(snapshot)
+	if not campaign_error.is_empty():return campaign_error
 	var faction_error := vassal_validation_error(snapshot)
 	if not faction_error.is_empty(): return faction_error
 	if not snapshot.get("battles") is Dictionary:
@@ -245,6 +247,26 @@ static func royal_validation_error(nations: Dictionary, trees: Dictionary) -> St
 	return ""
 
 
+static func campaign_validation_error(snapshot: Dictionary) -> String:
+	var fronts: Variant=snapshot.get("campaign_fronts")
+	if not fronts is Dictionary or not fronts.get("detachments") is Array:return "Invalid campaign tasks"
+	var count: int=fronts.get("front_ids",[]).size()
+	if fronts.detachments.size()!=count or fronts.get("phases",[]).size()!=count or not fronts.get("entry_cities") is PackedInt32Array or fronts.entry_cities.size()!=count:return "Invalid campaign columns"
+	var city_count:int=snapshot.get("cities",{}).get("count",0)
+	for entry in fronts.entry_cities:
+		if int(entry)<-2 or int(entry)>=city_count:return "Invalid fixed entry"
+	for phase in fronts.phases:
+		if int(phase)<0 or int(phase)>CoalitionCampaignFront.Phase.RELIEVE_CENTER:return "Invalid campaign phase"
+	for tasks in fronts.detachments:
+		if not tasks is Dictionary:return "Invalid detachment table"
+		for task in tasks.values():
+			if not task is Dictionary or not task.has("target") or int(task.get("status",-1)) not in [0,1,2,3]:return "Invalid detachment task"
+	var records: Variant=snapshot.get("campaign_raid_records")
+	if not records is Array:return "Invalid raid records"
+	for record in records:
+		if not record is Dictionary or not record.get("members") is Array or not record.get("tasks") is Dictionary or int(record.get("war",-1))<0 or int(record.get("center",-1))<0:return "Invalid raid record"
+	return ""
+
 static func battle_validation_error(battles: Dictionary) -> String:
 	if not battles.get("count") is int:
 		return "Invalid battle count"
@@ -320,6 +342,7 @@ static func build(state: GameState) -> Dictionary:
 		"battles": battles,
 		"campaign_fronts": _build_campaign_fronts(state),
 		"campaign_pairs": _build_campaign_pairs(state),
+		"campaign_raid_records": state.campaign_raid_records.duplicate(true),
 	}
 
 
@@ -732,7 +755,9 @@ static func _build_campaign_fronts(state: GameState) -> Dictionary:
 	var centers := PackedInt32Array()
 	var anchors := PackedInt32Array()
 	var phases := PackedInt32Array()
+	var detachments: Array[Dictionary] = []
 	var staging_cities := PackedInt32Array()
+	var entry_cities := PackedInt32Array()
 	var camp_cities := PackedInt32Array()
 	var failed_until_days := PackedInt32Array()
 	var reported_effective_manpower := PackedInt32Array()
@@ -762,7 +787,9 @@ static func _build_campaign_fronts(state: GameState) -> Dictionary:
 		centers.append(front.center_city_id)
 		anchors.append(front.anchor_nation_id)
 		phases.append(front.phase)
+		detachments.append(front.detachments.duplicate(true))
 		staging_cities.append(front.staging_city_id)
+		entry_cities.append(front.entry_city_id)
 		camp_cities.append(front.camp_city_id)
 		failed_until_days.append(front.failed_until_day)
 		reported_effective_manpower.append(
@@ -798,7 +825,9 @@ static func _build_campaign_fronts(state: GameState) -> Dictionary:
 		"centers": centers,
 		"anchors": anchors,
 		"phases": phases,
+		"detachments": detachments,
 		"staging_cities": staging_cities,
+		"entry_cities": entry_cities,
 		"camp_cities": camp_cities,
 		"failed_until_days": failed_until_days,
 		"reported_effective_manpower": reported_effective_manpower,

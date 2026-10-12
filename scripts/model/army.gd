@@ -68,7 +68,7 @@ var morale: float = 1.0
 ## 士气上限只增加持续作战储备，不继续放大战斗效率。
 var max_morale: float = DEFAULT_MAX_MORALE
 
-## 当日补给满足率 ∈[0,1]。驻防适应与每日补给惩罚均读取本值。
+## 当日补给满足率 ∈[0,1]。派生攻防、驻防适应与每日补给惩罚读取本值。
 var supply_ratio: float = 1.0
 
 ## 累积断粮减员债（item 10）：每日按 shortage×size×STARVE_RATE/30 累加的「未满整人」减员，
@@ -137,13 +137,13 @@ func morale_ratio() -> float:
 func combat_attack() -> float:
 	return float(attack) * funding_multiplier * (
 		1.0 if is_city_garrison else maxf(ruler_attack_multiplier, 0.1)
-	)
+	) * clampf(supply_ratio, 0.0, 1.0)
 
 
 func combat_defense() -> float:
 	return float(defense) * funding_multiplier * (
 		1.0 if is_city_garrison else maxf(ruler_defense_multiplier, 0.1)
-	)
+	) * clampf(supply_ratio, 0.0, 1.0)
 
 
 static func funding_from_payment(payment_ratio: float) -> float:

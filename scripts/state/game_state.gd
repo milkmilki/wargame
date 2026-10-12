@@ -130,6 +130,8 @@ var armies: Array[Army] = []
 var battles: Array[Battle] = []            ## 进行中的多回合战斗
 ## front_id -> CoalitionCampaignFront。州战线属于战争集团连通分量，不属于国家。
 var campaign_fronts: Dictionary = {}
+## Survives temporary front/pair rebuilds. One raid wave per war/state/side.
+var campaign_raid_records: Array[Dictionary] = []
 var next_campaign_front_id: int = 0
 var campaign_pairs: Dictionary = {} # pair_id -> CoalitionCampaignPair
 var next_campaign_pair_id: int = 0
@@ -447,6 +449,7 @@ func _reset_world(world_seed: int) -> void:
 	armies.clear()
 	battles.clear()
 	campaign_fronts.clear()
+	campaign_raid_records.clear()
 	campaign_pairs.clear()
 	next_campaign_pair_id = 0
 	_campaign_pair_revision.clear()
@@ -1087,6 +1090,26 @@ func register_campaign_front(
 
 func campaign_front(front_id: int) -> CoalitionCampaignFront:
 	return campaign_fronts.get(front_id) as CoalitionCampaignFront
+
+func campaign_raid_used(front: CoalitionCampaignFront) -> bool:
+	return not campaign_raid_record(front).is_empty()
+
+func campaign_raid_record(front: CoalitionCampaignFront) -> Dictionary:
+	for record in campaign_raid_records:
+		if int(record.war)==front.war_id and int(record.center)==front.center_city_id and _campaign_members_overlap(front.participant_nation_ids,record.members): return record
+	return {}
+
+func mark_campaign_raid(front: CoalitionCampaignFront) -> bool:
+	if campaign_raid_used(front): return false
+	campaign_raid_records.append({"war":front.war_id,"center":front.center_city_id,"members":front.participant_nation_ids.duplicate(),"day":day,"tasks":front.detachments})
+	return true
+
+func prune_campaign_raid_records() -> void:
+	var active := {}
+	for war in war_relation_ids.values(): active[int(war)]=true
+	for i in range(campaign_raid_records.size()-1,-1,-1):
+		var record := campaign_raid_records[i]
+		if not active.has(int(record.war)) or int(record.center)>=cities.size() or record.members.has(cities[int(record.center)].owner_nation): campaign_raid_records.remove_at(i)
 
 
 func campaign_front_for(
@@ -1899,7 +1922,7 @@ func campaign_has_rear_camp(front: CoalitionCampaignFront) -> bool:
 
 func campaign_receiving_city(front: CoalitionCampaignFront) -> int:
 	if front.mode == CoalitionCampaignFront.Mode.DEFENSE:
-		return front.center_city_id
+		return front.camp_city_id if front.phase in [CoalitionCampaignFront.Phase.DEFENSE_REGROUP,CoalitionCampaignFront.Phase.RELIEVE_CENTER] else front.center_city_id
 	if front.camp_city_id >= 0:
 		return front.camp_city_id
 	if front.phase == CoalitionCampaignFront.Phase.BREAK_IN and not front.tactical_target_city_ids.is_empty():
@@ -2727,6 +2750,8 @@ func merge_war_ids(keep_war_id: int, merged_war_id: int) -> void:
 		return
 	if bool(vassal_conflicts.get(keep_war_id, {}).get("active", false)) or bool(vassal_conflicts.get(merged_war_id, {}).get("active", false)): return
 	ChronicleRules.merge_war(self, keep_war_id, merged_war_id)
+	for record in campaign_raid_records:
+		if int(record.war)==merged_war_id: record.war=keep_war_id
 	for pair_value in campaign_pairs.values():
 		var pair := pair_value as CoalitionCampaignPair
 		if pair.war_id == merged_war_id:
@@ -5072,11 +5097,19 @@ func enfeoff_region_closure(
 			if (
 				reachable.has(neighbor)
 				or region.has(neighbor)
-				or cities[neighbor].owner_nation
-					!= overlord_id
 				or edge == null
 				or edge.max_manpower <= 0
 			):
+				continue
+			if not atlas_layout.is_empty():
+				# Junctions have no owner. Remaining direct territory connects through
+				# roads controlled by this overlord, never through the proposed fief.
+				if not cities[neighbor].is_traffic and cities[neighbor].owner_nation != overlord_id:
+					continue
+				var control := edge.control_city_id
+				if control < 0 or control >= cities.size() or region.has(control) or cities[control].owner_nation != overlord_id:
+					continue
+			elif cities[neighbor].owner_nation != overlord_id:
 				continue
 			reachable[neighbor] = true
 			queue.append(neighbor)

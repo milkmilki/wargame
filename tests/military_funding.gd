@@ -80,9 +80,12 @@ func _test_logs_and_history(state: GameState, sim: Simulation, army: Army, peer:
 	sim._sync_battle_ruler_modifiers(field)
 	var replay := CombatLog.replay_records(records)
 	_check(bool(replay.ok), "funding log replays independently of current payment: %s" % str(replay))
-	_check(records[0].combat_rules_version == 4 and records[0].participants_a[0].funding_multiplier == 0.5, "version 4 logs actual funding")
+	_check(records[0].combat_rules_version == 6 and records[0].participants_a[0].funding_multiplier == 0.5, "version 5 logs actual funding")
 	var old := records.duplicate(true)
 	old[0].combat_rules_version = 2
+	var previous_rules: Array[Dictionary]=records.duplicate(true)
+	previous_rules[0].combat_rules_version=5
+	_check(not CombatLog.replay_records(previous_rules).ok,"rules5 battle logs explicitly rejected by rules6")
 	_check(CombatLog.replay_records(old).errors[0].error == "incompatible_combat_rules", "version 2 explicitly rejected")
 	records[0].participants_a[0].erase("funding_multiplier")
 	_check(CombatLog.replay_records(records).errors[0].error == "missing_field", "incomplete funding logs rejected")

@@ -143,6 +143,8 @@ static func _replay_record(record: Dictionary) -> Dictionary:
 		for data in record[side_key]:
 			if not data.has("funding_multiplier"):
 				return {"error": "missing_field", "field": "funding_multiplier"}
+			if not data.has("supply_ratio"):
+				return {"error": "missing_field", "field": "supply_ratio"}
 	var battle := _battle_from_record(record)
 	var dice := battle.opening_dice()
 	if not Battle.valid_dice(dice) or dice != PackedInt32Array(record["opening_dice"]):
@@ -304,6 +306,7 @@ static func _army_from_snapshot(data: Dictionary) -> Army:
 	army.defense = int(data.get("defense", 10))
 	army.morale = float(data.get("morale", 1.0))
 	army.starving = bool(data.get("starving", false))
+	army.supply_ratio = float(data["supply_ratio"])
 	army.is_city_garrison = bool(data.get("is_city_garrison", false))
 	army.city_garrison_combat_multiplier = float(data.get(
 		"city_garrison_combat_multiplier", 1.0
@@ -333,6 +336,7 @@ static func _side_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"defense": army.defense,
 			"morale": army.morale,
 			"starving": army.starving,
+			"supply_ratio": army.supply_ratio,
 			"is_city_garrison": army.is_city_garrison,
 			"city_garrison_combat_multiplier":
 				army.city_garrison_combat_multiplier,
@@ -369,6 +373,7 @@ static func _snapshots_equal(
 			"ruler_defense_multiplier",
 			"ruler_morale_multiplier",
 			"funding_multiplier",
+			"supply_ratio",
 			"max_morale",
 			"city_garrison_combat_multiplier",
 			"city_garrison_defense_bonus",

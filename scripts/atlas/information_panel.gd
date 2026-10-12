@@ -3,7 +3,10 @@ extends PanelContainer
 signal navigate(kind: String,id: int)
 signal act(key: String,id: int)
 signal closed
+signal ruler_changed(nation_id: int, archetype: int, traits: Array[String])
+signal pause_requested
 const Style = preload("res://scripts/atlas/information_theme.gd")
+const RulerEditor = preload("res://scripts/atlas/ruler_editor.gd")
 var provider: Callable
 var document := {}
 var rows: Array = []
@@ -21,6 +24,8 @@ var notice := Label.new()
 var build_count := 0
 var section_cache := {}
 var action_shape := -1
+func display_rows(group: Dictionary) -> Array:
+	return group.rows.filter(func(r): return not r.get("ruler_field",false)) if group.has("ruler") else group.rows
 func _init():
 	theme=Style.create(); custom_minimum_size=Vector2(340,0); mouse_filter=Control.MOUSE_FILTER_STOP; mouse_force_pass_scroll_events=false
 	var content := VBoxContainer.new(); content.add_theme_constant_override("separation",12); add_child(content)
@@ -44,7 +49,7 @@ func show_document(value: Dictionary) -> void:
 	title.text=value.title; subtitle.text=value.subtitle; swatch.add_theme_stylebox_override("panel",Style.box(value.color,4))
 	notice.text=value.get("notice",""); notice.visible=not notice.text.is_empty()
 	var structure: Array = []
-	for group in value.sections: structure.append([group.title,group.rows.map(func(r): return [r.label,not r.kind.is_empty() and r.id>=0])])
+	for group in value.sections: structure.append([group.title,group.has("ruler"),display_rows(group).map(func(r): return [r.label,not r.kind.is_empty() and r.id>=0])])
 	var next := hash([structure,value.actions.map(func(a): return [a.key,a.label,a.icon])])
 	if next!=shape:
 		shape=next; rebuild(value)
@@ -53,8 +58,10 @@ func show_document(value: Dictionary) -> void:
 		buttons[i].action=value.actions[i]; buttons[i].node.disabled=value.actions[i].get("disabled",false)
 		buttons[i].node.modulate=Color(1,1,1,.45 if buttons[i].node.disabled else 1.)
 	var index := 0
-	for group in value.sections:
-		for r in group.rows:
+	for group_index in range(value.sections.size()):
+		var group: Dictionary=value.sections[group_index]
+		if group.has("ruler"): section_cache["%d:%s"%[group_index,group.title]].editor.configure(group.ruler)
+		for r in display_rows(group):
 			var slot: Dictionary = rows[index]; slot.row=r; slot.node.text=r.value; slot.node.tooltip_text=r.value; index+=1
 func rebuild(value: Dictionary) -> void:
 	var next_actions := hash(value.actions.map(func(a): return [a.key,a.label,a.icon]))
@@ -65,7 +72,7 @@ func rebuild(value: Dictionary) -> void:
 	for index in range(value.sections.size()):
 		var group: Dictionary = value.sections[index]
 		var key := "%d:%s"%[index,group.title]; wanted[key]=true
-		var signature := hash(group.rows.map(func(r): return [r.label,not r.kind.is_empty() and r.id>=0]))
+		var signature := hash([group.has("ruler"),display_rows(group).map(func(r): return [r.label,not r.kind.is_empty() and r.id>=0])])
 		if section_cache.has(key) and section_cache[key].signature==signature:
 			rows.append_array(section_cache[key].rows); body.move_child(section_cache[key].node,index); continue
 		if section_cache.has(key):
@@ -99,7 +106,12 @@ func rebuild_section(group: Dictionary) -> Dictionary:
 	var heading := Label.new(); heading.text=group.title; heading.add_theme_font_size_override("font_size",13); heading.add_theme_color_override("font_color",Style.MUTED); section.add_child(heading)
 	var panel := PanelContainer.new(); var group_style := Style.box(Color(.463,.463,.502,.10),10); panel.add_theme_stylebox_override("panel",group_style); section.add_child(panel)
 	var list := VBoxContainer.new(); list.add_theme_constant_override("separation",0); panel.add_child(list)
-	for r in group.rows:
+	var editor: Control
+	if group.has("ruler"):
+		editor=RulerEditor.new();list.add_child(editor)
+		editor.changed.connect(func(id,type,traits): ruler_changed.emit(id,type,traits))
+		editor.pause_requested.connect(func(): pause_requested.emit())
+	for r in display_rows(group):
 		if list.get_child_count()>0:
 			var separator := ColorRect.new(); separator.color=Style.LINE; separator.custom_minimum_size.y=1; separator.mouse_filter=Control.MOUSE_FILTER_IGNORE; list.add_child(separator)
 		var margin := MarginContainer.new(); margin.add_theme_constant_override("margin_left",12); margin.add_theme_constant_override("margin_right",12); margin.add_theme_constant_override("margin_top",9); margin.add_theme_constant_override("margin_bottom",9); list.add_child(margin)
@@ -113,7 +125,9 @@ func rebuild_section(group: Dictionary) -> Dictionary:
 		text.size_flags_horizontal=Control.SIZE_EXPAND_FILL; text.custom_minimum_size.x=110; line.add_child(text)
 		var slot := {"node":text,"row":r}; group_rows.append(slot)
 		if text is Button: text.pressed.connect(func(): navigate.emit(slot.row.kind,slot.row.id))
-	return {"node":section,"rows":group_rows}
+	var cached := {"node":section,"rows":group_rows}
+	if editor!=null: cached.editor=editor
+	return cached
 func _process(delta: float):
 	if not visible or not provider.is_valid(): return
 	refresh_elapsed+=delta

@@ -3,10 +3,11 @@ extends SceneTree
 const PoliticsAudit = preload("res://tests/succession_audit.gd")
 const TitlesAudit = preload("res://tests/royal_title_audit.gd")
 const FamilyFixture = preload("res://tests/ruler_family_fixture.gd")
+const GridFixture = preload("res://tests/support/grid_world.gd")
 var failures: Array[String] = []
 var checks := 0
 
-class StaleAnnexState extends GameState:
+class StaleAnnexState extends GridFixture:
 	func annex_nation(absorber: int, absorbed: int, expected_ownership_revision: int = -1, stock_policy_overrides: Dictionary = {}) -> bool:
 		return super.annex_nation(absorber, absorbed, expected_ownership_revision + 1, stock_policy_overrides)
 

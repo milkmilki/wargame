@@ -132,8 +132,8 @@ func _test_two_state_defense_and_sortie() -> void:
 		var plan := state.campaign_front_for(defender_id, center_id)
 		_check(
 			plan != null
-			and plan.phase == CoalitionCampaignFront.Phase.SORTIE,
-			"实际到达的防守C满足需求后必须进入SORTIE"
+			and plan.phase == CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE,
+			"州治迎战阶段保持驻守，不主动攻属府或敌营"
 		)
 	simulation.free()
 

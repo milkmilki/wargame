@@ -42,13 +42,13 @@ func _init() -> void:
 	var full_garrison := _army(15000, 1, true, 1.0, 3.0)
 	var full_sizes := _run_defender(full_garrison)
 	var full_equivalent := _army(15000, 1, false, 1.0)
-	full_equivalent.attack = 5
+	full_equivalent.attack = 1
 	full_equivalent.defense = 30
 	var full_equivalent_sizes := _run_defender(full_equivalent)
 	var encircled_garrison := _army(15000, 1, true, 1.0, 1.0)
 	var encircled_sizes := _run_defender(encircled_garrison)
 	var encircled_equivalent := _army(15000, 1, false, 1.0)
-	encircled_equivalent.attack = 5
+	encircled_equivalent.attack = 1
 	encircled_equivalent.defense = 10
 	var encircled_equivalent_sizes := _run_defender(encircled_equivalent)
 	Combat.battle_log_enabled = false

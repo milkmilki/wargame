@@ -41,13 +41,14 @@ const MIN_COMBAT_EFFICIENCY: float = 0.2
 const SIDE_ROUT_THRESHOLD: float = 0.15
 ## 单支军队溃退阈值：士气 <= 此值的军队视为已失去组织、退出前线（不再计入有效战力）。
 const ARMY_ROUT_THRESHOLD: float = 0.05
-const COMBAT_RULES_VERSION: int = 4
+const COMBAT_RULES_VERSION: int = 6
 
 # ---- 边地形：danger 是唯一真源 ----
 const ATTACK_DANGER_K: float = 0.50        ## 攻击惩罚固定系数
 const DEFENSE_DANGER_K: float = 0.40       ## 初始防御惩罚系数
 const HOLDING_TAU_DAYS: float = 30.0       ## 驻防适应时间常数
 const HOLDING_ATTACK_MULTIPLIER: float = 0.50
+const CITY_GARRISON_ATTACK_MULTIPLIER: float = 0.10
 const HOLDING_DEFENSE_MULTIPLIER: float = 1.50
 ## 关隘（chokepoint）连续曲线（item 9：去数值断崖）。danger≥ONSET 进入"隘口带"：攻击倍率
 ## 从 ONSET 处的常规线性值连续、单调地降到 danger=1.0 时的地板 FLOOR，不再在阈值处硬跳变。
@@ -396,8 +397,8 @@ static func resolve_round(battle: Battle, day: int = -1) -> void:
 			"frontage_b": frontage_b,
 			"terrain_modifier_a": attack_pen_a,
 			"terrain_modifier_b": attack_pen_b,
-			"supply_modifier_a": (SIEGE_STARVE_DEF_MULT if _side_any_starving(battle.side_a) else 1.0),
-			"supply_modifier_b": (SIEGE_STARVE_DEF_MULT if _side_any_starving(battle.side_b) else 1.0),
+			"supply_modifier_a": _frontline_supply_ratio(frontline_a),
+			"supply_modifier_b": _frontline_supply_ratio(frontline_b),
 			"casualties_a": actual_a,
 			"casualties_b": actual_b,
 			"morale_before_a": log_morale_before_a,
@@ -414,12 +415,16 @@ static func resolve_round(battle: Battle, day: int = -1) -> void:
 		})
 
 
-## item 15 辅助：本侧是否有断粮军队（供日志 supply_modifier 快照，纯读取）。
-static func _side_any_starving(side: Array[Army]) -> bool:
-	for a in side:
-		if a.size > 0 and a.starving:
-			return true
-	return false
+## 日志用前线人数加权补给率；真实攻防逐军读取，不使用此平均值解算。
+static func _frontline_supply_ratio(frontline: Array[Dictionary]) -> float:
+	var total := _frontline_size(frontline)
+	if total <= 0:
+		return 0.0
+	var supplied := 0.0
+	for entry in frontline:
+		var army: Army = entry["army"]
+		supplied += float(entry["committed"]) * clampf(army.supply_ratio, 0.0, 1.0)
+	return supplied / float(total)
 
 
 static func _side_log_snapshot(side: Array[Army]) -> Array[Dictionary]:
@@ -441,6 +446,7 @@ static func _side_log_snapshot(side: Array[Army]) -> Array[Dictionary]:
 			"defense": army.defense,
 			"morale": army.morale,
 			"starving": army.starving,
+			"supply_ratio": army.supply_ratio,
 			"is_city_garrison": army.is_city_garrison,
 			"city_garrison_combat_multiplier":
 				army.city_garrison_combat_multiplier,
@@ -701,7 +707,7 @@ static func _city_garrison_base_stat_multiplier(army: Army) -> float:
 static func _city_garrison_attack_multiplier(army: Army) -> float:
 	return (
 		_city_garrison_base_stat_multiplier(army)
-		* holding_attack_multiplier(army != null and army.is_city_garrison)
+		* (CITY_GARRISON_ATTACK_MULTIPLIER if army != null and army.is_city_garrison else 1.0)
 	)
 
 
@@ -1007,29 +1013,6 @@ static func _side_attack(side: Array[Army]) -> float:
 				* combat_efficiency(a.combat_morale())
 			)
 	return total
-
-
-## 纯围城阶段的有效封锁兵力。只计算当前可投入城墙正面的兵力，并乘以
-## 各军组织度与当日补给满足率；低于单军溃败阈值者不贡献围城。
-## 工程/指挥修正尚无独立模型字段，因此当前明确只包含 manpower×morale×supply。
-static func effective_siege_strength(
-	side: Array[Army],
-	priority: Dictionary = {}
-) -> int:
-	var frontline := frontline_allocation(
-		side,
-		SIEGE_FRONTAGE,
-		priority
-	)
-	var total := 0.0
-	for entry in frontline:
-		var army: Army = entry["army"]
-		total += (
-			float(entry["committed"])
-				* combat_efficiency(army.combat_morale())
-			* clampf(army.supply_ratio, 0.0, 1.0)
-		)
-	return maxi(int(round(total)), 0)
 
 
 ## 本场战斗单侧「正面宽度」容量（item 5，纯函数）。道路野战取道路容量，

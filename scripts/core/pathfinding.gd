@@ -345,7 +345,8 @@ static func nearest_friendly_city(state: GameState, army: Army, excluded_city_id
 static func strategic_retreat_city(
 	state: GameState,
 	army: Army,
-	excluded_city_id: int = -1
+	excluded_city_id: int = -1,
+	preferred_city_id: int = -1
 ) -> Array[int]:
 	var start := _origin_of(army)
 	if start < 0 or start >= state.cities.size():
@@ -362,9 +363,27 @@ static func strategic_retreat_city(
 		excluded_city_id, blocked, army.max_size
 	)
 	var goal := int(choice.get("goal", -1))
+	if preferred_city_id >= 0 and preferred_city_id < state.cities.size() and preferred_city_id != excluded_city_id and not blocked.has(preferred_city_id) and float(field.dist.get(preferred_city_id,INF)) < INF and state.cities[preferred_city_id].is_settlement() and state.has_military_access(army.owner_nation,state.cities[preferred_city_id].owner_nation):
+		goal = preferred_city_id
 	if goal < 0:
 		return [] as Array[int]
 	return reconstruct(field["prev"], start, goal)
+
+
+## One complete query serves camp selection, encirclement and actual retreat.
+static func campaign_retreat_goal(state: GameState,nation_id: int,start: int,excluded: int = -1) -> int:
+	if start < 0 or start >= state.cities.size(): return -1
+	var blocked := state.besieged_city_ids();var traversal := blocked.duplicate();traversal.erase(start)
+	var field := dijkstra_field(state,start,nation_id,false,true,-1,0,traversal)
+	return int(_nearest_safe_retreat_goal(state,nation_id,start,field.dist,excluded,blocked).get("goal",-1))
+
+static func _nearest_safe_retreat_goal(state: GameState,nation_id: int,start: int,dist: Dictionary,excluded: int,blocked: Dictionary) -> Dictionary:
+	var best := {}
+	for city in state.cities:
+		if city.id == excluded or blocked.has(city.id) or not city.is_settlement() or not state.has_military_access(nation_id,city.owner_nation) or float(dist.get(city.id,INF)) == INF: continue
+		var candidate := {"goal":city.id,"tier":0 if city.owner_nation==nation_id else 1,"distance":float(dist[city.id]),"capital_distance":0.0}
+		if _strategic_goal_better(state,nation_id,start,candidate,best): best=candidate
+	return best
 
 
 ## 战役重整专用：从敌方交战点精确撤回指定的友方大营。沿途仍只允许经过
@@ -463,18 +482,7 @@ static func has_friendly_retreat_route_from_city(
 		or city_id >= state.cities.size()
 	):
 		return false
-	for neighbor in state.neighbors(city_id):
-		var edge := state.edge_of(city_id, neighbor)
-		if (
-			edge != null
-			and edge.max_manpower > 0
-			and state.has_military_access(
-				nation_id,
-				state.cities[neighbor].owner_nation
-			)
-		):
-			return true
-	return false
+	return campaign_retreat_goal(state,nation_id,city_id,city_id)>=0
 
 
 ## 兼容/非战略调用：军队在边上时，从真实位置分别接入两端，再叠加端点到
@@ -498,7 +506,8 @@ static func nearest_friendly_route_from_edge(
 static func strategic_retreat_route_from_edge(
 	state: GameState,
 	army: Army,
-	excluded_city_id: int = -1
+	excluded_city_id: int = -1,
+	preferred_city_id: int = -1
 ) -> Dictionary:
 	var edge := state.edge_of(army.move_from, army.move_to)
 	if edge == null:
@@ -522,6 +531,8 @@ static func strategic_retreat_route_from_edge(
 			state, army.owner_nation, endpoint, field["dist"],
 			excluded_city_id, blocked, army.max_size
 		)
+		if preferred_city_id>=0 and preferred_city_id<state.cities.size() and preferred_city_id!=excluded_city_id and not blocked.has(preferred_city_id) and state.cities[preferred_city_id].is_settlement() and state.has_military_access(army.owner_nation,state.cities[preferred_city_id].owner_nation) and float(field.dist.get(preferred_city_id,INF))<INF:
+			choice={"goal":preferred_city_id,"tier":-1,"capital_distance":0.0}
 		var goal := int(choice.get("goal", -1))
 		if goal < 0:
 			continue
@@ -581,6 +592,8 @@ static func _strategic_retreat_goal(
 	blocked_city_ids: Dictionary,
 	required_manpower: int
 ) -> Dictionary:
+	if not state.atlas_layout.is_empty():
+		return _nearest_safe_retreat_goal(state,nation_id,start,retreat_dist,excluded_city_id,blocked_city_ids)
 	var capital_id := (
 		state.nations[nation_id].capital_city_id
 		if nation_id >= 0 and nation_id < state.nations.size()
@@ -981,11 +994,11 @@ static func supply_sources_from_network(
 	var from_access := false
 	var to_access := false
 	if edge != null and not network.is_empty():
-		from_access = state.has_logistics_access(
-			army.owner_nation, state.cities[army.move_from].owner_nation
+		from_access = _supply_endpoint_access(
+			state, army.owner_nation, army.move_from, true
 		)
-		to_access = state.has_logistics_access(
-			army.owner_nation, state.cities[army.move_to].owner_nation
+		to_access = _supply_endpoint_access(
+			state, army.owner_nation, army.move_to, true
 		)
 	var result: Array[Dictionary] = []
 	for source in network:
@@ -1201,6 +1214,24 @@ static func _supply_sources_from_city(
 	return _reachable_supply_losses(state, nation_id, field["dist"])
 
 
+## Atlas junctions have no political owner. Their access is established by
+## the jurisdiction-aware distance field, which must still reach a warehouse.
+## Settlement/dock endpoints retain their original ownership permission.
+static func _supply_endpoint_access(
+	state: GameState,
+	nation_id: int,
+	city_id: int,
+	logistics: bool
+) -> bool:
+	var city := state.cities[city_id]
+	if not state.atlas_layout.is_empty() and city.is_traffic:
+		return true
+	return (
+		state.has_logistics_access(nation_id, city.owner_nation)
+		if logistics else state.has_military_access(nation_id, city.owner_nation)
+	)
+
+
 ## 边上军队从真实位置分别接入两个可通行端点，再沿本国/盟国道路寻找粮仓。
 static func _supply_sources_from_edge(state: GameState, army: Army) -> Dictionary:
 	var edge := state.edge_of(army.move_from, army.move_to)
@@ -1215,8 +1246,8 @@ static func _supply_sources_from_edge(state: GameState, army: Army) -> Dictionar
 	var result := {}
 	for option in options:
 		var endpoint: int = option["endpoint"]
-		if not state.has_military_access(
-			army.owner_nation, state.cities[endpoint].owner_nation
+		if not _supply_endpoint_access(
+			state, army.owner_nation, endpoint, false
 		):
 			continue
 		var field := _supply_loss_field(state, endpoint, army.owner_nation)

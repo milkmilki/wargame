@@ -83,42 +83,26 @@ func _test_defense_regroups_at_center(queued: bool) -> void:
 
 func _test_busy_force_cannot_launch(queued: bool) -> void:
 	var state := _state()
-	var idle := _army(state, 20, 0, 0)
-	var busy := _army(state, 21, 0, 0)
-	busy.state = Army.State.FIGHTING
-	_army(state, 22, 1, 2, 20000)
-	var front := _front(state, 0, CoalitionCampaignFront.Mode.DEFENSE, [idle, busy])
-	var sim := Simulation.new()
-	sim.setup(state)
-	if queued:
-		sim._begin_ai_command_collection(_army_ids(state))
+	var idle := _army(state,20,0,1)
+	var busy := _army(state,21,0,1);busy.state=Army.State.RECOVERING
+	var enemy := _army(state,22,1,0,20000)
+	var front := _front(state,0,CoalitionCampaignFront.Mode.DEFENSE,[idle,busy])
+	_blockade(state,enemy)
+	var sim:=Simulation.new();sim.setup(state)
+	if queued:sim._begin_ai_command_collection(_army_ids(state))
 	sim._execute_coalition_defense(front)
-	check(front.phase == CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE,
-		"troops busy in another battle cannot satisfy the sortie threshold")
-	check(idle.ai_target_city != 2, "insufficient executable force must not depart piecemeal")
-	if queued:
-		sim._commit_ai_command_collection([0, 1] as Array[int])
-	busy.state = Army.State.IDLE
-	var reinforcement := _army(state, 23, 0, 1)
-	front.army_assignments[reinforcement.id] = 0
-	reinforcement.campaign_front_id = front.front_id
-	reinforcement.campaign_war_id = front.war_id
-	if queued:
-		sim._begin_ai_command_collection(_army_ids(state))
+	check(front.phase==CoalitionCampaignFront.Phase.DEFENSE_REGROUP,"recovering force cannot satisfy relief threshold")
+	if queued:sim._commit_ai_command_collection([0,1] as Array[int])
+	check(not idle.on_edge,"insufficient rear force stays together")
+	busy.state=Army.State.IDLE
+	if queued:sim._begin_ai_command_collection(_army_ids(state))
 	sim._execute_coalition_defense(front)
-	check(front.phase == CoalitionCampaignFront.Phase.SORTIE,
-		"available assembled force must launch in this planning cycle")
-	if queued:
-		sim._commit_ai_command_collection([0, 1] as Array[int])
-	for army in [idle, busy]:
-		check(army.ai_target_city == 2 and army.state == Army.State.MOVING,
-			"the threshold force must actually receive executable orders")
-	check(reinforcement.ai_target_city == 0 and reinforcement.state == Army.State.MOVING,
-		"later bound reinforcements must still assemble while the sortie is underway")
-	check(sim.ai_last_command_commit_failures == 0, "validated orders must commit successfully")
+	if queued:sim._commit_ai_command_collection([0,1] as Array[int])
+	check(front.phase==CoalitionCampaignFront.Phase.RELIEVE_CENTER,"ready rear force launches in this cycle")
+	for army in [idle,busy]:check(army.ai_target_city==0 and army.state==Army.State.MOVING,"threshold force receives executable center relief orders")
+	check(sim.ai_last_command_commit_failures==0,"validated relief orders commit successfully")
 	sim._execute_coalition_defense(front)
-	check(front.phase == CoalitionCampaignFront.Phase.SORTIE,
-		"an ongoing sortie must not return to assembling because troops left the center")
+	check(front.phase==CoalitionCampaignFront.Phase.RELIEVE_CENTER,"departed relief remains committed")
 	sim.free()
 
 
@@ -203,9 +187,8 @@ func _test_shared_front_uses_each_owners_access(queued: bool) -> void:
 	sim._execute_coalition_defense(front)
 	if queued:
 		sim._commit_ai_command_collection([0, 2, 1, 3] as Array[int])
-	check(front.phase == CoalitionCampaignFront.Phase.SORTIE
-		and available.state == Army.State.MOVING and available.ai_target_city == 2,
-		"an inaccessible first army must not consume the accessible ally's dispatch quota")
+	check(front.phase==CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE and not available.on_edge,
+		"without center siege neither coalition member launches a camp raid")
 	check(blocked.state == Army.State.IDLE and blocked.path.is_empty(),
 		"shared fronts must not grant another member's transit rights")
 	sim.free()
@@ -241,60 +224,30 @@ func _test_attack_interrupted_by_real_field_battle() -> void:
 
 
 func _test_unreachable_sortie_waits_for_route() -> void:
-	var state := _state()
-	state.cities[1].owner_nation = 1
-	var army := _army(state, 70, 0, 0)
-	_army(state, 71, 1, 2, 10000)
-	var front := _front(state, 0, CoalitionCampaignFront.Mode.DEFENSE, [army])
-	var sim := Simulation.new()
-	sim.setup(state)
+	var state:=_state();state.cities[1].owner_nation=1
+	var army:=_army(state,70,0,0);_army(state,71,1,2,10000)
+	var front:=_front(state,0,CoalitionCampaignFront.Mode.DEFENSE,[army])
+	var sim:=Simulation.new();sim.setup(state)
+	for cycle in range(3):sim._execute_coalition_defense(front)
+	check(army.state==Army.State.IDLE and army.is_at_city_node(0),"defender waits at center instead of launching fu raids")
+	state._add_edge(0,2);state.road_network_revision+=1
 	sim._execute_coalition_defense(front)
-	check(army.state == Army.State.MOVING and army.ai_target_city == 1,
-		"an unreachable enemy behind Fu must not block actual recovery of that reachable Fu")
-	sim.free()
-	# With no reachable recovery target, the force must truly remain at home.
-	state = _state()
-	state.cities[1].owner_nation = 1
-	state.edge_of(0, 1).max_manpower = 0
-	state.edge_of(0, 3).max_manpower = 0
-	army = _army(state, 70, 0, 0)
-	_army(state, 71, 1, 2, 10000)
-	front = _front(state, 0, CoalitionCampaignFront.Mode.DEFENSE, [army])
-	sim = Simulation.new()
-	sim.setup(state)
-	for cycle in range(3):
-		sim._execute_coalition_defense(front)
-		check(front.phase == CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE,
-			"a route blocked by an enemy Fu must not produce a phantom sortie")
-	state._add_edge(0, 2)
-	state.road_network_revision += 1
-	sim._execute_coalition_defense(front)
-	check(front.phase == CoalitionCampaignFront.Phase.SORTIE
-		and army.state == Army.State.MOVING, "opening the route must enable immediate real dispatch")
+	check(front.phase==CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE and not army.on_edge,"new enemy-camp route does not trigger a proactive defense raid")
 	sim.free()
 
 
 func _test_rejected_commands_do_not_consume_quota(reject_all: bool) -> void:
-	var state := _state()
-	var first := _army(state, 90, 0, 0)
-	var second := _army(state, 91, 0, 0)
-	_army(state, 92, 1, 2, 10000)
-	var front := _front(state, 0, CoalitionCampaignFront.Mode.DEFENSE, [first, second])
-	front.phase = CoalitionCampaignFront.Phase.SORTIE
-	var sim := RejectingSimulation.new()
-	sim.rejected_ids.append(90)
-	if reject_all:
-		sim.rejected_ids.append(91)
-	sim.setup(state)
-	sim._execute_coalition_defense(front)
-	check(first.state == Army.State.IDLE, "rejected orders must not count as real departure")
-	if reject_all:
-		check(front.phase == CoalitionCampaignFront.Phase.HOLD_AND_REINFORCE,
-			"no accepted action must leave the defense in rallying, not a stale sortie")
-	else:
-		check(front.phase == CoalitionCampaignFront.Phase.SORTIE
-			and second.state == Army.State.MOVING,
-			"a failed first command must not prevent trying the next ready army")
+	var state:=_state()
+	var first:=_army(state,90,0,1);var second:=_army(state,91,0,1)
+	var enemy:=_army(state,92,1,0,10000)
+	var front:=_front(state,0,CoalitionCampaignFront.Mode.DEFENSE,[first,second])
+	_blockade(state,enemy)
+	var sim:=RejectingSimulation.new();sim.rejected_ids.append(90)
+	if reject_all:sim.rejected_ids.append(91)
+	sim.setup(state);sim._execute_coalition_defense(front)
+	check(first.state==Army.State.IDLE,"rejected command is not a real departure")
+	if reject_all:check(front.phase!=CoalitionCampaignFront.Phase.RELIEVE_CENTER,"no accepted command cannot claim relief departure")
+	else:check(front.phase==CoalitionCampaignFront.Phase.RELIEVE_CENTER and second.state==Army.State.MOVING,"rejected first order does not stop trying another ready unit")
 	sim.free()
 
 
@@ -320,6 +273,12 @@ func _test_break_in_requires_available_force() -> void:
 	check(front.phase == CoalitionCampaignFront.Phase.BREAK_IN
 		and army.state == Army.State.MOVING and army.ai_target_city == 2,
 		"available staging force must launch the entry attack")
+	check(front.entry_city_id==2,"first valid entry is fixed on this front")
+	sim._release_edge(army);army.state=Army.State.IDLE;army.move_to=-1;army.location_city=1;army.move_from=1;army.path.clear()
+	var neutral:=Nation.new();neutral.id=2;state.nations.append(neutral)
+	state.cities[2].owner_nation=2;state.ownership_revision+=1
+	sim._manage_administrative_campaign(front)
+	check(front.entry_city_id==2 and army.ai_target_city!=3,"invalid fixed entry does not rotate to another enemy fu")
 	sim.free()
 
 
@@ -368,3 +327,8 @@ func _front(state: GameState, owner: int, mode: int, armies: Array[Army]) -> Coa
 	for army in armies:
 		front.army_assignments[army.id] = 0
 	return state.register_campaign_front(front, [owner] as Array[int], owner)
+
+
+func _blockade(state: GameState,enemy: Army) -> void:
+	var battle:=state.new_battle(Battle.Kind.SIEGE);battle.city=state.cities[0];battle.siege_attacker_nation=enemy.owner_nation
+	battle.side_a=[enemy] as Array[Army];enemy.state=Army.State.FIGHTING;enemy.battle_id=battle.id

@@ -48,6 +48,7 @@ func _initialize():
 	check(model.nation(state,-1).is_empty() and model.army(state,99).is_empty(),"stale selections are handled")
 	var front := state.create_campaign_front(0,[0,1] as Array[int],0,CoalitionCampaignFront.Mode.OFFENSE,2)
 	front.phase=CoalitionCampaignFront.Phase.RAID_FU; front.staging_city_id=0
+	check(model.CAMPAIGN_PHASE_NAMES[CoalitionCampaignFront.Phase.BLOCKADE_RAID]=="封锁并分遣" and model.CAMPAIGN_PHASE_NAMES[CoalitionCampaignFront.Phase.DEFENSE_REGROUP]=="后方重整","new attack and defense phases have readable card labels")
 	front.tactical_target_city_ids=[2]; front.army_assignments={9:2,12345:2}
 	front.reported_effective_manpower=999999; front.combat_report_locked=true
 	army.campaign_front_id=front.front_id

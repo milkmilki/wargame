@@ -2,7 +2,7 @@ extends SceneTree
 const Snapshot = preload("res://scripts/atlas/snapshot.gd")
 const Generator = preload("res://scripts/atlas/generator.gd")
 func _initialize() -> void:
-	var generated: Dictionary = FileAccess.open("res://.dbg/atlas-native-generated-1.bin",FileAccess.READ).get_var(false)
+	var generated: Dictionary = preload("res://tests/atlas_military_inputs.gd").base(1,false)
 	var payload := {"format":Snapshot.FORMAT,"version":Snapshot.VERSION,"data":generated.data,"raster":generated.raster,"display":generated.display,"provinces":Generator.pixel_regions(generated.data,generated.raster)}
 	var errors := 0; var path := "res://.dbg/atlas-test.snapshot"
 	var error := Snapshot.save_file(path,payload)

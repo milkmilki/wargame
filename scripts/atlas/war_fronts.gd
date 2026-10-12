@@ -18,8 +18,16 @@ const TOOTH_STEP := 6.5
 const TOOTH_LENGTH := 3.45
 const TOOTH_PAPER := 5.4
 const TOOTH_WIDTH := 1.95
+## civ-atlas 103afd3 borders.ts short-dash proportions, applied to our peaceful
+## suzerainty interiors (upstream has no equivalent vassal model).
+const VASSAL_DASH := 3.6
+const VASSAL_GAP := 2.4
+const VASSAL_WIDTH := 1.4
+const VASSAL_PAPER := Color(246./255.,236./255.,210./255.,.6)
+const VASSAL_INK := Color(58./255.,32./255.,20./255.,.78)
 var fronts: Array = []
 var normal_borders: Array = []
+var vassal_borders: Array = []
 var classification_count := 0
 var view_zoom := 1.0
 var classification_key: Array = []
@@ -36,7 +44,7 @@ static func roles(state: GameState) -> Dictionary:
 static func state_key(state: GameState) -> Array:
 	var alive := PackedByteArray()
 	for nation in state.nations: alive.append(1 if nation.alive else 0)
-	return [state.get_instance_id(),state.ownership_revision,state.diplomacy_revision,hash(state.war_objectives),hash(roles(state)),alive]
+	return [state.get_instance_id(),state.ownership_revision,state.diplomacy_revision,hash(state.war_objectives),hash(roles(state)),alive,hash(state.suzerainty)]
 
 static func defender_of(state: GameState,left: int,right: int) -> int:
 	var sides: Dictionary = roles(state).get(state.war_id_between(left,right),{})
@@ -52,14 +60,17 @@ func configure(borders: Array,state: GameState) -> void:
 	var key := state_key(state) + [hash(borders)]
 	if key == classification_key: return
 	classification_key = key; classification_count += 1
-	fronts.clear(); normal_borders.clear(); mesh_key.clear()
+	fronts.clear(); normal_borders.clear(); vassal_borders.clear(); mesh_key.clear()
 	for border in borders:
 		var left := int(border.left); var right := int(border.right)
 		if (left<0 or right<0 or left==right
 			or left>=state.nations.size() or right>=state.nations.size()
-			or not state.nations[left].alive or not state.nations[right].alive
-			or not state.is_enemy(left,right)):
+			or not state.nations[left].alive or not state.nations[right].alive):
 			normal_borders.append(border); continue
+		if not state.is_enemy(left,right):
+			if state.is_same_suzerainty_system(left,right): vassal_borders.append(border)
+			else: normal_borders.append(border)
+			continue
 		var defender := defender_of(state,left,right)
 		var path := Geometry.points(border.pts)
 		# Border side labels use y-up; canvas-left (dy,-dx) is the right label.
@@ -99,16 +110,24 @@ func prepare_meshes() -> void:
 	var aa := .55/maxf(.01,view_zoom)
 	for record in [[paths,FRONT_PAPER*u],[paths,FRONT_WIDTH*u],[ticks,TOOTH_PAPER*u],[ticks,TOOTH_WIDTH*u]]:
 		meshes.append(Strokes.build(record[0],record[1],aa))
+	var internal: Array = []; var dashes: Array = []
+	var pen := pow(maxf(.1,view_zoom),-.22)
+	for border in vassal_borders:
+		var path := Geometry.points(border.pts); internal.append(path)
+		for dash in Strokes.dashes(path,VASSAL_DASH*pen,VASSAL_GAP*pen): dashes.append(dash.path)
+	meshes.append(Strokes.build(internal,3.*pen,aa))
+	meshes.append(Strokes.build(dashes,VASSAL_WIDTH*pen,aa))
 
 func _draw() -> void:
 	if high_performance: update_persistent(); return
-	if fronts.is_empty(): return
+	if fronts.is_empty() and vassal_borders.is_empty(): return
 	prepare_meshes()
 	for index in range(meshes.size()):
 		if meshes[index].get_surface_count()==0: continue
 		for shift in [-2048.,0.,2048.]:
 			draw_set_transform(Vector2(shift,0))
-			draw_mesh(meshes[index],null,Transform2D.IDENTITY,PAPER if index%2==0 else RED)
+			var color := (PAPER if index%2==0 else RED) if index<4 else (VASSAL_PAPER if index==4 else VASSAL_INK)
+			draw_mesh(meshes[index],null,Transform2D.IDENTITY,color)
 	draw_set_transform(Vector2.ZERO)
 
 func update_persistent() -> void:
@@ -118,11 +137,19 @@ func update_persistent() -> void:
 		persistent_layers.clear()
 		var paths: Array = []; var ticks: Array = []
 		for front in fronts: paths.append(front.path); ticks.append_array(teeth(front.path,TOOTH_STEP,TOOTH_LENGTH))
-		for i in range(4):
-			var layer := Persistent.new(); layer.scheduler = scheduler; layer.pool = geometry_pool; layer.set_paths(paths if i<2 else ticks)
-			layer.style([FRONT_PAPER,FRONT_WIDTH,TOOTH_PAPER,TOOTH_WIDTH][i],PAPER if i%2==0 else RED,0,0,LINE_GROW-1.)
-			layer.material.set_shader_parameter("scale_origin",1.)
-			if i>=2: layer.material.set_shader_parameter("path_scale_exponent",LINE_GROW-1.)
+		var internal: Array = []
+		for border in vassal_borders: internal.append(Geometry.points(border.pts))
+		for i in range(6):
+			var layer := Persistent.new(); layer.scheduler = scheduler; layer.pool = geometry_pool
+			layer.set_paths(paths if i<2 else ticks if i<4 else internal)
+			if i<4:
+				layer.style([FRONT_PAPER,FRONT_WIDTH,TOOTH_PAPER,TOOTH_WIDTH][i],PAPER if i%2==0 else RED,0,0,LINE_GROW-1.)
+				layer.material.set_shader_parameter("scale_origin",1.)
+				if i>=2: layer.material.set_shader_parameter("path_scale_exponent",LINE_GROW-1.)
+			else:
+				layer.style(3. if i==4 else VASSAL_WIDTH,VASSAL_PAPER if i==4 else VASSAL_INK,0. if i==4 else VASSAL_DASH,0. if i==4 else VASSAL_GAP)
+				# Map ink is z=3 and labels z=7; front parent is z=8.
+				layer.z_index = -5
 			add_child(layer); persistent_layers.append(layer)
 		var used := {}
 		for layer in persistent_layers: used[layer.key] = true

@@ -12,7 +12,9 @@ import time
 ROOT = Path(__file__).resolve().parent
 CORE = [
     "project_compile", "test_suite", "field_establishment_costs", "trade_fingerprint_reuse", "capital_tax_batch", "resource_capacity_batch", "ruler_modifier_table", "threat_field_lazy", "forecast_token_packing", "supply_field_lazy_order", "reinforcement_fiscal_cache", "forecast_selected_rows", "trade_packed_fingerprint", "campaign_enemy_memo", "atlas_capital_hops", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
-    "army_precontact_hold", "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements",
+    "army_precontact_hold", "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements", "supply_combat_attributes",
+    "campaign_simple_retreat", "campaign_single_wave", "campaign_defense_regroup",
+    "campaign_action_readiness", "campaign_staging_legality", "coalition_dispatch_lifecycle", "coalition_siege_participation",
     "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test",
     "regional_strategy", "regional_access_recovery", "family_tree_smoke",
     "royal_title_origin", "royal_title_generations", "royal_title_lifecycle",
@@ -35,16 +37,16 @@ ATLAS = [
     "atlas_politics_trade",
     "atlas_prewar_batch",
     "atlas_settlement_mask", "atlas_settlement_mask_controls", "atlas_settlement_mask_pipeline", "atlas_masked_military_smoke",
-    "atlas_daily_reserves", "atlas_reserve_stations", "atlas_event_slicing", "atlas_path_order_equivalence", "atlas_contact_index", "atlas_supply_sources", "atlas_supply_dependencies", "atlas_ai_cadence",
+    "atlas_daily_reserves", "atlas_reserve_stations", "atlas_event_slicing", "atlas_path_order_equivalence", "atlas_contact_index", "atlas_supply_sources", "atlas_traffic_supply", "atlas_supply_dependencies", "atlas_ai_cadence",
     "atlas_static_layers",
     "atlas_runtime_costs", "atlas_battle_strength",
     "atlas_runtime_equivalence",
     "atlas_time_controls", "atlas_map_selection", "atlas_diplomacy_view", "atlas_nation_list",
     "atlas_startup_cache", "atlas_startup_climate", "atlas_startup_order",
-    "atlas_information_model", "atlas_information_panel",
+    "atlas_information_model", "atlas_information_panel", "atlas_ruler_editor",
     "atlas_render_scheduler", "atlas_render_index", "atlas_persistent_strokes", "atlas_shared_stroke_cache",
     "atlas_symbol_mesh", "atlas_symbol_tiles", "atlas_incremental_text", "atlas_wrapped_text", "atlas_city_markers",
-    "atlas_entry_contract", "atlas_preview_lifecycle", "atlas_render_invalidation", "atlas_view_caches", "atlas_camera_feedback", "atlas_war_fronts", "atlas_military_contract", "atlas_hierarchy_cases",
+    "atlas_entry_contract", "atlas_preview_lifecycle", "atlas_render_invalidation", "atlas_view_caches", "atlas_camera_feedback", "atlas_war_fronts", "atlas_vassal_borders", "atlas_military_contract", "atlas_hierarchy_cases",
     "atlas_traffic_graph", "atlas_zhoufu_roads", "atlas_road_smoothing",
     "atlas_segmented_movement", "atlas_junction_encounters",
     "atlas_access_and_repatriation", "atlas_territory_transactions",
@@ -68,7 +70,7 @@ def main():
     for test in tests:
         if not re.fullmatch(r"[a-z0-9_]+", test): parser.error("Invalid test name: " + test)
         command = [args.godot, "--headless", "--path", str(ROOT), "--script", "res://tests/" + test + ".gd"]
-        if test == "atlas_military_smoke": command += ["--", "--atlas-smoke-days=" + str(args.days)]
+        if test in ("atlas_military_smoke", "atlas_masked_military_smoke"): command += ["--", "--atlas-smoke-days=" + str(args.days)]
         started = time.monotonic()
         log = logs / (test + ".log")
         try:

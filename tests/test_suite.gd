@@ -9449,33 +9449,31 @@ func _test_remaining_combat_risk_closures() -> void:
 	)
 	promotion_sim.free()
 
-	# (d) 围城只计算城墙正面内、受组织度和当日补给修正的有效兵力。
+	# (d) 补给影响攻防属性；人数和城墙正面独立保留真实口径。
 	var siege_full := _make_army(10030, 0, 10000, 10, 10)
 	var siege_tired := _make_army(10031, 0, 10000, 10, 10)
 	siege_tired.morale = 0.50
 	var siege_unsupplied := _make_army(10032, 0, 10000, 10, 10)
 	siege_unsupplied.supply_ratio = 0.50
-	var full_strength := Combat.effective_siege_strength([siege_full])
-	var tired_strength := Combat.effective_siege_strength([siege_tired])
-	var unsupplied_strength := Combat.effective_siege_strength([
-		siege_unsupplied
-	])
+	var full_attack := Combat._side_attack([siege_full])
+	var tired_attack := Combat._side_attack([siege_tired])
+	var unsupplied_attack := Combat._side_attack([siege_unsupplied])
 	_check(
-		full_strength == 10000
-			and tired_strength < full_strength
-			and unsupplied_strength < full_strength,
-		"低士气/部分缺粮必须降低有效围城兵力：full=%d tired=%d supply=%d"
-			% [full_strength, tired_strength, unsupplied_strength]
+		full_attack == 100000.0
+			and tired_attack < full_attack
+			and _approx(unsupplied_attack, full_attack * 0.5)
+			and siege_unsupplied.size == 10000,
+		"低士气/部分缺粮降低火力但不折算人数：full=%.1f tired=%.1f supply=%.1f"
+			% [full_attack, tired_attack, unsupplied_attack]
 	)
 	var siege_mass_a := _make_army(10033, 0, 10000, 10, 10)
 	var siege_mass_b := _make_army(10034, 0, 10000, 10, 10)
+	siege_mass_b.supply_ratio = 0.0
 	_check(
-		Combat.effective_siege_strength([
-			siege_mass_a,
-			siege_mass_b,
-		]) == Combat.SIEGE_FRONTAGE,
-		"超额围城兵力应受城墙正面 %d 限制"
-			% Combat.SIEGE_FRONTAGE
+		Combat._frontline_size(Combat.frontline_allocation(
+			[siege_mass_a, siege_mass_b], Combat.SIEGE_FRONTAGE
+		)) == Combat.SIEGE_FRONTAGE,
+		"城墙正面仍按实际人数填满，不按补给折算人数"
 	)
 
 	# (e) 军粮按存续编制结算：30天总耗保持月口径，战损不释放维护费。

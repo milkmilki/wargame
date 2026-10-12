@@ -291,165 +291,33 @@ func _test_captured_center_is_not_camp_failure() -> void:
 	sim.free()
 
 
-func _test_real_camp_capture_becomes_counteroffensive(cross_region: bool = false) -> void:
-	var state := _state()
-	if cross_region:
-		# Keep both rulers in their original regions; only this battle's succession may cross.
-		for nation in state.nations:
-			nation.ruler_traits = [RulerProfile.TRAIT_CAUTIOUS] as Array[String]
-		state.nations[0].strategic_region_anchor_city_id = 0
-		state.nations[1].strategic_region_anchor_city_id = 3
-		for city_id in range(3, 9):
-			state.region_ids[city_id] = 1
-		for city_id in range(9, 12):
-			var city := City.new()
-			city.id = city_id
-			city.owner_nation = 0
-			city.map_position = Vector2(city_id, 0)
-			city.food_storage = 1000000
-			city.food_per_half_year = 100000
-			city.gold_per_month = 10000
-			city.garrison_manpower = 1000 if city_id == 9 else 0
-			state.cities.append(city)
-			state.adjacency[city_id] = [] as Array[int]
-			state.region_ids.append(0)
-			state.administrative_center_by_city.append(9)
-			state.recognized_city_owners.append(0)
-		state.administrative_center_city_ids.append(9)
-		# The first counterattack must capture a non-capital state so the war can continue.
-		state.nations[0].capital_city_id = 9
-		state.nations[0].warehouse_city_ids.append(9)
-		state.cities[9].has_warehouse = true
-		for edge in [[1, 10], [10, 9], [9, 11]]:
-			state._add_edge(edge[0], edge[1])
-			state.edge_of(edge[0], edge[1]).distance = 0.1
-		state.administrative_region_revision += 1
-		state.regional_strategy_revision += 1
-		_check(not RegionalStrategy.allows_objective(state, 1, 0)
-			and not RegionalStrategy.allows_objective(state, 1, 9),
-			"ordinary regional eligibility must forbid both enemy states before camp victory")
-	state.cities[4].owner_nation = 0
-	state.ownership_revision += 1
-	var camp_guards: Array[Army] = []
-	for index in range(3):
-		var camp_guard := _army(state, 50 + index, 0, 4, 15000)
-		camp_guard.attack = 1
-		camp_guard.defense = 1
-		camp_guards.append(camp_guard)
-	var failed := _front(state, 3, 4, camp_guards)
-	var defenders: Array[Army] = []
-	for index in range(4):
-		defenders.append(_army(state, 53 + index, 1, 3, 15000))
-	var sim := Simulation.new()
-	root.add_child(sim)
-	sim.setup(state)
-	sim.diplomacy_enabled = false
-	var captured_day := -1
-	var captured_cooldown_until := -1
-	var released_day := -1
-	var counter_order_day := -1
-	var attacker_defense_day := -1
-	var counter_target := -1
-	var counter_capture_day := -1
-	var illegal_continuation := false
-	var saw_camp_battle := false
-	var premature_counter_order := false
-	var cooldown_violations := 0
-	var duplicate_bindings := 0
-	for _step in range(600 if cross_region else 300):
-		sim._advance_day()
-		for battle in state.battles:
-			if battle.city != null and battle.city.id == 4:
-				saw_camp_battle = true
-		if captured_day < 0 and state.cities[4].owner_nation == 1:
-			captured_day = state.day
-			captured_cooldown_until = int(state.call(
-				"campaign_offensive_cooldown_until", failed.war_id, [0] as Array[int]))
-		if captured_day < 0:
-			for army in defenders:
-				var current := state.campaign_front(army.campaign_front_id)
-				if current != null and current.mode == CoalitionCampaignFront.Mode.OFFENSE:
-					premature_counter_order = true
-		if captured_day >= 0 and released_day < 0 and state.campaign_front(failed.front_id) == null:
-			released_day = state.day
-		if released_day >= 0:
-			var until := int(state.call("campaign_offensive_cooldown_until", failed.war_id, [0] as Array[int]))
-			if until > state.day and not state.campaign_fronts_for_nation(
-					0, failed.war_id, CoalitionCampaignFront.Mode.OFFENSE).is_empty():
-				cooldown_violations += 1
-		var seen := {}
-		for current in state.campaign_fronts.values():
-			for army_id in current.army_assignments:
-				if seen.has(army_id):
-					duplicate_bindings += 1
-				seen[army_id] = true
-		if released_day >= 0:
-			for army in defenders:
-				var current := state.campaign_front(army.campaign_front_id)
-				if (current != null and current.mode == CoalitionCampaignFront.Mode.OFFENSE
-						and current.war_id == failed.war_id and army.state == Army.State.MOVING):
-					if counter_order_day < 0:
-						counter_order_day = state.day
-						counter_target = current.center_city_id
-		if counter_order_day >= 0:
-			var defense := state.campaign_front_for(0, counter_target, CoalitionCampaignFront.Mode.DEFENSE, failed.war_id)
-			if defense != null:
-				if attacker_defense_day < 0:
-					attacker_defense_day = state.day
-				if not cross_region:
-					break
-		if cross_region and counter_target >= 0:
-			if counter_capture_day < 0 and state.cities[counter_target].owner_nation == 1:
-				counter_capture_day = state.day
-			if counter_capture_day >= 0:
-				for current in state.campaign_fronts_for_nation(1, failed.war_id, CoalitionCampaignFront.Mode.OFFENSE):
-					if current.center_city_id != counter_target \
-							and not RegionalStrategy.allows_objective(state, 1, current.center_city_id):
-						illegal_continuation = true
-				if state.day >= counter_capture_day + 30:
-					break
-	_check(saw_camp_battle and captured_day >= 0,
-		"daily simulation must fight for and actually capture the hostile camp")
-	_check(not premature_counter_order,
-		"fixture must retain the defense force until the enemy camp is actually recaptured")
-	_check(captured_cooldown_until == captured_day + 60,
-		"offensive cooldown must start at actual camp capture, not the later planning day")
-	_check(released_day >= captured_day and released_day >= 0,
-		"actual camp capture must release the defeated offensive front")
-	_check(counter_order_day >= released_day and counter_order_day >= 0,
-		"original defender must execute same-war counteroffensive movement after recapture")
-	_check(attacker_defense_day >= counter_order_day and attacker_defense_day >= 0,
-		"real counteroffensive arrival or incoming orders must create original attacker's defense")
-	_check(sim.ai_last_command_commit_failures == 0,
-		"actual camp-to-counteroffense chain must not reject commands")
-	_check(cooldown_violations == 0 and duplicate_bindings == 0,
-		"daily counteroffense chain must have no cooldown violations or duplicate army bindings")
-	if cross_region:
-		_check(counter_target == 0 and not RegionalStrategy.allows_objective(state, 1, counter_target),
-			"camp victory must permit an actual one-state counterattack outside the ruler's region")
-		_check(counter_capture_day >= counter_order_day and counter_capture_day >= 0,
-			"cross-region counterattack must actually capture its center, not merely create a plan")
-		_check(state.nations[0].alive and state.nations[1].alive,
-			"counterattack fixture must preserve both countries for next-state eligibility checks")
-		_check(not illegal_continuation and state.day >= counter_capture_day + 30,
-			"completed counterattack must not grant unrestricted out-of-region next-state conquest")
-	if counter_order_day < 0:
-		for army in state.armies:
-			print("CAMP_COUNTER_DIAG army=%d owner=%d size=%d state=%d location=%d target=%d war=%d front=%d supply=%f morale=%f deploy=%d until=%d" % [
-				army.id, army.owner_nation, army.size, army.state, army.location_city, army.ai_target_city,
-				army.campaign_war_id, army.campaign_front_id, army.supply_ratio, army.morale,
-				army.defensive_deployment_until_day, army.ai_order_until_day])
-		for current in state.campaign_fronts.values():
-			print("CAMP_COUNTER_DIAG front=%d mode=%d center=%d camp=%d members=%s phase=%d assigned=%s" % [
-				current.front_id, current.mode, current.center_city_id, current.camp_city_id,
-				current.participant_nation_ids, current.phase, current.army_assignments])
-		print("CAMP_COUNTER_DIAG owners=%s context=%s" % [
-			state.cities.map(func(city: City) -> int: return city.owner_nation),
-			state.campaign_defense_context(1, 3, failed.war_id)])
-		print("CAMP_COUNTER_DIAG allocation=%s" % state.coalition_campaign_allocation(failed.war_id, 1))
-	print("CAMP_COUNTEROFFENSIVE_METRICS capture=%d release=%d counter_order=%d new_defense=%d cooldown_violations=%d duplicate_bindings=%d cross_region=%s counter_target=%d counter_capture=%d" % [
-		captured_day, released_day, counter_order_day, attacker_defense_day,
-		cooldown_violations, duplicate_bindings, cross_region, counter_target, counter_capture_day])
+func _test_real_camp_capture_becomes_counteroffensive(conqueror: bool = false) -> void:
+	# The old proactive camp sortie is replaced by actual capital relief.
+	var state:=_state();state.armies.clear();state.battles.clear()
+	for city in state.cities:
+		city.loyalty_target_nation=city.owner_nation
+		city.is_capital=city.id in [0,3]
+	var attacker:=_army(state,8000,0,3,10000)
+	var defender:=_army(state,8001,1,4,60000)
+	if conqueror:state.nations[1].ruler_archetype=RulerProfile.Archetype.CONQUEROR
+	var offense:=_front(state,3,2,[attacker]);offense.phase=CoalitionCampaignFront.Phase.BLOCKADE_ONLY
+	var defense:=state.create_campaign_front(offense.war_id,[1] as Array[int],1,CoalitionCampaignFront.Mode.DEFENSE,3)
+	defender.campaign_front_id=defense.front_id;defender.campaign_war_id=defense.war_id;defense.army_assignments[defender.id]=4
+	var battle:=state.new_battle(Battle.Kind.SIEGE);battle.city=state.cities[3];battle.siege_attacker_nation=0;battle.side_a=[attacker] as Array[Army]
+	attacker.state=Army.State.FIGHTING;attacker.battle_id=battle.id
+	state.cities[3].garrison_manpower=60000
+	state.refresh_derived()
+	var sim:=Simulation.new();sim.setup(state);sim.diplomacy_enabled=false
+	sim._execute_coalition_defense(defense)
+	_check(defense.phase==CoalitionCampaignFront.Phase.RELIEVE_CENTER and defender.ai_target_city==3,"real rear force receives center relief order")
+	var relieved:=false
+	for day in range(180):
+		sim._advance_movement()
+		if sim._siege_battle_of(state.cities[3])==null:relieved=true;break
+	_check(relieved and state.cities[3].owner_nation==1,"real city field victory relieves the capital")
+	_check(attacker.state in [Army.State.RETREATING,Army.State.RECOVERING] or attacker.size<=0,"defeated attacker retreats or is encircled")
+	_check(defender.size>0 and defender.location_city==3,"victorious relief force holds the center")
+	_check(state.territory_structure_valid(),"actual relief preserves territory structure")
 	sim.free()
 
 

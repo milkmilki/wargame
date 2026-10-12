@@ -19,16 +19,17 @@ static func military() -> Dictionary:
 	FileAccess.open(path,FileAccess.WRITE).store_var(result,false); return result
 
 ## Performance/default audit world. Global fixtures above remain compatibility inputs.
-static func eurasia_military() -> Dictionary:
-	var path := "res://.dbg/atlas-military-eurasia-mask.bin"
+static func eurasia_military(seed_value: int = 1) -> Dictionary:
+	var path := "res://.dbg/atlas-military-eurasia-mask.bin" if seed_value==1 else "res://.dbg/atlas-military-eurasia-mask-%d.bin"%seed_value
 	var mask: Dictionary = preload("res://scripts/atlas/settlement_mask.gd").EURASIA
 	if FileAccess.file_exists(path):
 		var cached: Dictionary = FileAccess.open(path,FileAccess.READ).get_var(false)
 		if cached.get("data",{}).get("options",{}).get("settlement_mask",{})==mask:
 			cached.simulation_options={"trade_enabled":true,"rulers_enabled":true}
 			return cached
-	var result := MilitaryMap.prepare(Generator.generate(1,1.,Callable(),{"terrain_model":"earth","rainfall_model":"seasonal_circulation_v5","settlement_model":"climate_capacity_v6","settlement_mask":mask}))
+	var result := MilitaryMap.prepare(Generator.generate(seed_value,1.,Callable(),{"terrain_model":"earth","rainfall_model":"seasonal_circulation_v5","settlement_model":"climate_capacity_v6","settlement_mask":mask}))
 	assert(not result.has("error"),str(result.get("error","")))
+	result.simulation_options={"trade_enabled":true,"rulers_enabled":true}
 	DirAccess.make_dir_recursive_absolute("res://.dbg")
 	FileAccess.open(path,FileAccess.WRITE).store_var(result,false)
 	return result

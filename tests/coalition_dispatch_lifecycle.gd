@@ -41,8 +41,9 @@ func check(condition: bool, message: String) -> void:
 
 func _test_due_component_includes_absent_member() -> void:
 	var state := _state()
-	var defender := _army(state, 10, 0, 0, 30000)
-	_army(state, 11, 1, 2, 10000)
+	var defender := _army(state, 10, 0, 1, 30000)
+	var attacker:=_army(state, 11, 1, 0, 10000)
+	_blockade(state,attacker)
 	var front := _front(state, 0, CoalitionCampaignFront.Mode.DEFENSE, [defender])
 	var sim := Simulation.new()
 	sim.setup(state)
@@ -54,9 +55,9 @@ func _test_due_component_includes_absent_member() -> void:
 		{1: {}}, {}, false, Time.get_ticks_usec()
 	)
 	sim._commit_ai_command_collection([1] as Array[int])
-	check(defender.state == Army.State.MOVING and defender.ai_target_city == 2,
-		"30000 assembled against 9001 demand must sortie even outside national rotation")
-	check(front.phase == CoalitionCampaignFront.Phase.SORTIE,
+	check(defender.state == Army.State.MOVING and defender.ai_target_city == 0,
+		"30000 assembled against 9001 demand must relieve the center even outside national rotation")
+	check(front.phase == CoalitionCampaignFront.Phase.RELIEVE_CENTER,
 		"a due coalition must receive a complete command batch")
 	check(sim.ai_last_command_commit_failures == 0, "expanded coalition command batch must commit")
 	print("COALITION_BATCH_METRIC assembled=30000 requirement=9001 outside_rotation_dispatched=%d commit_failures=%d" % [
@@ -125,8 +126,8 @@ func _test_enemy_fu_recapture_without_field_army() -> void:
 	var sim := Simulation.new()
 	sim.setup(state)
 	sim._execute_coalition_defense(front)
-	check(army.state == Army.State.MOVING and army.ai_target_city == 2,
-		"enemy-held Fu is a real recapture task even with no enemy field army")
+	check(army.state == Army.State.IDLE and army.is_at_city_node(0),
+		"enemy-held fu alone does not trigger a defensive raid")
 	check(sim._front_requirement(front) == GameState.INITIAL_HEAVY_ARMY_SIZE,
 		"unguarded enemy Fu uses the existing one-army fallback")
 	sim.free()
@@ -149,8 +150,8 @@ func _test_fu_recapture_selects_executable_frontier() -> void:
 	var sim := Simulation.new()
 	sim.setup(state)
 	sim._execute_coalition_defense(front)
-	check(army.state == Army.State.MOVING and army.ai_target_city == targets[1],
-		"recapture must attack the executable frontier Fu before the blocked higher-ranked Fu")
+	check(army.state == Army.State.IDLE and army.is_at_city_node(0),
+		"defenders hold the center rather than chase an executable enemy fu")
 	sim.free()
 
 
@@ -531,17 +532,19 @@ func _test_defense_context_does_not_mix_wars() -> void:
 
 func _test_ordinary_arrival_waits_until_ten_day_cycle() -> void:
 	var state := _state()
-	var first := _army(state, 230, 0, 1, 7500)
-	var second := _army(state, 231, 0, 1, 7500)
-	_army(state, 232, 1, 2, 10000)
+	var first := _army(state, 230, 0, 2, 7500)
+	var second := _army(state, 231, 0, 2, 7500)
+	var attacker:=_army(state,232,1,0,10000)
+	_blockade(state,attacker)
 	var front := _front(state, 0, CoalitionCampaignFront.Mode.DEFENSE, [first, second])
 	var sim := Simulation.new()
 	sim.setup(state)
 	sim._manage_coalition_campaigns()
-	check(first.state == Army.State.MOVING and first.ai_target_city == 0,
+	check(first.state == Army.State.MOVING and first.ai_target_city == 1,
 		"before actual arrival defenders must receive a rally order")
 	for army in [first, second]:
-		army.location_city = 0
+		army.location_city = 1
+		army.move_from=1;army.move_to=-1;army.move_progress=0.
 		army.state = Army.State.IDLE
 		army.on_edge = false
 		army.path.clear()
@@ -549,22 +552,23 @@ func _test_ordinary_arrival_waits_until_ten_day_cycle() -> void:
 	for day in range(1, Simulation.AI_DECISION_INTERVAL_DAYS):
 		state.day = day
 		sim._manage_coalition_campaigns()
-		check(first.state == Army.State.IDLE and first.location_city == 0,
+		check(first.state == Army.State.IDLE and first.location_city == 1,
 			"ordinary arrival must not add daily campaign replanning")
 	state.day = Simulation.AI_DECISION_INTERVAL_DAYS
-	sim._manage_coalition_campaigns()
-	check(first.state == Army.State.MOVING and first.ai_target_city == 2
-		and front.phase == CoalitionCampaignFront.Phase.SORTIE,
+	sim._execute_coalition_defense(front)
+	check(first.state == Army.State.MOVING and first.ai_target_city == 0
+		and front.phase == CoalitionCampaignFront.Phase.RELIEVE_CENTER,
 		"ready assembled defenders must sortie at the normal tenth-day cycle")
 	sim.free()
 
 
 func _test_real_march_separates_travel_and_planning_wait() -> void:
 	var state := _state()
-	state.edge_of(0, 1).distance = 4
-	var first := _army(state, 240, 0, 1, 7500)
-	var second := _army(state, 241, 0, 1, 7500)
-	_army(state, 242, 1, 2, 10000)
+	state.edge_of(1, 2).distance = 4
+	var first := _army(state, 240, 0, 2, 7500)
+	var second := _army(state, 241, 0, 2, 7500)
+	var attacker:=_army(state,242,1,0,10000)
+	_blockade(state,attacker)
 	var front := _front(state, 0, CoalitionCampaignFront.Mode.DEFENSE, [first, second])
 	var sim := Simulation.new()
 	sim.setup(state)
@@ -574,15 +578,15 @@ func _test_real_march_separates_travel_and_planning_wait() -> void:
 		state.day = day
 		if day > 0:
 			sim._advance_movement()
-		if arrival_day < 0 and first.is_at_city_node(0) and second.is_at_city_node(0):
+		if arrival_day < 0 and first.is_at_city_node(1) and second.is_at_city_node(1):
 			arrival_day = day
 		var due := sim._prepare_coalition_campaign_batch()
 		var own_due: Array[Dictionary] = []
 		for component in due:
 			if (component["members"] as Array[int]).has(0):
 				own_due.append(component)
-		sim._manage_coalition_campaigns(own_due)
-		if front.phase == CoalitionCampaignFront.Phase.SORTIE:
+		if not own_due.is_empty():sim._execute_coalition_defense(front)
+		if front.phase == CoalitionCampaignFront.Phase.RELIEVE_CENTER:
 			action_day = day
 			break
 	check(arrival_day > 0 and action_day >= arrival_day, "real movement must finish before the assembled sortie")
@@ -658,3 +662,9 @@ func _component(state: GameState, owner: int) -> Dictionary:
 		if (component["members"] as Array[int]).has(owner):
 			return component
 	return {}
+
+
+func _blockade(state: GameState,attacker: Army) -> void:
+	state.cities[0].garrison_manpower=100000
+	var battle:=state.new_battle(Battle.Kind.SIEGE);battle.city=state.cities[0];battle.siege_attacker_nation=1
+	battle.side_a=[attacker] as Array[Army];attacker.state=Army.State.FIGHTING;attacker.battle_id=battle.id

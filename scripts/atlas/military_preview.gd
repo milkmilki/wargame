@@ -184,7 +184,22 @@ func information_document() -> Dictionary:
 			action.disabled=action.disabled or historical_view or (simulation!=null and simulation.runtime_day_in_progress())
 		if action.key=="declare": action.disabled=action.disabled or action.id==int(player_nation.value) or not source.nations[action.id].alive or source.is_enemy(int(player_nation.value),action.id)
 	if historical_view: doc=Information.historical(doc,information_kind)
+	for group in doc.sections:
+		if group.has("ruler"): group.ruler.disabled=group.ruler.disabled or not ruler_edit_available()
 	return doc
+
+func ruler_edit_available() -> bool:
+	return state!=null and simulation!=null and view_ready and not generating and not historical_view and not simulation.runtime_day_in_progress()
+
+func edit_ruler(id: int, archetype: int, traits: Array[String]) -> bool:
+	if not ruler_edit_available() or information_kind!="nation" or id!=information_id or id<0 or id>=state.nations.size() or not state.nations[id].alive:
+		information_notify("当前不能修改君主，请等待结算结束或返回当前世界。");return false
+	var changed := simulation.set_ruler_profile(id,archetype,traits)
+	if changed:
+		log_event("ruler_profile_edited",{"nation":id,"archetype":archetype,"traits":state.nations[id].ruler_traits})
+		information_notify("君主类型与特质已更新。")
+	elif info_panel!=null: info_panel.show_document(information_document())
+	return changed
 
 func show_information(kind: String,id: int) -> void:
 	pending_selection.clear()

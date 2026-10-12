@@ -128,7 +128,7 @@ func _test_shared_siege(first_owner: int) -> void:
 		state.day += 1
 		if tick % 10 == 0:
 			sim._manage_administrative_campaign(front)
-			if front.phase != CoalitionCampaignFront.Phase.ASSAULT_CENTER:
+			if front.phase not in [CoalitionCampaignFront.Phase.ASSAULT_CENTER,CoalitionCampaignFront.Phase.BLOCKADE_RAID,CoalitionCampaignFront.Phase.BLOCKADE_ONLY]:
 				regroup_decisions += 1
 		sim._advance_movement()
 		if ally.state == Army.State.RETREATING or ally.forced_retreat:

@@ -26,6 +26,8 @@ func _init() -> void:
 			_test_real_departure(conqueror, direct)
 	_test_empty_and_recovery()
 	_test_field_blockade_siege()
+	_test_partial_supply_manpower()
+	_test_partial_supply_siege_transition()
 	_test_reinforcement_promises()
 	_test_coalition_reinforcement()
 	print("FIELD_MANPOWER_REQUIREMENTS checks=%d failures=%d" % [checks, failures])
@@ -230,6 +232,61 @@ func _test_field_blockade_siege() -> void:
 		state.campaign_committed_manpower(0, 3), sim._siege_assault_manpower(battle),
 		state.campaign_attack_requirement(0, 3, false), rounds])
 	sim.free()
+
+
+func _test_partial_supply_manpower() -> void:
+	var sim := Simulation.new()
+	var battle := Battle.new()
+	var troop := Army.new()
+	troop.size = 10000
+	troop.max_size = 30000
+	troop.morale = troop.max_morale
+	battle.side_a = [troop]
+	for ratio in [0.0, 0.5, 0.8, 1.0]:
+		troop.supply_ratio = ratio
+		troop.starving = ratio < 1.0
+		check(sim._siege_assault_manpower(battle) == 10000,
+			"siege admission uses actual people independently of food: ratio=%s" % ratio)
+	troop.size = 30000
+	check(sim._siege_assault_manpower(battle) == 30000,
+		"admission uses actual size, not establishment or wall frontage")
+	troop.morale = Combat.ARMY_ROUT_THRESHOLD
+	check(sim._siege_assault_manpower(battle) == 0, "routed army remains excluded")
+	troop.morale = troop.max_morale
+	troop.size = 0
+	check(sim._siege_assault_manpower(battle) == 0, "dead army remains excluded")
+	sim.free()
+
+
+func _test_partial_supply_siege_transition() -> void:
+	for size in [2000, 4000]:
+		for ratio in [0.0, 0.5, 0.8, 1.0]:
+			var state: GameState = Direct.fixture()
+			var troop: Army = Direct.army(state, 0, 2, size)
+			troop.attack = 1
+			troop.defense = 100
+			troop.supply_ratio = ratio
+			troop.starving = ratio < 1.0
+			var sim := Simulation.new()
+			sim.setup(state)
+			sim._start_or_join_siege(troop, state.cities[3], state.edge_of(2, 3))
+			var battle: Battle = sim._siege_battle_of(state.cities[3])
+			check(battle != null and battle.side_b.is_empty(), "ration fixture enters real pure siege")
+			if battle == null:
+				sim.free()
+				continue
+			check(state.campaign_attack_requirement(0, 3, false) == 3000, "fixture uses real guard defense requirement")
+			sim._resolve_battles()
+			check((battle.round_no > 0) == (size >= 3000),
+				"siege admission depends on physical size, not rations: size=%d ratio=%s" % [size,ratio])
+			check(state.cities[3].owner_nation == 1 and battle.side_b.is_empty(), "temporary guard detaches after resolution")
+			if size == 4000 and ratio == 0.5:
+				var rounds := battle.round_no
+				troop.supply_ratio = 0.0
+				sim._resolve_battles()
+				check(battle.round_no == rounds + 1 and not battle.finished,
+					"losing food changes attributes, never converts sufficient people into blockade")
+			sim.free()
 
 
 func _test_reinforcement_promises() -> void:
