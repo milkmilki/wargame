@@ -10022,6 +10022,18 @@ func _campaign_deployment_distance(army: Army, target: int) -> float:
 
 
 func _allocate_coalition_fronts(component: Dictionary) -> bool:
+	# This synchronous command-collection step changes army assignments only;
+	# its road costs, ownership and diplomatic access stay fixed until it returns.
+	var owns_inputs := (
+		_collect_ai_commands and ai_policy_overrides.is_empty()
+		and NativeCompute.begin_path_input_scope(state)
+	)
+	var changed := _allocate_coalition_fronts_from_inputs(component)
+	if owns_inputs: NativeCompute.end_path_input_scope(state)
+	return changed
+
+
+func _allocate_coalition_fronts_from_inputs(component: Dictionary) -> bool:
 	var fronts := _component_fronts(component)
 	var armies: Array[Army] = []
 	if _coalition_armies_by_nation.is_empty():

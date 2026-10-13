@@ -7,6 +7,7 @@ const EXTENSION_PATH := "res://native/runtime_graph/runtime_graph.gdextension"
 static var _override := ""
 static var _graphs: Dictionary = {}
 static var _batches: Dictionary = {}
+static var _path_input_scopes: Dictionary = {}
 static var _trade_graphs: Dictionary = {}
 static var _trade_batches: Dictionary = {}
 static var _profile_enabled := false
@@ -31,6 +32,7 @@ static func clear_caches_for_tests() -> void:
 	_mutex.lock()
 	_graphs.clear()
 	_batches.clear()
+	_path_input_scopes.clear()
 	_trade_graphs.clear()
 	_trade_batches.clear()
 	_mutex.unlock()
@@ -39,6 +41,7 @@ static func invalidate_state(state: GameState) -> void:
 	_mutex.lock()
 	_graphs.erase(state.get_instance_id())
 	_batches.erase(state.get_instance_id())
+	_path_input_scopes.erase(state.get_instance_id())
 	_trade_graphs.erase(state.get_instance_id())
 	_trade_batches.erase(state.get_instance_id())
 	_mutex.unlock()
@@ -73,7 +76,7 @@ static func _record_profile(label: String, stage: String, started: int) -> void:
 static func begin_frozen_batch(state: GameState, nations: Array[int], travel: bool, supply: bool) -> bool:
 	if backend() == "gdscript" or state.atlas_layout.is_empty(): return false
 	# A nested caller must leave ownership of the outer scope with its creator.
-	if not _batch(state).is_empty(): return false
+	if not _batch(state).is_empty() or not _path_input_scope(state).is_empty(): return false
 	var started := _profile_start()
 	var data := _state_graph(state)
 	if data.is_empty(): return false
@@ -99,7 +102,7 @@ static func begin_frozen_batch(state: GameState, nations: Array[int], travel: bo
 		"owners": ownership.owners, "strategic_enabled": _strategic_enabled(data)}
 	batch.make_read_only()
 	_mutex.lock()
-	if _batches.has(state.get_instance_id()):
+	if _batches.has(state.get_instance_id()) or _path_input_scopes.has(state.get_instance_id()):
 		_mutex.unlock()
 		return false
 	_batches[state.get_instance_id()] = batch
@@ -115,6 +118,40 @@ static func end_frozen_batch(state: GameState) -> void:
 static func _batch(state: GameState) -> Dictionary:
 	_mutex.lock()
 	var result: Dictionary = _batches.get(state.get_instance_id(), {})
+	_mutex.unlock()
+	return result
+
+## Main-thread callers may reuse inputs while roads, ownership and diplomacy
+## stay unchanged. Packing is lazy because an existing path field often answers
+## the whole phase. Army edge blockers and goal/exit patches remain per query.
+static func begin_path_input_scope(state: GameState) -> bool:
+	if OS.get_thread_caller_id() != OS.get_main_thread_id(): return false
+	if backend() == "gdscript" or state.atlas_layout.is_empty(): return false
+	if state.get_script().resource_path != "res://scripts/state/game_state.gd": return false
+	var id := state.get_instance_id()
+	_mutex.lock()
+	if _batches.has(id) or _path_input_scopes.has(id):
+		_mutex.unlock()
+		return false
+	_path_input_scopes[id] = {"state": weakref(state), "edge_inputs": {}, "access_profiles": {}}
+	_mutex.unlock()
+	return true
+
+static func end_path_input_scope(state: GameState) -> void:
+	if OS.get_thread_caller_id() != OS.get_main_thread_id(): return
+	_mutex.lock()
+	_path_input_scopes.erase(state.get_instance_id())
+	_mutex.unlock()
+
+static func _path_input_scope(state: GameState) -> Dictionary:
+	# Workers use only their explicit frozen batch, never this mutable lazy cache.
+	if OS.get_thread_caller_id() != OS.get_main_thread_id(): return {}
+	_mutex.lock()
+	var id := state.get_instance_id()
+	var result: Dictionary = _path_input_scopes.get(id, {})
+	if not result.is_empty() and result.state.get_ref() != state:
+		_path_input_scopes.erase(id)
+		result = {}
 	_mutex.unlock()
 	return result
 
@@ -286,8 +323,19 @@ static func supply_field(state: GameState, start: int, nation: int, blocked_edge
 
 static func _path_query(state: GameState, start: int, nation: int, goal: int, exit_city: int, required: int, danger: bool, blocked: Dictionary, blocked_edges: Dictionary, origins: Array[int], supply: bool, logistics: bool) -> Dictionary:
 	var started := _profile_start()
-	var batch := _batch(state)
-	var data: Dictionary = batch.data if not batch.is_empty() else _state_graph(state)
+	# One registry lookup also serves ordinary queries; thread checks and lazy
+	# input-cache work are needed only when this state has an explicit scope.
+	_mutex.lock()
+	var id := state.get_instance_id()
+	var batch: Dictionary = _batches.get(id, {})
+	var scope: Dictionary = {}
+	if batch.is_empty() and _path_input_scopes.has(id) and OS.get_thread_caller_id() == OS.get_main_thread_id():
+		scope = _path_input_scopes[id]
+	_mutex.unlock()
+	var data: Dictionary = batch.data if not batch.is_empty() else (_state_graph(state) if scope.is_empty() else scope.get("data", {}))
+	if not scope.is_empty() and data.is_empty():
+		data = _state_graph(state)
+		scope["data"] = data
 	if data.is_empty(): return {}
 	var costs := PackedFloat64Array()
 	var enabled := PackedByteArray()
@@ -305,6 +353,31 @@ static func _path_query(state: GameState, start: int, nation: int, goal: int, ex
 				if data.edge_indices.has(key): enabled[int(data.edge_indices[key])] = 0
 		accessible = batch.access_profiles[profile_key]
 		live_controls = batch.controls
+	elif not scope.is_empty():
+		var mode := 4 if supply else (2 if danger else 1)
+		var packed: Dictionary = scope.edge_inputs.get(mode, {})
+		if packed.is_empty():
+			packed = _edge_inputs(data, mode)
+			scope.edge_inputs[mode] = packed
+		costs = packed.supply if supply else (packed.danger if danger else packed.path)
+		enabled = packed.enabled
+		live_controls = packed.controls
+		if not blocked_edges.is_empty():
+			enabled = enabled.duplicate()
+		for key in blocked_edges:
+			if data.edge_indices.has(key): enabled[int(data.edge_indices[key])] = 0
+		if scope.access_profiles.has(profile_key):
+			accessible = scope.access_profiles[profile_key]
+		elif nation < 0:
+			accessible.resize(data.edges.size())
+			accessible.fill(1)
+		else:
+			var ownership: Dictionary = scope.get("ownership", {})
+			if ownership.is_empty():
+				ownership = _ownership_inputs(state, data)
+				scope["ownership"] = ownership
+			accessible = _base_access(state, data, nation, logistics, ownership, live_controls)
+		scope.access_profiles[profile_key] = accessible
 	else:
 		# Standalone searches read live values: direct Edge/owner edits remain
 		# observable without relying on the public revision update helpers.
