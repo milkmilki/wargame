@@ -18,6 +18,14 @@ func _initialize() -> void:
 		_run_error_probe(mode)
 		return
 	check(NativeCompute.require_native(), "native extension loads")
+	check(ClassDB.class_exists("NativeAtlasDisplay"), "independent display kernel registered")
+	if ClassDB.class_exists("NativeAtlasDisplay"):
+		var display: RefCounted=ClassDB.instantiate("NativeAtlasDisplay")
+		check(display.call("api_version")==1,"display API version 1")
+		for method in ["paint_labels","edge_field","label_field","label_rays","fit_label","label_tiles","region_tiles"]:
+			check(display.has_method(method),"display method "+method)
+		var painted: Dictionary=display.call("paint_labels",{"w":2,"h":2,"tile":2,"provinces":PackedInt32Array([0,1,-2,0]),"ownership":PackedInt32Array([3,4]),"lines":[],"weak":PackedByteArray([0,0,0,0])})
+		check(painted.get("labels")==PackedInt32Array([3,4,-2,3]),"release display kernel paints actual RF owner inputs")
 	check(ClassDB.class_exists("NativeGraphSnapshot"), "native snapshot registered")
 	if ClassDB.class_exists("NativeGraphSnapshot"):
 		var graph: RefCounted = ClassDB.instantiate("NativeGraphSnapshot")

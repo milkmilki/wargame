@@ -77,15 +77,21 @@ func set_view(rect: Rect2,detail: float,accepted: Array = []) -> void:
 	var ids := index.query(rect.grow(24./detail)); var key := [ids,detail,hash(accepted)]
 	if last_key==key: return
 	var start := Time.get_ticks_usec()
-	last_key = key; var permitted := {}
-	for mark in accepted: permitted[mark.index] = true
+	last_key = key
+	var result := prepare_instances(data,ids,detail,accepted)
+	apply_instances(result)
+	max_update_usec = maxi(max_update_usec,Time.get_ticks_usec()-start)
+
+static func prepare_instances(source: Dictionary,ids: Array,detail: float,accepted: Array = []) -> Dictionary:
+	var permitted := {}
+	for mark in accepted: permitted[mark.index]=true
 	var jobs: Array = []
 	for id in ids:
 		if not accepted.is_empty() and not permitted.has(id): continue
-		var city: Dictionary = data.cities[id]; var owner := int(data.ownership[city.region]); var kind := City.kind_for(city,owner,data.nations)
-		jobs.append({"id":id,"kind":kind,"owner":owner,"point":Vector2(data.mesh.x[city.cell],data.mesh.y[city.cell])*detail})
+		var city: Dictionary = source.cities[id]; var owner := int(source.ownership[city.region]); var kind := City.kind_for(city,owner,source.nations)
+		jobs.append({"id":id,"kind":kind,"owner":owner,"point":Vector2(source.mesh.x[city.cell],source.mesh.y[city.cell])*detail})
 	jobs.sort_custom(func(a,b): return a.id<b.id if a.kind==b.kind else a.kind>b.kind)
-	hit_boxes.clear()
+	var hit_boxes: Array = []
 	var s := sqrt(2048./1300)*pow(maxf(1,detail),.5); var occupied := {}; var counts := [0,0,0,0,0]
 	var buffers: Array = [PackedFloat32Array(),PackedFloat32Array(),PackedFloat32Array(),PackedFloat32Array(),PackedFloat32Array()]
 	for job in jobs:
@@ -104,10 +110,18 @@ func set_view(rect: Rect2,detail: float,accepted: Array = []) -> void:
 			occupied[cell].append(box)
 		var color := Color8(150,60,50)
 		if job.owner>=0:
-			var rgb: Array = data.nations[job.owner].color; color = Color8(rgb[0],rgb[1],rgb[2])
+			var rgb: Array = source.nations[job.owner].color; color = Color8(rgb[0],rgb[1],rgb[2])
 		# Custom alpha carries the stable city id; glyph opacity remains in its
 		# vertex colors. Hover changes shader uniforms, never instance buffers.
 		buffers[job.kind].append_array(PackedFloat32Array([s,0.,0.,job.point.x,0.,s,0.,job.point.y,color.r,color.g,color.b,float(job.id)])); counts[job.kind] += 1
+	for kind in range(5):
+		var capacity := 2048 if kind==2 else 128
+		buffers[kind].resize(maxi(capacity,ceili(counts[kind]/128.)*128)*12)
+	return {"buffers":buffers,"counts":counts,"hit_boxes":hit_boxes,"detail":detail,"ids":ids}
+
+func apply_instances(result: Dictionary) -> void:
+	hit_boxes=result.hit_boxes
+	var buffers: Array=result.buffers.duplicate(); var counts: Array=result.counts; var detail: float=result.detail
 	visible_count = 0
 	for kind in range(5):
 		var multi: MultiMesh = layers[kind].mesh
@@ -119,5 +133,4 @@ func set_view(rect: Rect2,detail: float,accepted: Array = []) -> void:
 		for i in range(3):
 			layers[kind].nodes[i].position.x = [-2048.,0.,2048.][i]*detail
 			layers[kind].nodes[i].queue_redraw()
-	max_update_usec = maxi(max_update_usec,Time.get_ticks_usec()-start)
 	publication_version+=1

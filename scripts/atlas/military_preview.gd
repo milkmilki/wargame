@@ -495,14 +495,20 @@ func political_display_ready() -> void:
 func current_political_borders() -> Array:
 	return front_layer.normal_borders if is_instance_valid(front_layer) and not front_layer.is_queued_for_deletion() else display.lines
 
+var political_front_key: Array = []
+var political_front_cache := {}
 func political_front_snapshot() -> Dictionary:
 	var source: GameState = overlay.state if historical_view and overlay!=null else state
 	var roles := {}
 	if source==null: return {"roles":roles,"signature":0}
+	var key := WarFronts.state_key(source)
+	if key==political_front_key: return political_front_cache
 	for left in range(source.nations.size()):
 		for right in range(left+1,source.nations.size()):
 			if source.nations[left].alive and source.nations[right].alive and source.is_enemy(left,right): roles["%d:%d"%[left,right]] = WarFronts.defender_of(source,left,right)
-	return {"roles":roles,"signature":hash([source.get_instance_id(),roles])}
+	political_front_key=key
+	political_front_cache={"roles":roles,"signature":hash([source.get_instance_id(),roles])}
+	return political_front_cache
 
 func select_player_army() -> void:
 	if state==null: return

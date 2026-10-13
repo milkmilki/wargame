@@ -3470,7 +3470,10 @@ func _drain_siege_food() -> void:
 		state.change_city_food_storage(city.id, -SIEGE_CITY_FOOD_PER_DAY)
 		if battle.side_b_defends_city:
 			for defender in battle.side_b:
-				if defender.size <= 0 or defender.is_city_garrison:
+				if (
+					defender.size <= 0 or defender.is_city_garrison
+					or not _siege_defender_uses_local_food(defender, battle)
+				):
 					continue
 				# Isolated field troops draw their establishment ration locally.
 				# Virtual city defense keeps the existing fixed siege clock above.
@@ -3482,7 +3485,7 @@ func _drain_siege_food() -> void:
 				state.change_city_food_storage(city.id, -ration)
 			var has_food := city.food_storage > 0
 			for defender in battle.side_b:
-				if defender.size <= 0:
+				if defender.size <= 0 or not _siege_defender_uses_local_food(defender, battle):
 					continue
 				defender.starving = not has_food
 				defender.supply_ratio = 1.0 if has_food else 0.0
@@ -3677,6 +3680,15 @@ func _local_battle_reinforcement_target(
 	return battle.edge.city_b
 
 
+func _siege_defender_uses_local_food(army: Army, battle: Battle) -> bool:
+	# Arrivals retain location_city as their rear supply anchor, even after
+	# current_city_node() reaches the battle city. Side membership alone cannot
+	# turn those field troops into isolated city residents.
+	return army.is_city_garrison or (
+		not army.on_edge and army.location_city == battle.city.id
+	)
+
+
 func _siege_garrison_battle_of(army: Army) -> Battle:
 	if army.state != Army.State.FIGHTING or army.battle_id == -1:
 		return null
@@ -3684,11 +3696,11 @@ func _siege_garrison_battle_of(army: Army) -> Battle:
 	if battle == null:
 		# 允许本日后续阶段新建的战斗走原始查询，避免缓存改变动态语义。
 		battle = state.battle_by_id(army.battle_id)
-	if battle == null or battle.finished or battle.kind != Battle.Kind.SIEGE:
+	if battle == null or battle.finished or battle.kind != Battle.Kind.SIEGE or battle.city == null:
 		return null
 	if not battle.side_b_defends_city or not battle.side_b.has(army):
 		return null
-	return battle
+	return battle if _siege_defender_uses_local_food(army, battle) else null
 
 
 ## 每日推进战役中 HOLDING 军队的地形适应。

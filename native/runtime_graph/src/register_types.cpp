@@ -1,11 +1,13 @@
 #include "register_types.hpp"
 #include "runtime_graph.hpp"
+#include "atlas_display.hpp"
 
 #include <godot_cpp/godot.hpp>
 
 void initialize_runtime_graph(godot::ModuleInitializationLevel level) {
     if (level == godot::MODULE_INITIALIZATION_LEVEL_SCENE) {
         godot::ClassDB::register_class<godot::NativeGraphSnapshot>();
+        godot::ClassDB::register_class<godot::NativeAtlasDisplay>();
     }
 }
 

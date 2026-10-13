@@ -16,7 +16,7 @@ env.Append(CPPPATH=["src"])
 objects = [
     env.SharedObject(".cache/obj/" + env["target"] + "/" + source,
                      "src/" + source + ".cpp")
-    for source in ["register_types", "runtime_graph"]
+    for source in ["register_types", "runtime_graph", "atlas_display"]
 ]
 library = env.SharedLibrary("bin/runtime_graph" + env["suffix"] + env["SHLIBSUFFIX"], objects)
 env.NoCache(library)

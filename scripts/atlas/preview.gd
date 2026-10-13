@@ -35,6 +35,13 @@ var prepared_political_texture: ImageTexture
 var political_id_texture: ImageTexture
 var political_pending := false
 var political_revision := 0
+var political_computing := false
+var political_cache := {}
+var political_buffers: Array[Texture2DArray] = []
+var political_buffer_tiles: Array = []
+var political_buffer_index := 0
+var political_upload_count := 0
+var political_content_revision := 0
 var weak_mask := PackedByteArray()
 const REFERENCE := "res://.dbg/atlas-native-reference/"
 const SYMBOL_PAD := 192
@@ -320,6 +327,8 @@ func load_reference(seed_value: int) -> void:
 
 func build_view() -> void:
 	view_ready = false
+	render_scheduler.invalidate("political"); render_scheduler.invalidate("political-compute")
+	political_revision+=1; political_computing=false; political_pending=false; political_cache={}
 	var begin := Time.get_ticks_msec()
 	var prepared_display := initial_display_plan; initial_display_plan={}
 	if high_performance_renderer and prepared_display.is_empty():
@@ -329,12 +338,26 @@ func build_view() -> void:
 		if error!=OK: printerr("ATLAS_DISPLAY_WORKER_FAIL ",error); return
 		while worker.is_alive(): await get_tree().process_frame
 		prepared_display=worker.wait_to_finish()
+	if high_performance_renderer and not prepared_display.is_empty():
+		var geo: Dictionary=prepared_display.geometry
+		var input := political_input()
+		# Old development map templates remain usable; derived display cache is
+		# rebuilt in the worker and is never part of the simulation snapshot.
+		var worker := Thread.new(); generation_worker=worker
+		var error := worker.start(func(): return PoliticalDisplay.initialize(input,geo))
+		if error!=OK: printerr("ATLAS_OWNER_CACHE_WORKER_FAIL ",error); return
+		while worker.is_alive(): await get_tree().process_frame
+		political_cache=worker.wait_to_finish()
 	startup_profile.display_prepare_ms=Time.get_ticks_msec()-begin
 	startup_display_result=prepared_display
 	var upload_begin := Time.get_ticks_msec()
 	symbol_cache_zoom = -1.
 	navigation_in_progress = false; navigation_timer.stop()
-	mode_cache.clear(); prepared_political_texture = null; political_pending = false; render_scheduler.invalidate("political")
+	mode_cache.clear(); prepared_political_texture = null; political_pending = false; political_computing=false
+	render_scheduler.invalidate("political"); render_scheduler.invalidate("political-compute")
+	political_revision+=1; political_content_revision+=1
+	political_buffers.clear(); political_buffer_tiles.clear(); political_buffer_index=0
+	text_layer.prepared_marker_plan={}
 	render_scheduler.invalidate("geometry"); render_scheduler.geometry_pending.clear(); render_scheduler.geometry_users.clear()
 	for key in render_scheduler.cache.keys():
 		if key.begins_with("geometry:"): render_scheduler.forget(key)
@@ -372,6 +395,16 @@ func build_view() -> void:
 		province_edge = Wash.edge_field(province_labels,2048,1024)
 		rebuild_political_labels()
 	political_id_texture=Wash.texture(prepared_display.geometry.political_ids if not prepared_display.is_empty() and prepared_display.geometry.has("political_ids") else Wash.id_data(political_labels,2048,1024))
+	if high_performance_renderer and not political_cache.is_empty():
+		var images: Array[Image] = []
+		for bytes in political_cache.tiles: images.append(Image.create_from_data(128,128,false,Image.FORMAT_RF,bytes))
+		for i in range(2):
+			var buffer := Texture2DArray.new()
+			if buffer.create_from_images(images)!=OK:
+				printerr("ATLAS_OWNER_BUFFER_FAIL"); return
+			political_buffers.append(buffer)
+			political_buffer_tiles.append(political_cache.tiles.duplicate())
+		render_scheduler.remember("political-buffers",null,128*128*4*128*2,true)
 	if symbol_view.get_parent(): remove_child(symbol_view); symbol_view.queue_free()
 	else: symbol_view.free()
 	if forest_view.get_parent(): remove_child(forest_view); forest_view.queue_free()
@@ -429,6 +462,8 @@ func build_view() -> void:
 				if copy.wash.material: symbol_tiles.bind_world_material(copy.wash.material))
 		symbol_tiles.setup(data,display,render_scheduler,symbol_view)
 		text_layer.high_performance = true; text_layer.static_world=true; text_layer.scheduler = render_scheduler
+		text_layer.ownership_version=political_content_revision
+		text_layer.geography_version=political_content_revision
 	fit_map(); update_mode(); refresh_symbols()
 	await get_tree().process_frame
 	if high_performance_renderer and not await await_render_ready(60000): printerr("ATLAS_INITIAL_RENDER_TIMEOUT")
@@ -458,6 +493,7 @@ func update_mode() -> void:
 		for r in range(data.regions.count): colors.append(Color.from_hsv(fmod(r*.61803398875,1),.36,.76))
 	labels = political_labels if mode in [0,1] else province_labels
 	var color_texture := prepared_political_texture if mode in [0,1] and prepared_political_texture!=null else Wash.color_texture(labels,2048,1024,colors)
+	if high_performance_renderer and mode in [0,1]: prepared_political_texture=color_texture
 	var material := ShaderMaterial.new(); material.shader = load("res://assets/atlas/wash.gdshader")
 	material.set_shader_parameter("edge_field",political_edge if mode in [0,1] else province_edge)
 	material.set_shader_parameter("symbols",symbol_view.get_texture())
@@ -469,6 +505,9 @@ func update_mode() -> void:
 	if colors.is_empty(): palette_values.fill(-2)
 	material.set_shader_parameter("palette",Wash.color_texture(palette_values,palette_values.size(),1,colors))
 	material.set_shader_parameter("owner_ids",political_id_texture)
+	if mode==0 and not political_buffers.is_empty():
+		material.set_shader_parameter("owner_tiles",political_buffers[political_buffer_index])
+		material.set_shader_parameter("use_owner_tiles",true)
 	material.set_shader_parameter("use_owner_palette",mode==0)
 	material.set_shader_parameter("world_fields",field_textures.field)
 	material.set_shader_parameter("symbol_origin",symbol_cache_position+Vector2.ONE*SYMBOL_PAD)
@@ -521,39 +560,79 @@ func refresh_ownership() -> void:
 	political_id_texture=Wash.texture(Wash.id_data(political_labels,2048,1024))
 	refit_names(); update_mode()
 
-func prepare_political() -> void:
-	political_pending = true; political_revision += 1; var revision := political_revision
-	render_scheduler.invalidate("political")
+func political_input() -> Dictionary:
 	var ownership := PackedInt32Array(data.ownership)
-	var front_snapshot := political_front_snapshot()
-	var input := {"chains":chains,"ownership":ownership,"mesh":data.mesh,"raster":raster,"region_of":PackedInt32Array(data.regions.of),"provinces":provinces,"weak":weak_mask,"fronts":front_snapshot,"data":{"mesh":data.mesh,"regions":data.regions,"ownership":ownership,"nations":data.nations.duplicate(true)}}
-	render_scheduler.submit("political",func(): return PoliticalDisplay.calculate(input),func(result):
-		var uploaded := {}
-		var geometry := {}; var geometry_bytes := {}
-		for kind in result.stroke_plans:
-			var name_value: String = kind; geometry[name_value] = []; geometry_bytes[name_value] = 0
-			for row in result.stroke_plans[kind]:
-				var buffer: Dictionary = row
-				geometry_bytes[name_value] += buffer.vertices.size()*96+buffer.indices.size()*8
-				render_scheduler.enqueue(func(): geometry[name_value].append({"mesh":Ink.Persistent.resource(buffer),"box":buffer.box}),0,"political")
-		for key in result.segments:
-			var buffer: Dictionary = result.segments[key]; var name_value: String = key
-			render_scheduler.enqueue(func(): uploaded[name_value] = ZoomGeometry.upload(buffer),0,"political")
-		render_scheduler.enqueue(func(): uploaded.edge = Wash.texture(result.edge),0,"political")
-		render_scheduler.enqueue(func(): uploaded.color = Wash.texture(result.color),0,"political")
-		render_scheduler.enqueue(func(): uploaded.ids = Wash.texture(result.ids),0,"political")
-		render_scheduler.enqueue(func():
-			if revision!=political_revision: return
-			if political_front_snapshot().signature!=front_snapshot.signature: prepare_political(); return
-			for kind in geometry:
-				var key := "geometry:%d:%d"%[render_scheduler.versions.get("geometry",0),result.stroke_keys[kind]]
-				render_scheduler.remember(key,geometry[kind],geometry_bytes[kind],true)
-			display.lines = result.lines; political_index = result.index; political_labels = result.labels
-			political_id_texture=uploaded.ids
-			political_segments = uploaded.duplicate(); political_segments.erase("edge"); political_segments.erase("color"); political_segments.erase("ids")
-			political_edge = uploaded.edge; prepared_political_texture = uploaded.color; text_layer.labels = result.names
-			mode_cache.erase(0); mode_cache.erase(1); political_pending = false
-			political_display_ready(); update_mode(),0,"political"),-1)
+	return {"chains":chains,"ownership":ownership,"mesh":data.mesh,"raster":raster,"region_of":PackedInt32Array(data.regions.of),"provinces":provinces,"weak":weak_mask,"fronts":political_front_snapshot(),"data":{"mesh":data.mesh,"regions":data.regions,"ownership":ownership,"nations":data.nations.duplicate(true),"cities":data.cities.duplicate(true)},"cache":political_cache}
+
+func prepare_political() -> void:
+	political_pending=true; political_revision+=1
+	# Cancels queued uploads, while the current pure CPU job can finish and
+	# schedule the newest snapshot. At most one computation is in flight.
+	render_scheduler.invalidate("political")
+	if not political_computing: start_political()
+
+func start_political() -> void:
+	political_computing=true
+	var revision := political_revision
+	var input := political_input()
+	render_scheduler.submit("political-compute",func(): return PoliticalDisplay.calculate(input),func(result):
+		political_computing=false
+		if revision!=political_revision: start_political(); return
+		publish_political(result,input.fronts.signature,revision),-1,"political-cpu")
+
+func publish_political(result: Dictionary,front_signature: int,revision: int) -> void:
+	var uploaded := {}; var geometry := {}; var geometry_bytes := {}
+	var steps: Array[Callable] = []
+	var staging := 1-political_buffer_index
+	# A partially cancelled upload is tracked per buffer. Compare against the
+	# complete target, including carry-over tiles from the previous swap.
+	if not political_buffers.is_empty():
+		for id in range(result.cache.tiles.size()):
+			if political_buffer_tiles[staging][id]==result.cache.tiles[id]: continue
+			var tile_id: int=id; var bytes: PackedByteArray=result.cache.tiles[id]
+			steps.append(func():
+				political_buffers[staging].update_layer(Image.create_from_data(128,128,false,Image.FORMAT_RF,bytes),tile_id)
+				political_buffer_tiles[staging][tile_id]=bytes; political_upload_count+=1)
+	for kind in result.stroke_plans:
+		var name_value: String=kind; geometry[name_value]=[]; geometry_bytes[name_value]=0
+		for row in result.stroke_plans[kind]:
+			var buffer: Dictionary=row
+			geometry_bytes[name_value]+=buffer.vertices.size()*96+buffer.indices.size()*8
+			steps.append(func(): geometry[name_value].append({"mesh":Ink.Persistent.resource(buffer),"box":buffer.box}))
+	for key in result.segments:
+		var buffer: Dictionary=result.segments[key]; var name_value: String=key
+		steps.append(func(): uploaded[name_value]=ZoomGeometry.upload(buffer))
+	if not result.edge.is_empty(): steps.append(func(): uploaded.edge=Wash.texture(result.edge))
+	render_scheduler.enqueue_batch(steps,func():
+		if revision!=political_revision: return
+		if political_front_snapshot().signature!=front_signature or PackedInt32Array(data.ownership)!=result.cache.ownership:
+			prepare_political(); return
+		for kind in geometry:
+			var key := "geometry:%d:%d"%[render_scheduler.versions.get("geometry",0),result.stroke_keys[kind]]
+			render_scheduler.remember(key,geometry[kind],geometry_bytes[kind],true)
+		display.lines=result.lines; political_index=result.index; political_labels=result.labels; political_cache=result.cache
+		if not political_buffers.is_empty(): political_buffer_index=staging
+		if not result.segments.is_empty():
+			political_segments=uploaded.duplicate(); political_segments.erase("edge")
+		if uploaded.has("edge"): political_edge=uploaded.edge
+		text_layer.labels=result.names; text_layer.prepared_marker_plan=result.marker_plan
+		if result.content_changed: political_content_revision+=1
+		text_layer.ownership_version=political_content_revision
+		refresh_political_materials(); political_pending=false
+		political_display_ready(); update_mode(),0,"political","political-map")
+
+func refresh_political_materials() -> void:
+	var colors := political_colors()
+	var ids := PackedInt32Array()
+	for id in range(maxi(1,colors.size())): ids.append(id if not colors.is_empty() else -2)
+	var palette := Wash.color_texture(ids,ids.size(),1,colors)
+	for mode in [0,1]:
+		if not mode_cache.has(mode): continue
+		var material: ShaderMaterial=mode_cache[mode].material
+		material.set_shader_parameter("edge_field",political_edge)
+		material.set_shader_parameter("palette",palette)
+		if not political_buffers.is_empty(): material.set_shader_parameter("owner_tiles",political_buffers[political_buffer_index])
+		for key in political_segments: material.set_shader_parameter(key,political_segments[key])
 
 func political_front_snapshot() -> Dictionary:
 	return {"roles":{},"signature":0}

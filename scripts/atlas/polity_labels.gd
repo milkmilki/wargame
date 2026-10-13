@@ -137,7 +137,7 @@ static func path_of(rays: Dictionary,f: Dictionary) -> Array:
 		var u := t/8.0; out.append((1-u)*(1-u)*x0+2*u*(1-u)*px+u*u*x1); out.append((1-u)*(1-u)*y0+2*u*(1-u)*py+u*u*y1)
 	out.append(cx); out.append(cy); return out
 
-static func fit_all(data: Dictionary,f: Dictionary) -> Array:
+static func fit_all(data: Dictionary,f: Dictionary,selected: PackedInt32Array = PackedInt32Array(),native: RefCounted = null) -> Array:
 	var n: int = data.nations.size(); var count := PackedInt32Array(); count.resize(n)
 	for owner in data.ownership:
 		if owner>=0: count[owner] += 1
@@ -145,20 +145,24 @@ static func fit_all(data: Dictionary,f: Dictionary) -> Array:
 	var best_d := PackedFloat32Array(); best_d.resize(n)
 	var boxes: Array = []
 	for _p in range(n): boxes.append([f.gw,f.gh,-1,-1])
-	for i in range(f.owner.size()):
-		var o: int = f.owner[i]
-		if o<0: continue
-		if f.dist[i]>best_d[o]: best_d[o] = f.dist[i]; best[o] = i
-		var x := i%int(f.gw); var y := i/int(f.gw)
-		boxes[o][0] = mini(boxes[o][0],x); boxes[o][1] = mini(boxes[o][1],y); boxes[o][2] = maxi(boxes[o][2],x); boxes[o][3] = maxi(boxes[o][3],y)
+	if f.has("best") and f.has("boxes"):
+		for p in range(mini(n,f.best.size())): best[p]=f.best[p]; boxes[p]=f.boxes[p]
+	else:
+		for i in range(f.owner.size()):
+			var o: int = f.owner[i]
+			if o<0: continue
+			if f.dist[i]>best_d[o]: best_d[o] = f.dist[i]; best[o] = i
+			var x := i%int(f.gw); var y := i/int(f.gw)
+			boxes[o][0] = mini(boxes[o][0],x); boxes[o][1] = mini(boxes[o][1],y); boxes[o][2] = maxi(boxes[o][2],x); boxes[o][3] = maxi(boxes[o][3],y)
 	var out: Array = []
 	for p in range(n):
+		if not selected.is_empty() and not selected.has(p): continue
 		if count[p]<=0 or best[p]<0: continue
 		var text: String = data.nations[p].name; var max_css := clampf(9+1.75*sqrt(count[p]),12,26); var world_per_css := 2048.0/1300; var sizes: Array = []
 		var c := max_css
 		while c>=5: sizes.append(c*world_per_css); c *= .92
-		var rays := cast_rays(f,p,best[p],max_css*world_per_css*14)
-		var fit := fit_both(rays,sizes,text)
+		var rays: Dictionary = cast_rays(f,p,best[p],max_css*world_per_css*14) if native==null else native.call("label_rays",f,p,best[p],max_css*world_per_css*14,[])
+		var fit: Dictionary = fit_both(rays,sizes,text) if native==null else native.call("fit_label",rays,sizes,text.length())
 		if fit.is_empty(): fit = longest(rays,sizes[-1])
 		var label := {"polity":p,"text":text,"full":text,"path":path_of(rays,fit),"size":fit.size,"vertical":fit.vertical,"anchor":[rays.px,rays.py],"regions":count[p]}
 		var seat: int = data.regions.seat[data.nations[p].seat]; var hole: Array = [data.mesh.x[seat],data.mesh.y[seat]-4,12]
@@ -170,7 +174,8 @@ static func fit_all(data: Dictionary,f: Dictionary) -> Array:
 				var d := depth_at(f,i,hole)
 				if d>bd: bd = d; start = i
 		if start>=0:
-			var rays2 := cast_rays(f,p,start,max_css*world_per_css*14,hole); var fit2 := fit_both(rays2,sizes,text)
+			var rays2: Dictionary = cast_rays(f,p,start,max_css*world_per_css*14,hole) if native==null else native.call("label_rays",f,p,start,max_css*world_per_css*14,hole)
+			var fit2: Dictionary = fit_both(rays2,sizes,text) if native==null else native.call("fit_label",rays2,sizes,text.length())
 			if fit2.is_empty(): fit2 = longest(rays2,sizes[-1])
 			var path := path_of(rays2,fit2); var dx: float = rays2.px-rays.px; var shift: float = -f.gw*G*floor(dx/(f.gw*G)+.5)
 			for i in range(0,path.size(),2): path[i] += shift

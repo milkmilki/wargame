@@ -36,6 +36,36 @@ after monthly settlement; creation, transfer and annexation initialize it
 immediately. R/C/V and the 45000/90000 task thresholds remain headcounts, not
 funding-adjusted strength. There is no unpaid sortie gate.
 
+## City Battle Supply Anchors (2026-10-13)
+
+The city-defense side identifies allegiance, not local ration ownership.
+Relief formations retain their rear `location_city` supply anchor after
+`move_to`/`move_progress` report arrival at the battlefield. These formations
+use the ordinary logistics graph and actual warehouse withdrawals; entering
+the defending side must not replace that result with the target city's stock.
+An army on a road likewise keeps ordinary supply. A closed rear route still
+causes a real shortage.
+
+Virtual city garrisons and formations already stationed in the besieged city
+keep local isolation. Their established ration costs and the existing fixed
+city siege clock remain unchanged. One shared predicate now governs the daily
+supply-plan exception, worker preparation, shortage-pressure exception and
+the siege clock's local withdrawals/status updates, preventing both a later
+false-zero overwrite and duplicate field-formation food charges.
+
+`field_battle_supply` reproduces the old failure before the fix and passes
+129 checks afterward: arrived/approaching relief, empty/nonempty city stocks,
+exact capital/local withdrawals, real combat attributes, blocked roads and
+sync/frame byte equivalence. The user's seed-1 Eurasia world was also rebuilt
+to the screenshot's day-276 battle (7,494 versus 12,487 soldiers). Applying the
+fixed supply settlement to that same state feeds both Lan2 relief formations
+from the real capital stock: supply becomes 100%, effective fire 136,059.620
+and average defense 10.917, while the target city retains zero food. This
+verification does not rewind earlier casualties or predict an unchanged war
+outcome when starting a fresh simulation with the fix.
+The final full regression run passed all 163 entries, including the real
+reverse-war annexation chain and the 365-day sync/frame equivalence scenario.
+
 ## Food Qualification And Cash Reporting
 
 ResourceForecastRules returns food_feasible, food_growth_allowed and

@@ -17,6 +17,8 @@ uniform sampler2D segments2 : filter_nearest;
 uniform sampler2D segment_ends : filter_nearest;
 uniform sampler2D palette : filter_nearest;
 uniform sampler2D owner_ids : filter_nearest, repeat_enable;
+uniform sampler2DArray owner_tiles : filter_nearest, repeat_disable;
+uniform bool use_owner_tiles=false;
 uniform bool use_owner_palette=false;
 uniform sampler2D world_fields : filter_linear,repeat_enable;
 uniform vec4 segment_params=vec4(-4.,-4.,4.,4.);
@@ -25,7 +27,13 @@ vec4 flat_sample(sampler2D tex,int i) {
 }
 vec4 territory_color(sampler2D base_texture,vec2 uv) {
 	if(!use_owner_palette)return texture(base_texture,uv);
-	int owner=int(round(texture(owner_ids,uv).r));
+	int owner;
+	if(use_owner_tiles) {
+		vec2 pixel=floor(fract(uv)*map_size);
+		vec2 block=floor(pixel/128.);
+		vec2 local=(mod(pixel,128.)+.5)/128.;
+		owner=int(round(texture(owner_tiles,vec3(local,block.y*16.+block.x)).r));
+	} else owner=int(round(texture(owner_ids,uv).r));
 	return owner>=0?flat_sample(palette,owner):vec4(0.);
 }
 int nearest_side(vec2 p) {

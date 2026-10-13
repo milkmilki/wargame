@@ -4,6 +4,8 @@ const VisibleLines = preload("res://scripts/atlas/visible_lines.gd")
 const Persistent = preload("res://scripts/atlas/persistent_strokes.gd")
 const BattleBar = preload("res://scripts/atlas/battle_strength_bar.gd")
 const BattleInformation = preload("res://scripts/atlas/battle_information.gd")
+const MarkerState = preload("res://scripts/atlas/military_marker_state.gd")
+var marker_state := MarkerState.new()
 var high_performance := false
 var persistent_layers: Array = []
 var persistent_key: Array = []
@@ -50,16 +52,45 @@ func prepare_static() -> void:
 	static_meshes = [Strokes.build(VisibleLines.select(line_index[0],cached_world),.75/value,.55/value,Geometry2D.END_BUTT)]
 	static_meshes.append(Strokes.build(VisibleLines.select(line_index[1],cached_world),.45/value,.55/value,Geometry2D.END_BUTT) if value>=1.5 else ArrayMesh.new())
 class Markers extends Node2D:
-	var host: Node2D
-	func _draw() -> void: host.draw_markers(self)
+	var mesh: MultiMesh
+	func _draw() -> void:
+		if mesh!=null and mesh.visible_instance_count>0: draw_multimesh(mesh,null)
+class Inspection extends Node2D:
+	func _draw() -> void: draw_arc(Vector2.ZERO,8.,0.,TAU,24,Color(1.,.85,.2),2.,true)
+class CombatMarker extends Node2D:
+	var row := {}
+	func _draw() -> void:
+		draw_line(Vector2(-5,-5),Vector2(5,5),Color(.8,.08,.04),3.,true)
+		draw_line(Vector2(-5,5),Vector2(5,-5),Color(.8,.08,.04),3.,true)
+		if not row.is_empty(): BattleBar.draw(self,Vector2.ZERO,1.,row)
 var markers: Node2D
+var battle_markers: Node2D
+var selection_marker: Node2D
+var army_mesh: MultiMesh
+var army_build_count := 0
+var battle_build_count := 0
+var army_stamp := -1
+var battle_stamp := -1
+var army_rows: Array = []
+var combat_rows: Array = []
+var army_coverage := Rect2()
+var battle_nodes := {}
+var inspection_nodes: Array = []
+var marker_positions := {}
+var army_buffer := PackedFloat32Array()
 var marker_stamp := -1
 var marker_redraw_count := 0
 func _ready() -> void:
-	markers = Markers.new(); markers.host = self
+	markers = Markers.new()
+	army_mesh = MultiMesh.new(); army_mesh.transform_format = MultiMesh.TRANSFORM_2D; army_mesh.use_colors = true
+	var quad := QuadMesh.new(); quad.size = Vector2.ONE*12.; army_mesh.mesh = quad; army_mesh.visible_instance_count = 0
+	markers.mesh = army_mesh
+	var ink := ShaderMaterial.new(); ink.shader = preload("res://assets/atlas/army_instances.gdshader"); markers.material = ink
 	# Absolute map layer above fronts (8), labels and trade hubs (9).
 	# Keep camera transforms inherited; only drawing order is independent.
 	markers.z_as_relative = false; markers.z_index = 10; add_child(markers)
+	battle_markers = Node2D.new(); battle_markers.z_as_relative = false; battle_markers.z_index = 11; add_child(battle_markers)
+	selection_marker = Node2D.new(); selection_marker.z_as_relative = false; selection_marker.z_index = 12; add_child(selection_marker)
 func _process(_delta: float) -> void:
 	if markers==null or state==null: return
 	# Army motion advances with the simulation. Keep the recorded CanvasItem
@@ -70,9 +101,57 @@ func _process(_delta: float) -> void:
 	var battle_keys: Array = []
 	for battle in state.battles:
 		battle_keys.append([battle.id,battle.finished,battle.traffic_node_id,battle.city.id if battle.city!=null else -1,battle.edge.get_instance_id() if battle.edge!=null else 0,battle.contact_dist_a,battle.contact_dist_b,battle_strength(battle).counts,battle.kind,battle.side_b_defends_city])
-	var stamp := hash([state.get_instance_id(),state.road_network_revision,selection,global_scale.x,army_keys,battle_keys,state.nations.map(func(nation): return nation.color)])
-	if stamp==marker_stamp: return
-	marker_stamp=stamp; marker_redraw_count+=1; markers.queue_redraw()
+	var color_key := state.nations.map(func(nation): return nation.color)
+	var stamp := hash([state.get_instance_id(),state.road_network_revision,selection,global_scale.x,army_keys,battle_keys,color_key])
+	if stamp!=marker_stamp: marker_stamp=stamp; marker_redraw_count+=1
+	var armies := hash([state.get_instance_id(),state.road_network_revision,army_keys,color_key])
+	if armies!=army_stamp:
+		army_stamp=armies; army_rows.clear(); marker_positions.clear(); army_coverage=Rect2()
+		for army in state.armies:
+			if army.size<=0: continue
+			var point := army_position(army)
+			army_rows.append({"id":army.id,"point":point,"color":state.nations[army.owner_nation].color}); marker_positions[army.id]=point
+	var battles := hash([state.get_instance_id(),state.road_network_revision,battle_keys])
+	if battles!=battle_stamp:
+		battle_stamp=battles; combat_rows.clear()
+		for battle in state.battles:
+			if not battle.finished: combat_rows.append({"id":battle.id,"point":battle_position(battle),"row":battle_strength(battle)})
+	update_marker_layers()
+
+func update_marker_layers() -> void:
+	if markers==null: return
+	var value := maxf(.1,global_scale.x)
+	markers.material.set_shader_parameter("view_zoom",value)
+	if not army_coverage.encloses(visible_world):
+		army_coverage=visible_world.grow(96./value)
+		var buffer := PackedFloat32Array(); var box := Rect2()
+		for row in army_rows:
+			for point in MarkerState.visible_copies(row.point,army_coverage,6./value):
+				buffer.append_array(PackedFloat32Array([1.,0.,0.,point.x,0.,1.,0.,point.y,row.color.r,row.color.g,row.color.b,1.]))
+				box = Rect2(point,Vector2.ONE*.001) if not box.has_area() else box.expand(point)
+		if buffer!=army_buffer:
+			army_buffer=buffer; army_build_count+=1
+			army_mesh.instance_count=buffer.size()/12; army_mesh.visible_instance_count=army_mesh.instance_count
+			if not buffer.is_empty(): army_mesh.buffer=buffer; army_mesh.custom_aabb=AABB(Vector3(box.position.x-60.,box.position.y-60.,-1.),Vector3(box.size.x+120.,box.size.y+120.,2.))
+			markers.queue_redraw()
+	var visible := {}
+	for combat in combat_rows:
+		for point in MarkerState.visible_copies(combat.point,visible_world,170./value):
+			var key := "%d:%d"%[combat.id,roundi((point.x-fposmod(combat.point.x,2048.))/2048.)]
+			visible[key]=true
+			if not battle_nodes.has(key):
+				var node := CombatMarker.new(); battle_markers.add_child(node); battle_nodes[key]=node
+			var node: Node2D = battle_nodes[key]
+			if node.row!=combat.row: node.row=combat.row; node.queue_redraw(); battle_build_count+=1
+			node.position=point; node.scale=Vector2.ONE/value
+	for key in battle_nodes.keys():
+		if not visible.has(key): battle_nodes[key].queue_free(); battle_nodes.erase(key)
+	var selected: Array = MarkerState.visible_copies(marker_positions[selection],visible_world,10./value) if marker_positions.has(selection) else []
+	while inspection_nodes.size()<selected.size():
+		var node := Inspection.new(); selection_marker.add_child(node); inspection_nodes.append(node)
+	for i in range(inspection_nodes.size()):
+		var node: Node2D = inspection_nodes[i]; node.visible=i<selected.size()
+		if node.visible: node.position=selected[i]; node.scale=Vector2.ONE/value
 func battle_strength(battle: Battle) -> Dictionary:
 	return BattleBar.summary(battle)
 func battle_position(battle: Battle) -> Vector2:
@@ -91,11 +170,7 @@ func battle_at(point: Vector2) -> int:
 		if rect.has_point(point) and distance<best: best=distance; selected=battle.id
 	return selected
 func army_position(army: Army) -> Vector2:
-	if army.on_edge and army.move_from>=0 and army.move_to>=0:
-		var edge := state.edge_of(army.move_from,army.move_to)
-		if edge!=null:
-			return edge.map_position_at(army.move_progress if army.move_from==edge.city_a else 1.-army.move_progress,state.cities[edge.city_a].map_position,state.cities[edge.city_b].map_position,2.)*Vector2(2048,1024)
-	return state.cities[maxi(0,army.location_city)].map_position*Vector2(2048,1024)
+	return marker_state.position(state,army)
 func _draw() -> void:
 	if state==null: return
 	if high_performance: update_persistent()
@@ -123,23 +198,3 @@ func update_persistent() -> void:
 			add_child(layer); persistent_layers.append(layer)
 	for i in range(persistent_layers.size()):
 		persistent_layers[i].set_zoom(view_zoom); persistent_layers[i].set_view(visible_world); persistent_layers[i].visible = i==0 or view_zoom>=1.5
-
-func draw_markers(canvas: Node2D) -> void:
-	if state==null: return
-	var pen := 1./maxf(.1,global_scale.x)
-	for shift in [-2048.,0.,2048.]:
-		canvas.draw_set_transform(Vector2(shift,0.))
-		for army in state.armies:
-			if army.size<=0: continue
-			var point := army_position(army); point.x = fposmod(point.x,2048.)
-			var color := state.nations[army.owner_nation].color
-			canvas.draw_circle(point,5.5*pen,Color(.13,.07,.04)); canvas.draw_circle(point,3.8*pen,color)
-			if army.id==selection: canvas.draw_arc(point,8.*pen,0.,TAU,24,Color(1.,.85,.2),2.*pen,true)
-		for battle in state.battles:
-			if battle.finished: continue
-			var point := battle_position(battle)
-			point.x = fposmod(point.x,2048.); canvas.draw_line(point-Vector2(5,5)*pen,point+Vector2(5,5)*pen,Color(.8,.08,.04),3.*pen,true); canvas.draw_line(point+Vector2(-5,5)*pen,point+Vector2(5,-5)*pen,Color(.8,.08,.04),3.*pen,true)
-			canvas.draw_set_transform(Vector2.ZERO)
-			BattleBar.draw(canvas,point+Vector2(shift,0.),pen,battle_strength(battle))
-			canvas.draw_set_transform(Vector2(shift,0.))
-	canvas.draw_set_transform(Vector2.ZERO)

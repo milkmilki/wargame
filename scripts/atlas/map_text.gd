@@ -9,6 +9,8 @@ const CitySymbols = preload("res://scripts/atlas/city_symbols.gd")
 const State = preload("res://scripts/atlas/text_state.gd")
 const Scheduler = preload("res://scripts/atlas/render_scheduler.gd")
 var high_performance := false
+var ownership_version := -1 # Opt-in publisher revision; standalone callers retain content hashing.
+var geography_version := -1
 var static_world := false
 const STATIC_DETAIL := 4.
 var static_geography: Node2D
@@ -19,6 +21,7 @@ var static_geo_rows: Array = []
 var static_busy := false
 var static_build_count := 0
 var static_marker_key: Array = []
+var prepared_marker_plan := {}
 var scheduler: Node
 var pool := State.Pool.new()
 var snapshot: Dictionary = {}
@@ -279,10 +282,10 @@ func invalidate_layout() -> void:
 	if data.is_empty() or scheduler==null: return
 	layout_version += 1; scheduler.invalidate("labels"); busy = false; layout_coverage = Rect2()
 	scheduler.invalidate("label-warm"); warmed.clear()
-	var content := [hash(data.cities),hash(data.nations),hash(owners),hash(labels)]
+	var content := [hash(data.cities),hash(data.nations),ownership_version if ownership_version>=0 else hash(owners),hash(labels)]
 	if content_key!=content: pool = State.Pool.new(); content_key = content
 	# Numerical worker snapshots contain no Node, Font, texture, or mutable game object.
-	snapshot = {"data":{"cities":data.cities.duplicate(true),"nations":data.nations.duplicate(true),"ownership":PackedInt32Array(data.ownership),"mesh":{"x":data.mesh.x,"y":data.mesh.y},"places":data.get("places",[]).duplicate(true)},"raster":{"water":raster.water},"owners":owners.duplicate(),"labels":labels.duplicate(true),"names":show_names,"cities":show_cities,"polities":show_polities}
+	snapshot = {"data":{"cities":data.cities.duplicate(true),"nations":data.nations.duplicate(true),"ownership":PackedInt32Array(data.ownership),"mesh":{"x":data.mesh.x,"y":data.mesh.y},"places":data.get("places",[]).duplicate(true)},"raster":{"water":raster.water},"owners":owners,"labels":labels.duplicate(true),"names":show_names,"cities":show_cities,"polities":show_polities}
 	snapshot.city_names = show_city_names
 	if static_world:
 		prepare_static_labels()
@@ -347,15 +350,19 @@ func prepare_static_labels() -> void:
 	var marker_key := [hash(data.cities),hash(data.nations),hash(data.ownership)]
 	if static_marker_key!=marker_key:
 		city_markers.setup(snapshot.data); marker_detail=STATIC_DETAIL
-		city_markers.set_view(Rect2(0,0,2048,1024),STATIC_DETAIL)
+		if not prepared_marker_plan.is_empty():
+			city_markers.apply_instances(prepared_marker_plan)
+			city_markers.last_key=[prepared_marker_plan.ids,STATIC_DETAIL,hash([])]
+			prepared_marker_plan={}
+		else: city_markers.set_view(Rect2(0,0,2048,1024),STATIC_DETAIL)
 		static_marker_key=marker_key
 	city_markers.visible=show_cities
 	if static_geography==null:
 		static_geography=Chunk.new(); static_geography.host=self; static_geography.fixed_detail=STATIC_DETAIL; add_child(static_geography)
 		static_countries=Chunk.new(); static_countries.host=self; static_countries.fixed_detail=STATIC_DETAIL; add_child(static_countries)
 	place_static_labels()
-	var geo_key := hash([data.get("places",[]),raster.water])
-	var country_key := hash([labels,data.nations,owners])
+	var geo_key := hash([data.get("places",[]),geography_version]) if geography_version>=0 else hash([data.get("places",[]),raster.water])
+	var country_key := hash([labels,data.nations,ownership_version]) if ownership_version>=0 else hash([labels,data.nations,owners])
 	if geo_key==static_geo_key and country_key==static_country_key: return
 	scheduler.invalidate("labels-static"); static_busy=true
 	var full := Rect2(0,0,2048,1024)

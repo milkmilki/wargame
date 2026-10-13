@@ -229,10 +229,19 @@ func _test_report_end_replans_tomorrow() -> void:
 	var state := _state()
 	var defender := _army(state, 110, 0, 0)
 	var enemy := _army(state, 111, 1, 2, 24000)
-	var reserve := _army(state, 112, 0, 0)
 	var front := _front(state, 0, CoalitionCampaignFront.Mode.DEFENSE, [defender])
 	var sim := Simulation.new()
 	sim.setup(state)
+	# Production publishes and schedules the paired campaign before movement
+	# starts its first battle. Finish that real activation cycle in this fixture
+	# so postbattle planning is not mistaken for a newly declared defense task.
+	sim._manage_coalition_campaigns()
+	check(not front.state_campaign_ids.is_empty()
+		and state.StateCampaigns.defense_activation_keys(state).is_empty(),
+		"field report fixture must already belong to a fully activated paired campaign")
+	var reserve := _army(state, 112, 0, 0)
+	check(reserve.campaign_front_id == -1,
+		"new reserve must be available but unassigned before the field battle report")
 	var battle := state.new_battle(Battle.Kind.FIELD)
 	battle.edge = state.edge_of(1, 2)
 	battle.side_a = [defender]

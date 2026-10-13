@@ -1,6 +1,7 @@
 extends Node
 ## One numerical worker; GPU resources and scene publication stay on the main thread.
 const FRAME_BUDGET_USEC := 4000
+var frame_budget_usec := FRAME_BUDGET_USEC
 const LODS := [.5,.70710678,1.,1.3,1.35,1.8,2.,2.82842712,3.,3.325,4.,5.65685425,5.7,8.]
 var versions := {}
 var worker := Thread.new()
@@ -22,6 +23,7 @@ var max_publish_usec := 0
 var profile: Array = []
 var geometry_pending := {}
 var geometry_users := {}
+var publication_costs := {}
 
 func release_geometry(key: String) -> void:
 	geometry_users[key] = maxi(0,int(geometry_users.get(key,0))-1)
@@ -62,9 +64,16 @@ func cancel_queued(domain: String,keep: Dictionary) -> Array:
 		return true)
 	active_jobs -= removed.size(); mutex.unlock(); return removed
 
-func enqueue(publish: Callable,priority: int = 0,domain: String = "view") -> void:
+func enqueue(publish: Callable,priority: int = 0,domain: String = "view",tag: String = "") -> void:
 	serial += 1
-	publishing.append({"domain":domain,"version":versions.get(domain,0),"publish":publish,"priority":priority,"serial":serial,"direct":true})
+	publishing.append({"domain":domain,"version":versions.get(domain,0),"publish":publish,"priority":priority,"serial":serial,"direct":true,"tag":tag})
+
+func enqueue_batch(steps: Array[Callable],commit: Callable,priority: int = 0,domain: String = "view",tag: String = "") -> void:
+	# Every resource step and the final scene swap belong to the same version.
+	# The old scene stays visible until all uploads finish; invalidate cancels
+	# the remaining work including a commit whose last step invalidated itself.
+	for step in steps: enqueue(step,priority,domain,tag+":upload")
+	enqueue(commit,priority,domain,tag+":commit")
 
 func work() -> void:
 	while true:
@@ -80,14 +89,21 @@ func _process(_delta: float) -> void:
 	mutex.lock(); publishing.append_array(results); results.clear(); mutex.unlock()
 	publishing.sort_custom(func(a,b): return a.serial<b.serial if a.priority==b.priority else a.priority<b.priority)
 	var start := Time.get_ticks_usec()
-	while not publishing.is_empty() and Time.get_ticks_usec()-start<FRAME_BUDGET_USEC:
+	var published := 0
+	while not publishing.is_empty() and Time.get_ticks_usec()-start<frame_budget_usec:
+		var next: Dictionary = publishing[0]
+		var cost_key: String = str(next.domain)+":"+str(next.get("tag",""))
+		var expected: int = publication_costs.get(cost_key,0)
+		if published>0 and expected>frame_budget_usec-(Time.get_ticks_usec()-start): break
 		var job: Dictionary = publishing.pop_front()
 		if job.version!=versions.get(job.domain,0): stale_results += 1; continue
 		var begin := Time.get_ticks_usec()
 		if job.get("direct",false): job.publish.call()
 		else: job.publish.call(job.value)
-		max_publish_usec = maxi(max_publish_usec,Time.get_ticks_usec()-begin); uploads += 1
-		profile.append({"domain":job.domain,"compute_usec":job.get("compute_usec",0),"publish_usec":Time.get_ticks_usec()-begin})
+		var duration := Time.get_ticks_usec()-begin
+		publication_costs[cost_key]=maxi(duration,int(publication_costs.get(cost_key,0))*.9)
+		published += 1; max_publish_usec = maxi(max_publish_usec,duration); uploads += 1
+		profile.append({"domain":job.domain,"tag":job.get("tag",""),"compute_usec":job.get("compute_usec",0),"publish_usec":duration})
 		if profile.size()>2000: profile.pop_front()
 
 func pending() -> bool:
