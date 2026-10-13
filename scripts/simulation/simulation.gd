@@ -3785,8 +3785,7 @@ func _resolve_diplomacy() -> void:
 func _resolve_diplomacy_over_frames() -> void:
 	if not diplomacy_enabled or state.day % DIPLOMACY_DECISION_INTERVAL_DAYS != 0:
 		return
-	RegionalStrategy.update_targets(state)
-	_normalize_alliance_wars()
+	await _prepare_diplomacy_over_frames()
 	_set_runtime_profile_stage(&"trade_forecast_worker")
 	var evaluation_cache := await _seed_trade_forecast_over_frames()
 	evaluation_cache["__forecast_pending_supply"] = true
@@ -3794,7 +3793,9 @@ func _resolve_diplomacy_over_frames() -> void:
 	var frozen_gold_flows: Array[Dictionary] = (
 		evaluation_cache["monthly_gold_flows"]
 	)
+	_set_runtime_profile_stage(&"diplomacy_preparation_viability")
 	_refresh_war_preparation_viability(evaluation_cache)
+	await get_tree().process_frame
 	var job := {
 		"actions": [] as Array[Dictionary],
 		"evaluation_cache": evaluation_cache,
@@ -3823,6 +3824,28 @@ func _resolve_diplomacy_over_frames() -> void:
 	await _commit_diplomacy_actions_over_frames(
 		actions, evaluation_cache, frozen_gold_flows
 	)
+
+
+## Keep completed regional updates in nation order. War synchronization is
+## still atomic, and starts in its own frame after the regional work finishes.
+func _prepare_diplomacy_over_frames(
+	slice_budget_usec: int = AI_RUNTIME_SLICE_BUDGET_USEC
+) -> void:
+	await get_tree().process_frame
+	_set_runtime_profile_stage(&"diplomacy_regional_targets")
+	var slice_started := Time.get_ticks_usec()
+	for nation in state.nations:
+		RegionalStrategy.update_target(state, nation.id)
+		if (
+			slice_budget_usec > 0
+			and Time.get_ticks_usec() - slice_started >= slice_budget_usec
+		):
+			await get_tree().process_frame
+			slice_started = Time.get_ticks_usec()
+	await get_tree().process_frame
+	_set_runtime_profile_stage(&"diplomacy_normalize_wars")
+	_normalize_alliance_wars()
+	await get_tree().process_frame
 
 
 func _build_parallel_diplomacy_actions(job: Dictionary) -> void:

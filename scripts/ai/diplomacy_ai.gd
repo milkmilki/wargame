@@ -409,9 +409,8 @@ static func choose_actions_over_frames(
 	if not use_structure_cache:
 		evaluation_cache["__disable_structure_cache"] = true
 	var slice_started := Time.get_ticks_usec()
-	_collect_peace_actions(state, actions, committed, evaluation_cache)
-	slice_started = await _yield_diplomacy_slice(
-		slice_started, slice_budget_usec
+	slice_started = await _collect_peace_actions_over_frames(
+		state, actions, committed, evaluation_cache, slice_started, slice_budget_usec
 	)
 	for nation_index in range(state.nations.size()):
 		_collect_existing_war_preparation_actions(
@@ -4612,109 +4611,179 @@ static func leave_alliance_desire(
 
 
 static func _collect_peace_actions(
-	state: GameState,
-	actions: Array[Dictionary],
-	committed: Dictionary,
+	state: GameState, actions: Array[Dictionary], committed: Dictionary,
 	evaluation_cache: Dictionary
 ) -> void:
 	var processed_wars := {}
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
-			if committed.has(a) or committed.has(b) or not state.is_enemy(a, b):
-				continue
-			if not VassalConflict.for_pair(state, a, b).is_empty(): continue
-			if state.is_succession_identity(a) or state.is_succession_identity(b):
-				continue
-			if state.regional_rebellion_peace_locked(a, b):
-				continue
-			# 削藩内战不走普通议和：宗藩内战只能由明确政治结果（占首都通吃）终结。
-			if state.is_suzerainty_pair(a, b) and (
-				state.is_in_civil_war(a) or state.is_in_civil_war(b)
-			):
-				continue
-			var bloc_a := _cached_alliance_bloc(
-				state, a, evaluation_cache
+			var candidate := _peace_action_context(
+				state, a, b, committed, evaluation_cache, processed_wars
 			)
-			var bloc_b := _cached_alliance_bloc(
-				state, b, evaluation_cache
+			if not candidate.is_empty():
+				_append_peace_action(state, candidate, actions, committed, evaluation_cache)
+
+
+static func _peace_action_context(
+	state: GameState, a: int, b: int, committed: Dictionary,
+	evaluation_cache: Dictionary, processed_wars: Dictionary
+) -> Dictionary:
+	if committed.has(a) or committed.has(b) or not state.is_enemy(a, b):
+		return {}
+	if not VassalConflict.for_pair(state, a, b).is_empty(): return {}
+	if state.is_succession_identity(a) or state.is_succession_identity(b):
+		return {}
+	if state.regional_rebellion_peace_locked(a, b):
+		return {}
+	# 削藩内战不走普通议和：宗藩内战只能由明确政治结果（占首都通吃）终结。
+	if state.is_suzerainty_pair(a, b) and (
+		state.is_in_civil_war(a) or state.is_in_civil_war(b)
+	):
+		return {}
+	var bloc_a := _cached_alliance_bloc(
+		state, a, evaluation_cache
+	)
+	var bloc_b := _cached_alliance_bloc(
+		state, b, evaluation_cache
+	)
+	var war_key := _coalition_pair_key(bloc_a, bloc_b)
+	if processed_wars.has(war_key):
+		return {}
+	processed_wars[war_key] = true
+	var war_days := _coalition_war_days(
+		state,
+		bloc_a,
+		bloc_b,
+		evaluation_cache
+	)
+	if war_days < MIN_WAR_DAYS:
+		return {}
+	return {"a": a, "b": b, "bloc_a": bloc_a, "bloc_b": bloc_b, "war_days": war_days}
+
+
+static func _append_peace_action(
+	state: GameState, candidate: Dictionary, actions: Array[Dictionary],
+	committed: Dictionary, evaluation_cache: Dictionary
+) -> void:
+	var a: int = candidate.a
+	var b: int = candidate.b
+	var bloc_a: Array[int] = candidate.bloc_a
+	var bloc_b: Array[int] = candidate.bloc_b
+	var war_days: int = candidate.war_days
+	var assessment := peace_assessment(
+		state,
+		a,
+		b,
+		evaluation_cache
+	)
+	if not bool(assessment["acceptable"]):
+		return
+	var score_a := float(assessment["score_a"])
+	var score_b := float(assessment["score_b"])
+	var reasons_a := peace_reasons(
+		state,
+		a,
+		b,
+		evaluation_cache
+	)
+	var reasons_b := peace_reasons(
+		state,
+		b,
+		a,
+		evaluation_cache
+	)
+	var reason_a := (
+		"战争疲劳"
+		if reasons_a.is_empty()
+		else "、".join(reasons_a)
+	)
+	var reason_b := (
+		"战争疲劳"
+		if reasons_b.is_empty()
+		else "、".join(reasons_b)
+	)
+	var attitude_a := float(
+		assessment["breakdown_a"]["attitude"]
+	)
+	var attitude_b := float(
+		assessment["breakdown_b"]["attitude"]
+	)
+	actions.append({
+		"kind": Action.MAKE_PEACE,
+		"a": a,
+		"b": b,
+		"bloc_a": bloc_a,
+		"bloc_b": bloc_b,
+		"score": float(assessment["combined_score"]) * 0.5,
+		"reason": (
+			"联盟战争持续%d天；集团%s：%s；集团%s：%s；"
+			+ "集团态度%.2f/%.2f，整体意愿%.2f/%.2f，合计%.2f"
+		) % [
+			war_days,
+			str(bloc_a),
+			reason_a,
+			str(bloc_b),
+			reason_b,
+			attitude_a,
+			attitude_b,
+			score_a,
+			score_b,
+			assessment["combined_score"],
+		],
+	})
+	for member_id in bloc_a:
+		committed[member_id] = true
+	for member_id in bloc_b:
+		committed[member_id] = true
+
+
+## Populate only the scores this candidate will consume, in the original
+## member/enemy order. The unchanged coalition function retains every weighted
+## operation and builds its public result from these cached individual scores.
+static func _prepare_coalition_peace_over_frames(
+	state: GameState, own_bloc: Array[int], enemy_bloc: Array[int],
+	evaluation_cache: Dictionary, slice_started: int, slice_budget_usec: int
+) -> int:
+	var key := "coalition_peace:%s:%s" % [
+		_nation_list_key(own_bloc), _nation_list_key(enemy_bloc)
+	]
+	if evaluation_cache.has(key): return slice_started
+	for member_id in own_bloc:
+		_national_power(state, member_id, evaluation_cache)
+		for enemy_id in enemy_bloc:
+			if not state.is_enemy(member_id, enemy_id): continue
+			_national_power(state, enemy_id, evaluation_cache)
+			peace_willingness_breakdown(state, member_id, enemy_id, evaluation_cache)
+			slice_started = await _yield_diplomacy_slice(slice_started, slice_budget_usec)
+	_coalition_peace_breakdown(state, own_bloc, enemy_bloc, evaluation_cache)
+	return await _yield_diplomacy_slice(slice_started, slice_budget_usec)
+
+
+static func _collect_peace_actions_over_frames(
+	state: GameState, actions: Array[Dictionary], committed: Dictionary,
+	evaluation_cache: Dictionary, slice_started: int, slice_budget_usec: int
+) -> int:
+	var processed_wars := {}
+	# Custom state callbacks keep the original live evaluation order.
+	var prepare_scores: bool = state.get_script().resource_path == "res://scripts/state/game_state.gd"
+	for a in range(state.nations.size()):
+		for b in range(a + 1, state.nations.size()):
+			var candidate := _peace_action_context(
+				state, a, b, committed, evaluation_cache, processed_wars
 			)
-			var war_key := _coalition_pair_key(bloc_a, bloc_b)
-			if processed_wars.has(war_key):
-				continue
-			processed_wars[war_key] = true
-			var war_days := _coalition_war_days(
-				state,
-				bloc_a,
-				bloc_b,
-				evaluation_cache
-			)
-			if war_days < MIN_WAR_DAYS:
-				continue
-			var assessment := peace_assessment(
-				state,
-				a,
-				b,
-				evaluation_cache
-			)
-			if not bool(assessment["acceptable"]):
-				continue
-			var score_a := float(assessment["score_a"])
-			var score_b := float(assessment["score_b"])
-			var reasons_a := peace_reasons(
-				state,
-				a,
-				b,
-				evaluation_cache
-			)
-			var reasons_b := peace_reasons(
-				state,
-				b,
-				a,
-				evaluation_cache
-			)
-			var reason_a := (
-				"战争疲劳"
-				if reasons_a.is_empty()
-				else "、".join(reasons_a)
-			)
-			var reason_b := (
-				"战争疲劳"
-				if reasons_b.is_empty()
-				else "、".join(reasons_b)
-			)
-			var attitude_a := float(
-				assessment["breakdown_a"]["attitude"]
-			)
-			var attitude_b := float(
-				assessment["breakdown_b"]["attitude"]
-			)
-			actions.append({
-				"kind": Action.MAKE_PEACE,
-				"a": a,
-				"b": b,
-				"bloc_a": bloc_a,
-				"bloc_b": bloc_b,
-				"score": float(assessment["combined_score"]) * 0.5,
-				"reason": (
-					"联盟战争持续%d天；集团%s：%s；集团%s：%s；"
-					+ "集团态度%.2f/%.2f，整体意愿%.2f/%.2f，合计%.2f"
-				) % [
-					war_days,
-					str(bloc_a),
-					reason_a,
-					str(bloc_b),
-					reason_b,
-					attitude_a,
-					attitude_b,
-					score_a,
-					score_b,
-					assessment["combined_score"],
-				],
-			})
-			for member_id in bloc_a:
-				committed[member_id] = true
-			for member_id in bloc_b:
-				committed[member_id] = true
+			if not candidate.is_empty():
+				if prepare_scores:
+					slice_started = await _prepare_coalition_peace_over_frames(
+						state, candidate.bloc_a, candidate.bloc_b,
+						evaluation_cache, slice_started, slice_budget_usec
+					)
+					slice_started = await _prepare_coalition_peace_over_frames(
+						state, candidate.bloc_b, candidate.bloc_a,
+						evaluation_cache, slice_started, slice_budget_usec
+					)
+				_append_peace_action(state, candidate, actions, committed, evaluation_cache)
+			slice_started = await _yield_diplomacy_slice(slice_started, slice_budget_usec)
+	return slice_started
 
 
 static func _coalition_pair_key(
