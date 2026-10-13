@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 28
+const SCHEMA_VERSION: int = 29
 const ROYAL_NATION_FIELDS := ["state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]
 
 
@@ -258,6 +258,82 @@ static func campaign_validation_error(snapshot: Dictionary) -> String:
 	if not records is Array:return "Invalid raid records"
 	for record in records:
 		if not record is Dictionary or not record.get("members") is Array or not record.get("tasks") is Dictionary or int(record.get("war",-1))<0 or int(record.get("center",-1))<0:return "Invalid raid record"
+	var paired_error := state_campaign_validation_error(snapshot)
+	if not paired_error.is_empty(): return paired_error
+	return ""
+
+static func state_campaign_validation_error(snapshot: Dictionary) -> String:
+	var records: Variant = snapshot.get("state_campaigns")
+	var fronts: Dictionary = snapshot.get("campaign_fronts", {})
+	var references: Variant = fronts.get("state_campaign_ids")
+	var ids: PackedInt32Array = fronts.get("front_ids", PackedInt32Array())
+	if not records is Array or not references is Array or references.size() != ids.size(): return "Invalid state campaign table"
+	if not snapshot.get("next_state_campaign_id") is int or int(snapshot.next_state_campaign_id) < 0: return "Invalid state campaign counter"
+	var pairs: Variant = snapshot.get("campaign_pairs")
+	if not pairs is Array: return "Invalid coalition pair table"
+	var pairs_by_id := {}
+	for pair in pairs:
+		if not pair is Dictionary or not pair.get("pair_id") is int or not pair.get("war_id") is int: return "Invalid coalition pair identity"
+		if int(pair.pair_id) < 0 or pairs_by_id.has(int(pair.pair_id)): return "Invalid coalition pair identity"
+		pairs_by_id[int(pair.pair_id)] = pair
+	var front_indices := {}; var by_id := {}
+	var army_ids := {}
+	for id in snapshot.get("armies", {}).get("id", PackedInt32Array()): army_ids[int(id)] = true
+	for index in range(ids.size()): front_indices[int(ids[index])] = index
+	var city_count: int = snapshot.get("cities", {}).get("count", 0)
+	var nation_count: int = snapshot.get("nations", {}).get("count", 0)
+	for value in records:
+		if not value is Dictionary: return "Invalid state campaign record"
+		var record: Dictionary = value
+		for field in ["campaign_id", "war_id", "pair_id", "center_city_id", "initiator_nation_id", "defender_nation_id", "offense_front_id", "defense_front_id", "lifecycle", "started_day", "ending_day"]:
+			if not record.get(field) is int: return "Invalid state campaign integer column"
+		if not record.get("incidental") is bool or not record.get("defense_activation_pending") is bool or not record.get("end_reason") is String: return "Invalid state campaign status"
+		var id := int(record.get("campaign_id", -1))
+		var lifecycle := int(record.get("lifecycle", -1))
+		if id < 0 or by_id.has(id) or id >= int(snapshot.get("next_state_campaign_id", -1)): return "Invalid state campaign identity"
+		if lifecycle not in [0, 1, 2] or int(record.get("center_city_id", -1)) < 0 or int(record.center_city_id) >= city_count: return "Invalid state campaign lifecycle or center"
+		if not record.get("ending_army_ids") is PackedInt32Array: return "Invalid ending army references"
+		if lifecycle != 2 and not record.ending_army_ids.is_empty(): return "Only ending campaigns can own withdrawal references"
+		var previous_army := -1
+		for id_value in record.ending_army_ids:
+			if id_value <= previous_army or not army_ids.has(id_value): return "Dangling ending army reference"
+			previous_army = id_value
+		for field in ["initiator_nation_id", "defender_nation_id"]:
+			if int(record.get(field, -1)) < 0 or int(record[field]) >= nation_count: return "Invalid state campaign anchor"
+		for field in ["attacker_members", "defender_members"]:
+			if not record.get(field) is PackedInt32Array: return "Invalid state campaign members"
+			var seen := {}; var previous := -1
+			for member in record[field]:
+				if member < 0 or member >= nation_count or member <= previous or seen.has(member): return "Invalid state campaign member order"
+				seen[member] = true; previous = member
+			if lifecycle != 2 and record[field].is_empty(): return "Empty active state campaign side"
+		for member in record.attacker_members:
+			if record.defender_members.has(member): return "Overlapping state campaign sides"
+		if lifecycle == 0:
+			if int(record.war_id) != -1 or int(record.offense_front_id) != -1 or int(record.defense_front_id) != -1 or int(record.pair_id) != -1: return "Preparation cannot own military executors"
+		elif int(record.war_id) < 0: return "Published state campaign needs a war"
+		var pair_id := int(record.pair_id)
+		if pair_id < -1 or (pair_id >= 0 and (not pairs_by_id.has(pair_id) or int(pairs_by_id[pair_id].war_id) != int(record.war_id))): return "Dangling state campaign pair reference"
+		for field in ["offense_front_id", "defense_front_id"]:
+			var front_id := int(record.get(field, -1))
+			if front_id < -1: return "Invalid state campaign executor identity"
+			if front_id < 0: continue
+			if not front_indices.has(front_id): return "Missing state campaign executor"
+			var index: int = front_indices[front_id]
+			if fronts.centers[index] != int(record.center_city_id) or fronts.war_ids[index] != int(record.war_id) or fronts.modes[index] != (0 if field == "offense_front_id" else 1): return "Mismatched state campaign executor"
+			if not references[index] is PackedInt32Array or not references[index].has(id): return "Missing reverse state campaign reference"
+		by_id[id] = record
+	for index in range(ids.size()):
+		if not references[index] is PackedInt32Array: return "Invalid executor state campaign references"
+		var seen := {}
+		for id in references[index]:
+			if seen.has(id) or not by_id.has(id): return "Dangling executor state campaign reference"
+			seen[id] = true
+			if int(by_id[id].offense_front_id) != int(ids[index]) and int(by_id[id].defense_front_id) != int(ids[index]): return "Mismatched reverse state campaign reference"
+	for pair in pairs:
+		for slot in pair.battlefields:
+			var id := int(slot.get("state_campaign_id", -1))
+			if id >= 0 and (not by_id.has(id) or int(by_id[id].center_city_id) != int(slot.center_city_id) or int(by_id[id].war_id) != int(pair.war_id)): return "Dangling state battlefield reference"
 	return ""
 
 static func battle_validation_error(battles: Dictionary) -> String:
@@ -313,6 +389,7 @@ static func build(state: GameState) -> Dictionary:
 		"vassal_conflicts": state.vassal_conflicts.duplicate(true),
 		"next_campaign_front_id": state.next_campaign_front_id,
 		"next_campaign_pair_id": state.next_campaign_pair_id,
+		"next_state_campaign_id": state.next_state_campaign_id,
 		"next_family_tree_id": state.next_family_tree_id,
 		"next_family_person_id": state.next_family_person_id,
 		"family_revision": state.family_revision,
@@ -336,6 +413,7 @@ static func build(state: GameState) -> Dictionary:
 		"battles": battles,
 		"campaign_fronts": _build_campaign_fronts(state),
 		"campaign_pairs": _build_campaign_pairs(state),
+		"state_campaigns": _build_state_campaigns(state),
 		"campaign_raid_records": state.campaign_raid_records.duplicate(true),
 	}
 
@@ -362,6 +440,19 @@ static func _build_family_trees(state: GameState) -> Array[Dictionary]:
 		result.append({"id": tree_id, "root_person_id": tree.root_person_id, "members": members})
 	return result
 
+
+static func _build_state_campaigns(state: GameState) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	var ids := state.state_campaigns.keys(); ids.sort()
+	for id in ids:
+		var record: StateCampaign = state.state_campaigns[id]
+		result.append({"campaign_id":record.campaign_id, "war_id":record.war_id, "pair_id":record.pair_id,
+			"center_city_id":record.center_city_id, "initiator_nation_id":record.initiator_nation_id, "defender_nation_id":record.defender_nation_id,
+			"attacker_members":PackedInt32Array(record.attacker_members), "defender_members":PackedInt32Array(record.defender_members),
+			"offense_front_id":record.offense_front_id, "defense_front_id":record.defense_front_id,
+			"lifecycle":record.lifecycle, "started_day":record.started_day, "ending_day":record.ending_day, "end_reason":record.end_reason, "incidental":record.incidental,
+			"defense_activation_pending":record.defense_activation_pending, "ending_army_ids":PackedInt32Array(record.ending_army_ids)})
+	return result
 
 static func _build_campaign_pairs(state: GameState) -> Array[Dictionary]:
 	var result: Array[Dictionary] = []
@@ -732,6 +823,7 @@ static func _build_edges(state: GameState) -> Dictionary:
 
 
 static func _build_campaign_fronts(state: GameState) -> Dictionary:
+	var state_campaign_ids: Array[PackedInt32Array] = []
 	var front_ids := PackedInt32Array()
 	var pair_ids := PackedInt32Array()
 	var battlefield_slots := PackedInt32Array()
@@ -762,6 +854,8 @@ static func _build_campaign_fronts(state: GameState) -> Dictionary:
 	ids.sort()
 	for front_id_value in ids:
 		var front := state.campaign_front(int(front_id_value))
+		var record_ids := front.state_campaign_ids.duplicate(); record_ids.sort()
+		state_campaign_ids.append(PackedInt32Array(record_ids))
 		if front == null:
 			continue
 		front_ids.append(front.front_id)
@@ -802,6 +896,7 @@ static func _build_campaign_fronts(state: GameState) -> Dictionary:
 		assignment_offsets.append(assignment_army_ids.size())
 	return {
 		"count": front_ids.size(),
+		"state_campaign_ids": state_campaign_ids,
 		"front_ids": front_ids,
 		"pair_ids": pair_ids,
 		"battlefield_slots": battlefield_slots,

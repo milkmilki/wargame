@@ -66,8 +66,8 @@ const CAPITAL_NATIONAL_GOLD_SHARE: float = (
 const RECOVERY_FOOD_PER_CAPITA: float = FOOD_PER_CAPITA
 ## 规格 R3：被围粮仓城市每日消耗本地库存；普通城市无粮仓，被围即失去外部补给。
 const SIEGE_CITY_FOOD_PER_DAY: int = 1     ## 被围城每日粮草消耗系数
-## 纯封锁期间的守军自然损耗。封锁只削弱当前守军，下一轮会用新的守军
-## 数量重新计算既有 R 门槛；达到 R 后自然进入正常虚拟攻城。
+## 纯封锁期间按虚拟守军满编上限计算每日损耗，扣除量不超过当前守军。
+## 下一轮用剩余守军重新计算既有 R 门槛；达到 R 后进入正常虚拟攻城。
 const BLOCKADE_GARRISON_ATTRITION_RATE: float = 0.002
 # ---- 占领 ----
 ## 分封战争加成：宗藩体系处于对外战争时，「不接壤敌国」的后方藩王把贡赋率临时提到此值，
@@ -4895,6 +4895,13 @@ func _set_coalition_war(
 	_record_tick_profile_stage(
 		"diplomacy_set_war_relations", coalition_war_part_started
 	)
+	if changed and not state.state_campaigns.is_empty():
+		var components := _cached_coalition_campaign_components()
+		state.sync_campaign_pairs(components)
+		for value in state.state_campaigns.values().duplicate():
+			var record: StateCampaign = value
+			if record.lifecycle == StateCampaign.Lifecycle.PREPARING and state.is_enemy(record.initiator_nation_id, record.defender_nation_id):
+				state.activate_state_campaign(record.initiator_nation_id, record.defender_nation_id, record.center_city_id, state.war_id_between(record.initiator_nation_id, record.defender_nation_id), components)
 	return changed
 
 
@@ -4951,6 +4958,13 @@ func _set_coalition_war_objective(
 				),
 				shared_war_id,
 			)
+
+
+	var owner := state.cities[objective_city].owner_nation
+	if defenders.has(owner) and state.is_enemy(initiator, owner):
+		var components := _cached_coalition_campaign_components()
+		state.sync_campaign_pairs(components)
+		state.activate_state_campaign(initiator, owner, objective_city, shared_war_id, components)
 
 
 func _synchronize_alliance_wars(
@@ -6142,6 +6156,7 @@ func _start_war_preparation(
 	nation.war_preparation_started_day = state.day
 	nation.war_preparation_reason = str(action.get("objective_reason", ""))
 	nation.war_preparation_unready_since_day = -1
+	state.prepare_state_campaign(nation_id, target_id, objective_center)
 	var requested_armies := int(action.get("mobilization_armies", 0))
 	var current_troops := DiplomacyAI._troop_count(state, nation_id)
 	nation.war_mobilization_target_troops = maxi(
@@ -6166,6 +6181,7 @@ func _clear_war_preparation(
 	release_armies: bool = true
 ) -> void:
 	var nation := state.nations[nation_id]
+	state.StateCampaigns.cancel_preparation(state, nation_id)
 	if release_armies:
 		var preparation_ids := {}
 		for army_id in nation.war_preparation_army_ids:
@@ -7613,6 +7629,10 @@ func _launch_prepared_campaign(
 			pair.battlefields.append(slot)
 		else:
 			pair.battlefields[slot_id] = slot
+	var record := state.activate_state_campaign(nation_id, opponent_nation_id, center_city_id, war_id, _cached_coalition_campaign_components())
+	if record != null:
+		state.StateCampaigns.attach(state, record, plan)
+		pair.battlefields[plan.battlefield_slot]["state_campaign_id"] = record.campaign_id
 	plan.phase = CoalitionCampaignFront.Phase.ASSEMBLE
 	plan.staging_city_id = staging_city_id
 	plan.tactical_target_city_ids = [entry_city_id] as Array[int]
@@ -8867,14 +8887,18 @@ func _prepare_coalition_campaign_batch() -> Array[Dictionary]:
 	_coalition_defense_activity = state.campaign_defense_activity_index()
 	var components_started := Time.get_ticks_usec() if tick_phase_profiling_enabled else 0
 	var components := _cached_coalition_campaign_components()
+	_coalition_campaign_query_cache["state_campaign_components"] = components
 	_record_tick_profile_stage("ai_campaign_components", components_started)
 	_coalition_component_keys.clear()
 	for component in components:
 		_coalition_component_keys[str(component["key"])] = true
+	state.StateCampaigns.bootstrap(state, components)
 	_reconcile_coalition_fronts(components)
 	state.sync_campaign_pairs(components)
 	_reconcile_campaign_battlefields()
+	state.StateCampaigns.reconcile(state, components, _coalition_defense_activity)
 	var due: Array[Dictionary] = []
+	var activation_keys := state.StateCampaigns.defense_activation_keys(state)
 	for component in components:
 		var key := str(component["key"])
 		var members: Array[int] = component["members"]
@@ -8882,7 +8906,8 @@ func _prepare_coalition_campaign_batch() -> Array[Dictionary]:
 		if members.is_empty() or enemy_ids.is_empty():
 			continue
 		var defense_centers := _component_defense_centers(members, int(component["war_id"]))
-		var emergency := false
+		var newly_activated := activation_keys.has(key)
+		var emergency := newly_activated
 		for center_id in defense_centers:
 			if state.campaign_front_for(
 				state.cities[center_id].owner_nation,
@@ -8900,7 +8925,7 @@ func _prepare_coalition_campaign_batch() -> Array[Dictionary]:
 			if not front.combat_report_locked and front.combat_report_day == state.day:
 				reported_today = true
 				break
-		if next_day > state.day and reported_today:
+		if next_day > state.day and reported_today and not newly_activated:
 			continue
 		component["defense_centers"] = defense_centers
 		due.append(component)
@@ -9038,6 +9063,7 @@ func _step_coalition_campaign_planning(job: Dictionary) -> void:
 		job["stage"] = CoalitionPlanningStage.FINALIZE
 		return
 	_coalition_campaign_wake_day = 2147483647
+	state.StateCampaigns.finish_planning(state, _coalition_defense_activity)
 	for key in _coalition_campaign_next_due_day.keys():
 		if not _coalition_component_keys.has(key):
 			_coalition_campaign_next_due_day.erase(key)
@@ -9048,6 +9074,7 @@ func _step_coalition_campaign_planning(job: Dictionary) -> void:
 	_coalition_armies_by_id.clear()
 	_coalition_armies_by_nation.clear()
 	_coalition_defense_activity.clear()
+	_coalition_campaign_query_cache.erase("state_campaign_components")
 	job["done"] = true
 
 
@@ -9143,7 +9170,7 @@ func _component_defense_centers(
 	members: Array[int],
 	war_id: int
 ) -> Array[int]:
-	var flags := {}
+	var flags := state.StateCampaigns.defense_centers(state, members, war_id)
 	var activity := _coalition_defense_activity
 	if activity.is_empty():
 		activity = state.campaign_defense_activity_index()
@@ -9244,6 +9271,7 @@ func _reconcile_coalition_fronts(components: Array[Dictionary]) -> void:
 		var best_force := -1
 		for component in components_by_war[front.war_id] as Array[Dictionary]:
 			var members: Array[int] = component["members"]
+			if not state.StateCampaigns.supports_component(state, front, members): continue
 			if front.mode == CoalitionCampaignFront.Mode.OFFENSE:
 				var shares_previous_side := false
 				for member_id in members:
@@ -9279,7 +9307,7 @@ func _reconcile_coalition_fronts(components: Array[Dictionary]) -> void:
 		if not front.participant_nation_ids.has(front.anchor_nation_id):
 			front.anchor_nation_id = (
 				state.cities[front.center_city_id].owner_nation
-				if front.mode == CoalitionCampaignFront.Mode.DEFENSE
+				if front.mode == CoalitionCampaignFront.Mode.DEFENSE and front.participant_nation_ids.has(state.cities[front.center_city_id].owner_nation)
 				else front.participant_nation_ids[0]
 			)
 		for army_id_value in front.army_assignments.keys().duplicate():
@@ -9322,6 +9350,7 @@ func _reconcile_coalition_fronts(components: Array[Dictionary]) -> void:
 			for slot in pair.battlefields:
 				if int(slot["offense_front_id"]) == front.front_id:
 					slot["offense_front_id"] = kept.front_id
+		state.StateCampaigns.transfer_front(state, front, kept)
 		state.campaign_fronts.erase(front.front_id)
 	# The geographic limit is reconciled per opposing pair, not per component.
 
@@ -9335,7 +9364,8 @@ func _plan_coalition_component(
 	var members: Array[int] = component["members"]
 	var changed := false
 	if not objective_cache.has("prepared_pairs"):
-		state.sync_campaign_pairs(state.coalition_campaign_components())
+		_coalition_campaign_query_cache["state_campaign_components"] = state.coalition_campaign_components()
+		state.sync_campaign_pairs(_coalition_campaign_query_cache["state_campaign_components"])
 		_reconcile_campaign_battlefields()
 		for front in _component_fronts(component, CoalitionCampaignFront.Mode.OFFENSE):
 			if _campaign_camp_lost_to_enemy(front):
@@ -9352,6 +9382,7 @@ func _plan_coalition_component(
 			changed = _execute_coalition_defense(front) or changed
 		else:
 			changed = _manage_administrative_campaign(front) or changed
+	state.StateCampaigns.complete_defense_activation(state, war_id, members)
 	return changed
 
 
@@ -9369,8 +9400,12 @@ func _refresh_component_defense_tasks(component: Dictionary) -> void:
 		if front == null:
 			front = state.create_campaign_front(war_id, members, owner, CoalitionCampaignFront.Mode.DEFENSE, center_id)
 		_adopt_existing_defense_force(front)
+		state.StateCampaigns.adopt_defense(state, front, _state_campaign_planning_components(), _coalition_defense_activity)
 	for front in _component_fronts(component, CoalitionCampaignFront.Mode.DEFENSE):
 		if not desired.has(front.center_city_id) and not front.combat_report_locked and not _front_has_active_field_engagement(front):
+			for id in front.state_campaign_ids:
+				var record: StateCampaign = state.state_campaigns.get(id)
+				if record != null and record.incidental: state.end_state_campaign(id, "威胁解除")
 			state.release_campaign_front(front.front_id)
 	if owns_activity:
 		_coalition_defense_activity.clear()
@@ -9456,12 +9491,39 @@ func _campaign_front_priority_less(a: Dictionary, b: Dictionary) -> bool:
 	return EquivariantOrder.mirror_orbit_city_less(state, int(a["center_city_id"]), int(b["center_city_id"]))
 
 
+func _state_campaign_planning_components() -> Array[Dictionary]:
+	# A command batch does not change coalition topology until commit. Reuse its
+	# working components instead of serializing and duplicating the cache per front.
+	if _coalition_campaign_query_cache.has("state_campaign_components"):
+		return _coalition_campaign_query_cache["state_campaign_components"]
+	return _cached_coalition_campaign_components()
+
+
+func _end_front_state_campaigns(front: CoalitionCampaignFront, reason: String) -> void:
+	for id in front.state_campaign_ids.duplicate():
+		var record: StateCampaign = state.state_campaigns.get(id)
+		if record == null: continue
+		state.end_state_campaign(id, reason)
+		for other_id in [record.offense_front_id, record.defense_front_id]:
+			var other := state.campaign_front(other_id)
+			if other != null and other != front and not state.StateCampaigns.has_active_reference(state, other) and not state.StateCampaigns.defense_needed(state, other): _retire_campaign_front(other)
+
+
+func _state_campaign_front_has_live_battle(front: CoalitionCampaignFront) -> bool:
+	if front.state_campaign_ids.is_empty(): return false
+	for battle in state.battles:
+		if battle.finished: continue
+		for army in battle.side_a + battle.side_b:
+			if army.campaign_front_id == front.front_id: return true
+	return false
+
+
 func _retire_campaign_front(front: CoalitionCampaignFront) -> void:
 	var armies := _campaign_plan_armies(front)
 	front.retiring = true
 	front.campaign_pair_id = -1
 	front.battlefield_slot = -1
-	if not _front_has_active_field_engagement(front):
+	if not _front_has_active_field_engagement(front) and not _state_campaign_front_has_live_battle(front):
 		state.release_campaign_front(front.front_id)
 	for army in armies:
 		if army.state not in [Army.State.FIGHTING, Army.State.RETREATING, Army.State.RECOVERING]:
@@ -9495,6 +9557,7 @@ func _reconcile_campaign_battlefields() -> void:
 				if pair != null:
 					break
 		if pair == null:
+			_end_front_state_campaigns(front, "州战場失效")
 			_retire_campaign_front(front)
 			continue
 		pair.battlefields.append(CoalitionCampaignPair.make_battlefield(front.center_city_id, front.front_id, front.anchor_nation_id))
@@ -9526,12 +9589,15 @@ func _reconcile_campaign_battlefields() -> void:
 				var removed: Dictionary = pair.battlefields.pop_back()
 				var front := state.campaign_front(int(removed["offense_front_id"]))
 				if front != null:
+					_end_front_state_campaigns(front, "战场合并超额")
 					_retire_campaign_front(front)
 		for slot_id in range(pair.battlefields.size()):
 			var front := state.campaign_front(int(pair.battlefields[slot_id]["offense_front_id"]))
 			if front != null:
 				front.campaign_pair_id = pair.pair_id
 				front.battlefield_slot = slot_id
+				var record := state.StateCampaigns.adopt_offense(state, front, _state_campaign_planning_components())
+				if record != null: pair.battlefields[slot_id]["state_campaign_id"] = record.campaign_id
 
 
 func _pair_component(pair: CoalitionCampaignPair, members: Array[int]) -> Dictionary:
@@ -9623,6 +9689,7 @@ func _plan_campaign_pair(pair: CoalitionCampaignPair, cache: Dictionary) -> bool
 			slot["offense_front_id"] = -1
 			slot["preferred_nation_id"] = front.anchor_nation_id
 			slot["counterattack"] = false
+			_end_front_state_campaigns(front, "进攻路线失效")
 			_retire_campaign_front(front)
 			changed = true
 			front = null
@@ -9632,6 +9699,7 @@ func _plan_campaign_pair(pair: CoalitionCampaignPair, cache: Dictionary) -> bool
 			slot["preferred_nation_id"] = front.anchor_nation_id
 			slot["counterattack"] = false
 			slot["offense_front_id"] = -1
+			_end_front_state_campaigns(front, "整州完成")
 			state.release_campaign_front(front.front_id)
 			changed = true
 	var slot_id := 0
@@ -9694,7 +9762,8 @@ func _plan_campaign_pair(pair: CoalitionCampaignPair, cache: Dictionary) -> bool
 		front.army_assignments[army.id] = int(proposal["receiver"])
 		army.campaign_front_id = front.front_id
 		army.campaign_war_id = pair.war_id
-		slot = CoalitionCampaignPair.make_battlefield(front.center_city_id, front.front_id, actor)
+		var record := state.StateCampaigns.adopt_offense(state, front, _state_campaign_planning_components())
+		slot = CoalitionCampaignPair.make_battlefield(front.center_city_id, front.front_id, actor, false, record.campaign_id if record != null else -1)
 		if existing:
 			pair.battlefields[slot_id] = slot
 		else:
@@ -9724,6 +9793,9 @@ func _pending_declared_battlefield(pair: CoalitionCampaignPair) -> Dictionary:
 		return {}
 	var slot := CoalitionCampaignPair.make_battlefield(int(best["center"]), -1, int(best["actor"]))
 	slot["awaiting_mobilization"] = true
+	var owner := state.cities[int(best["center"])].owner_nation
+	var record := state.activate_state_campaign(int(best["actor"]), owner, int(best["center"]), pair.war_id, _state_campaign_planning_components())
+	if record != null: slot["state_campaign_id"] = record.campaign_id
 	return slot
 
 
@@ -9872,10 +9944,16 @@ func _component_objective_is_valid(
 
 func _front_requirement(front: CoalitionCampaignFront) -> int:
 	if front.mode == CoalitionCampaignFront.Mode.DEFENSE:
-		return int(state.campaign_defense_context(
+		var requirement := int(state.campaign_defense_context(
 			front.anchor_nation_id, front.center_city_id, front.war_id,
 			_coalition_defense_activity
 		)["requirement"])
+		if requirement == 0:
+			for id in front.state_campaign_ids:
+				var record: StateCampaign = state.state_campaigns.get(id)
+				if record != null and record.lifecycle == StateCampaign.Lifecycle.ACTIVE:
+					return GameState.INITIAL_HEAVY_ARMY_SIZE
+		return requirement
 	return state.campaign_offense_manpower(front.anchor_nation_id,
 		DiplomacyAI._cached_campaign_siege_requirement(
 			state, front.anchor_nation_id, front.center_city_id, _coalition_campaign_query_cache),
@@ -11582,6 +11660,9 @@ func _fail_lost_campaign_camp(
 	var pair := state.campaign_pairs.get(plan.campaign_pair_id) as CoalitionCampaignPair
 	if pair != null and plan.battlefield_slot >= 0 and plan.battlefield_slot < pair.battlefields.size():
 		pair.battlefields[plan.battlefield_slot]["offense_front_id"] = -1
+	for id in plan.state_campaign_ids:
+		var record: StateCampaign = state.state_campaigns.get(id)
+		if record != null: state.end_state_campaign(record.campaign_id, "拔营失败")
 	state.release_campaign_front(plan.front_id)
 	for army in armies:
 		_withdraw_campaign_army(army, plan.staging_city_id)
@@ -14509,8 +14590,12 @@ func _apply_blockade_garrison_attrition(battle: Battle) -> void:
 	):
 		return
 	var current := maxi(battle.city.garrison_manpower, 0)
-	var loss := maxi(1, int(ceil(float(current) * BLOCKADE_GARRISON_ATTRITION_RATE)))
-	var remaining := maxi(current - loss, 0)
+	var capacity := state.city_garrison_capacity(battle.city.id)
+	var loss := mini(
+		current,
+		maxi(1, int(ceil(float(capacity) * BLOCKADE_GARRISON_ATTRITION_RATE)))
+	)
+	var remaining := current - loss
 	if remaining == current:
 		return
 	battle.city.garrison_manpower = remaining

@@ -128,6 +128,9 @@ static func poll(sim) -> void:
 
 static func ensure_rally(sim,front: CoalitionCampaignFront) -> void:
 	var state: GameState=sim.state
+	# Declared defense holds the center immediately. A rear rally is needed only
+	# once a real threat or regrouping exists; use the normal path rules then.
+	if state.StateCampaigns.has_active_reference(state,front) and front.phase==Front.Phase.HOLD_AND_REINFORCE and not state.city_under_siege(front.center_city_id) and not bool(state.campaign_defense_context(front.anchor_nation_id,front.center_city_id,front.war_id,sim._coalition_defense_activity).active): return
 	var key: Array=[state.ownership_revision,state.diplomacy_revision,state.road_network_revision,hash(state.besieged_city_ids())]
 	if front.rally_revision==key:return
 	front.rally_revision=key

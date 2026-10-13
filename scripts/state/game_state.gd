@@ -4,6 +4,7 @@ extends RefCounted
 ## 并负责确定性世界生成。所有可变游戏状态都归此对象所有。
 
 const TerritoryTransaction = preload("res://scripts/state/territory_transaction.gd")
+const StateCampaigns = preload("res://scripts/core/state_campaigns.gd")
 
 ## Debug oracle for comparing direct province queries with full-world scans.
 static var campaign_center_activity_index_disabled_for_tests := false
@@ -135,6 +136,8 @@ var armies: Array[Army] = []
 var battles: Array[Battle] = []            ## 进行中的多回合战斗
 ## front_id -> CoalitionCampaignFront。州战线属于战争集团连通分量，不属于国家。
 var campaign_fronts: Dictionary = {}
+var state_campaigns: Dictionary = {} # campaign_id -> StateCampaign; both sides share one record.
+var next_state_campaign_id: int = 0
 ## Survives temporary front/pair rebuilds. One raid wave per war/state/side.
 var campaign_raid_records: Array[Dictionary] = []
 var next_campaign_front_id: int = 0
@@ -462,6 +465,8 @@ func _reset_world(world_seed: int) -> void:
 	armies.clear()
 	battles.clear()
 	campaign_fronts.clear()
+	state_campaigns.clear()
+	next_state_campaign_id = 0
 	campaign_raid_records.clear()
 	campaign_pairs.clear()
 	next_campaign_pair_id = 0
@@ -1074,6 +1079,23 @@ func campaign_reinforcement_threat(
 	return regional_manpower
 
 
+func prepare_state_campaign(actor: int, opponent: int, center: int) -> StateCampaign:
+	return StateCampaigns.prepare(self, actor, opponent, center)
+
+func activate_state_campaign(actor: int, opponent: int, center: int, war: int = -1, components: Array[Dictionary] = []) -> StateCampaign:
+	if war < 0: war = war_id_between(actor, opponent)
+	if components.is_empty(): components = coalition_campaign_components(war)
+	return StateCampaigns.activate(self, actor, opponent, center, war, components)
+
+func state_campaigns_for_nation(nation_id: int, war_id: int = -1, include_hidden: bool = false) -> Array[StateCampaign]:
+	return StateCampaigns.for_nation(self, nation_id, war_id, include_hidden)
+
+func end_state_campaign(campaign_id: int, reason: String) -> void:
+	StateCampaigns.end(self, campaign_id, reason)
+
+func collect_state_campaigns() -> void:
+	StateCampaigns.collect_endings(self)
+
 func create_campaign_front(
 	war_id: int,
 	participant_nation_ids: Array[int],
@@ -1200,6 +1222,7 @@ func release_campaign_front(front_id: int) -> void:
 	var front := campaign_front(front_id)
 	if front == null:
 		return
+	StateCampaigns.detach_front(self, front)
 	for army in armies:
 		if army.campaign_front_id != front_id:
 			continue
@@ -1216,6 +1239,7 @@ func clear_campaign_fronts() -> void:
 		release_campaign_front(int(front_id_value))
 	campaign_fronts.clear()
 	campaign_pairs.clear()
+	state_campaigns.clear()
 	_campaign_pair_revision.clear()
 
 
@@ -2856,6 +2880,9 @@ func merge_war_ids(keep_war_id: int, merged_war_id: int) -> void:
 		var front := front_value as CoalitionCampaignFront
 		if front != null and front.war_id == merged_war_id:
 			front.war_id = keep_war_id
+	for value in state_campaigns.values():
+		var record: StateCampaign = value
+		if record.war_id == merged_war_id: record.war_id = keep_war_id
 	diplomacy_revision += 1
 
 
@@ -2870,6 +2897,15 @@ func release_war_pool(war_id: int) -> void:
 func release_nation_war_pool(nation_id: int, war_id: int) -> void:
 	if nation_id < 0 or nation_id >= nations.size() or war_id < 0:
 		return
+	for value in state_campaigns.values():
+		var record: StateCampaign = value
+		if record.war_id != war_id: continue
+		if record.lifecycle == StateCampaign.Lifecycle.ENDING: continue
+		if (record.attacker_members.has(nation_id) and record.attacker_members.size() == 1) or (record.defender_members.has(nation_id) and record.defender_members.size() == 1):
+			end_state_campaign(record.campaign_id, "参战方退出")
+			continue
+		record.attacker_members.erase(nation_id)
+		record.defender_members.erase(nation_id)
 	for pair in campaign_pairs_for_nation(nation_id, war_id):
 		pair.cooldown_until_by_nation.erase(nation_id)
 		for slot in pair.battlefields:

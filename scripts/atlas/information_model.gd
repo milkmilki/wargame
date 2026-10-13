@@ -35,6 +35,55 @@ const CAMPAIGN_PHASE_NAMES := {
 	CoalitionCampaignFront.Phase.RELIEVE_CENTER:"集中解围",
 }
 static func campaign_rows(state: GameState,nation_id: int) -> Array:
+	var records := state.state_campaigns_for_nation(nation_id)
+	if records.is_empty(): return execution_campaign_rows(state,nation_id)
+	var groups := {}; var entries := []; var fronts := {}; var offense := 0
+	for record in records:
+		var mode := record.mode_for(nation_id)
+		var key := str(record.campaign_id) if mode==CoalitionCampaignFront.Mode.OFFENSE else "%d:%d:%s"%[record.war_id,record.center_city_id,str(record.defender_members)]
+		var front := state.campaign_front(record.offense_front_id if mode==CoalitionCampaignFront.Mode.OFFENSE else record.defense_front_id)
+		if groups.has(key):
+			var entry: Dictionary=groups[key]
+			entry.opponents.append_array(record.attacker_members)
+			if record.lifecycle==StateCampaign.Lifecycle.ACTIVE: entry.record=record; entry.front=front
+			continue
+		var entry := {"record":record,"mode":mode,"front":front,"opponents":record.defender_members.duplicate() if mode==CoalitionCampaignFront.Mode.OFFENSE else record.attacker_members.duplicate()}
+		groups[key]=entry; entries.append(entry)
+		if mode==CoalitionCampaignFront.Mode.OFFENSE: offense+=1
+	for entry in entries:
+		if entry.front!=null: fronts[entry.front.front_id]=[0,0,0,0]
+	for unit in state.armies:
+		if unit.size<=0 or not fronts.has(unit.campaign_front_id): continue
+		var front := state.campaign_front(unit.campaign_front_id)
+		if front==null or unit.campaign_war_id!=front.war_id: continue
+		var count: Array=fronts[front.front_id]; count[2]+=1; count[3]+=unit.size
+		if unit.owner_nation==nation_id: count[0]+=1; count[1]+=unit.size
+	var rows: Array=[row("进行中","%d场 · 进攻%d／防守%d"%[entries.size(),offense,entries.size()-offense])]
+	for entry in entries:
+		var record: StateCampaign=entry.record
+		var front: CoalitionCampaignFront=entry.front
+		var mode: int=entry.mode
+		var status := "结束处理中" if record.lifecycle==StateCampaign.Lifecycle.ENDING else ("准备" if record.lifecycle==StateCampaign.Lifecycle.PREPARING else ("等待动员" if front==null or front.army_assignments.is_empty() else "执行"))
+		var enemies := {}; var enemy_names: Array[String]=[]
+		for id in entry.opponents:
+			if not enemies.has(id): enemies[id]=true; enemy_names.append(nation_name(state,id))
+		rows.append_array([
+			row("战役%d"%record.campaign_id,"%s · %s"%["进攻" if mode==CoalitionCampaignFront.Mode.OFFENSE else "防守","未宣战" if record.war_id<0 else "战争%d"%(record.war_id+1)]),
+			row("战役状态",status),row("对手","、".join(enemy_names)),
+		])
+		if front!=null:
+			rows.append_array(execution_front_rows(state,front,fronts[front.front_id]))
+		else:
+			rows.append_array([
+				row("目标州",city_name(state,record.center_city_id),"city",record.center_city_id),
+				row("当前阶段","战前集结" if record.lifecycle==StateCampaign.Lifecycle.PREPARING else ("州治失守" if mode==CoalitionCampaignFront.Mode.DEFENSE and not record.defender_members.has(state.cities[record.center_city_id].owner_nation) else "等待动员")),
+				row("主导国家",nation_name(state,record.initiator_nation_id if mode==CoalitionCampaignFront.Mode.OFFENSE else record.defender_nation_id)),
+				row("本国投入","0支 · 0人"),row("战线总兵力","0支 · 0人"),
+			])
+		if record.lifecycle==StateCampaign.Lifecycle.ENDING: rows.append(row("结束原因",record.end_reason))
+	return rows
+
+static func execution_campaign_rows(state: GameState,nation_id: int) -> Array:
 	var fronts:=state.campaign_fronts_for_nation(nation_id)
 	if fronts.is_empty(): return [row("进行中","暂无州战役")]
 	# Stable presentation order is independent of the simulation's tactical
@@ -54,8 +103,12 @@ static func campaign_rows(state: GameState,nation_id: int) -> Array:
 	var rows: Array=[row("进行中","%d场 · 进攻%d／防守%d"%[fronts.size(),offense,fronts.size()-offense])]
 	for front in fronts:
 		var count: Array=totals[front.front_id]
-		rows.append_array([
-			row("战役%d"%front.front_id,"%s · 战争%s"%["进攻" if front.mode==CoalitionCampaignFront.Mode.OFFENSE else "防守",binding_name(front.war_id,"未绑定",1)]),
+		rows.append(row("战役%d"%front.front_id,"%s · 战争%s"%["进攻" if front.mode==CoalitionCampaignFront.Mode.OFFENSE else "防守",binding_name(front.war_id,"未绑定",1)]))
+		rows.append_array(execution_front_rows(state,front,count))
+	return rows
+
+static func execution_front_rows(state: GameState,front: CoalitionCampaignFront,count: Array) -> Array:
+	var rows: Array=[
 			row("目标州",city_name(state,front.center_city_id),"city",settlement_id(state,front.center_city_id)),
 			row("当前阶段",CAMPAIGN_PHASE_NAMES.get(front.phase,"未识别阶段")),
 			row("主导国家",nation_name(state,front.anchor_nation_id),"nation",front.anchor_nation_id),
@@ -64,15 +117,15 @@ static func campaign_rows(state: GameState,nation_id: int) -> Array:
 			row("集结地",city_name(state,front.staging_city_id),"city",settlement_id(state,front.staging_city_id)),
 			row("驻营地",city_name(state,front.camp_city_id),"city",settlement_id(state,front.camp_city_id)),
 			row("重试等待","至第%d天"%front.failed_until_day if front.failed_until_day>state.day else "无"),
-		])
-		if front.mode==CoalitionCampaignFront.Mode.OFFENSE:
-			var counts: Array[int]=[0,0,0,0]
-			for task in front.detachments.values(): counts[int(task.status)]+=1
-			rows.append(row("单轮分遣","%s · 出征%d／归队中%d／已归队%d／结束%d"%["已使用" if state.campaign_raid_used(front) else "未启动",counts[0],counts[1],counts[2],counts[3]]))
-		if front.tactical_target_city_ids.is_empty(): rows.append(row("战术目标","未指定"))
-		else:
-			for target in front.tactical_target_city_ids:
-				rows.append(row("战术目标",city_name(state,target),"city",settlement_id(state,target)))
+	]
+	if front.mode==CoalitionCampaignFront.Mode.OFFENSE:
+		var counts: Array[int]=[0,0,0,0]
+		for task in front.detachments.values(): counts[int(task.status)]+=1
+		rows.append(row("单轮分遣","%s · 出征%d／归队中%d／已归队%d／结束%d"%["已使用" if state.campaign_raid_used(front) else "未启动",counts[0],counts[1],counts[2],counts[3]]))
+	if front.tactical_target_city_ids.is_empty(): rows.append(row("战术目标","未指定"))
+	else:
+		for target in front.tactical_target_city_ids:
+			rows.append(row("战术目标",city_name(state,target),"city",settlement_id(state,target)))
 	return rows
 static func city(state: GameState,id: int) -> Dictionary:
 	if id<0 or id>=state.cities.size() or not state.cities[id].is_settlement(): return {}

@@ -85,6 +85,7 @@ static func mark_pending(state: GameState, war_id: int) -> void:
 
 static func finalize_pending(state: GameState) -> void:
 	if state == null: return
+	state.collect_state_campaigns()
 	var pending := state.chronicle_pending_war_ids.duplicate()
 	state.chronicle_pending_war_ids.clear()
 	for war_id_value in pending:
@@ -206,6 +207,8 @@ static func _war_still_exists(state: GameState, war_id: int) -> bool:
 	return false
 
 static func _war_resources_released(state: GameState, war_id: int) -> bool:
+	for value in state.state_campaigns.values():
+		if (value as StateCampaign).war_id == war_id: return false
 	for army in state.armies:
 		if army.campaign_war_id == war_id:
 			return false

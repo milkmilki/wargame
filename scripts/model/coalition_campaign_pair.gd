@@ -32,6 +32,6 @@ func cooldown_until(members: Array[int]) -> int:
 	return result
 
 
-static func make_battlefield(center_id: int, front_id: int, preferred_id: int = -1, counterattack: bool = false) -> Dictionary:
+static func make_battlefield(center_id: int, front_id: int, preferred_id: int = -1, counterattack: bool = false, state_campaign_id: int = -1) -> Dictionary:
 	return {"center_city_id": center_id, "offense_front_id": front_id,
-		"preferred_nation_id": preferred_id, "counterattack": counterattack, "awaiting_mobilization": false}
+		"preferred_nation_id": preferred_id, "counterattack": counterattack, "awaiting_mobilization": false, "state_campaign_id": state_campaign_id}

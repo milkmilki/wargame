@@ -21,6 +21,8 @@ var trade_build_count := 0
 var trade_hubs: Node2D
 var trade_hub_key: Array=[]
 var trade_center_ids: Array=[]
+var trade_routes_layer: Node2D
+var trade_route_key: Array=[]
 var startup_cache_writer: Thread
 var startup_cache_key := ""
 var startup_cache_directory := StartupCache.DIRECTORY
@@ -355,6 +357,9 @@ func present_world(prepared: GameState,payload: Dictionary,source: String = "atl
 	await _pause_previous_world()
 	state = prepared; military_payload = payload; historical_view = false; selected_army = -1; selected_region = -1; command_target=-1
 	trade_key.clear(); trade_hub_key.clear(); trade_center_ids.clear(); trade_lines.clear(); trade_pending=false; render_scheduler.invalidate("trade_regions")
+	trade_route_key.clear()
+	if is_instance_valid(trade_routes_layer): trade_routes_layer.queue_free()
+	trade_routes_layer=null
 	if is_instance_valid(trade_hubs): trade_hubs.queue_free()
 	trade_hubs=null
 	close_information(); information_message=""
@@ -428,6 +433,11 @@ func _process(_delta: float) -> void:
 	if is_instance_valid(trade_hubs):
 		trade_hubs.visible=mode_control.selected==TRADE_MODE and not historical_view
 		if trade_hubs.visible: refresh_trade_hubs(); trade_hubs.set_zoom(zoom)
+	if is_instance_valid(trade_routes_layer):
+		trade_routes_layer.visible=mode_control.selected==TRADE_MODE and not historical_view
+		if trade_routes_layer.visible:
+			refresh_trade_routes()
+			trade_routes_layer.set_view(zoom,Rect2(-map_root.position/zoom,size/zoom))
 	if mode_control.selected==TRADE_MODE and not trade_key.is_empty():
 		var source:=information_source()
 		if source!=null and (trade_key[0]!=source.get_instance_id() or trade_key[1]!=source.region_analysis_revision): update_trade_mode()
@@ -632,6 +642,7 @@ func road_at(position_value: Vector2) -> Edge:
 
 func update_mode() -> void:
 	if is_instance_valid(trade_hubs): trade_hubs.visible=mode_control.selected==TRADE_MODE and not historical_view
+	if is_instance_valid(trade_routes_layer): trade_routes_layer.visible=mode_control.selected==TRADE_MODE and not historical_view
 	if mode_control.selected==TRADE_MODE:
 		update_trade_mode()
 		if interface!=null: interface.refresh_diplomacy()
@@ -649,7 +660,12 @@ func update_mode() -> void:
 		for copy in copies: copy.ink.show_borders = false; copy.ink.queue_redraw()
 
 func render_is_ready() -> bool:
-	return not (mode_control.selected==TRADE_MODE and trade_pending) and super.render_is_ready()
+	if mode_control.selected==TRADE_MODE:
+		if trade_pending: return false
+		if is_instance_valid(trade_routes_layer) and trade_routes_layer.visible:
+			for stroke in trade_routes_layer.stroke_layers:
+				if stroke.preparing: return false
+	return super.render_is_ready()
 
 func update_trade_mode() -> void:
 	if data.is_empty() or information_source()==null: return
@@ -696,10 +712,28 @@ func apply_trade_mode() -> void:
 		copy.wash.texture=cached.texture; copy.wash.material=cached.material; copy.wash.visible=true
 		copy.ink.borders=trade_lines; copy.ink.show_borders=show_border_layer; copy.ink.queue_redraw()
 	text_layer.show_polities=false; text_layer.rebuild(); refresh_cached_camera()
+	refresh_trade_routes()
+	if is_instance_valid(trade_routes_layer):
+		trade_routes_layer.visible=not historical_view
+		trade_routes_layer.set_view(zoom,Rect2(-map_root.position/zoom,size/zoom))
 	if not is_instance_valid(trade_hubs):
 		trade_hubs=TradeView.Hubs.new(); trade_hubs.z_index=9; map_root.add_child(trade_hubs)
 	trade_hubs.visible=not historical_view; refresh_trade_hubs(); trade_hubs.set_zoom(zoom)
-	status.text="历史贸易分区：%d · 快照未记录贸易中心"%information_source().region_count if historical_view else "贸易区域：%d · 金色圆环为贸易中心"%information_source().region_count
+	if historical_view: status.text="历史贸易分区：%d · 快照未记录贸易中心及路线"%information_source().region_count
+
+func refresh_trade_routes() -> void:
+	if historical_view: return
+	var source:=information_source()
+	if source==null: return
+	if not is_instance_valid(trade_routes_layer):
+		trade_routes_layer=TradeView.Routes.new(); trade_routes_layer.scheduler=render_scheduler
+		trade_routes_layer.z_index=6; map_root.add_child(trade_routes_layer)
+	var key: Array=[source.get_instance_id(),source.trade_revision,source.road_network_revision,source.trade_enabled,source.trade_routes.size()]
+	if key!=trade_route_key:
+		trade_route_key=key
+		trade_routes_layer.set_segments(TradeView.route_segments(source))
+	if mode_control.selected==TRADE_MODE and not trade_pending:
+		status.text="贸易区域：%d · %d条商路 · 金线为贸易往来，灰虚线为受阻，圆环为枢纽"%[source.region_count,source.trade_routes.size()]
 
 func refresh_trade_hubs() -> void:
 	if historical_view: return
