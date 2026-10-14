@@ -853,6 +853,8 @@ static func nearest_supply_city(state: GameState, army: Army) -> Array:
 
 ## 返回全部可达本国/盟国粮仓，按运输损耗、势力局部物理序排序。
 static func supply_sources(state: GameState, army: Army) -> Array[Dictionary]:
+	if attack_supply_target(state, army) >= 0:
+		return supply_sources_from_network(state, army, build_supply_network(state, army.owner_nation))
 	var start := _origin_of(army)
 	if start < 0 or start >= state.cities.size():
 		return []
@@ -1020,24 +1022,35 @@ static func supply_sources_from_network(
 		to_access = _supply_endpoint_access(
 			state, army.owner_nation, army.move_to, true
 		)
+	# The final attack road can contain several ownerless junctions inside the
+	# target's jurisdiction. Join those segments to the ordinary rear field;
+	# do not grant the warehouse field transit through hostile settlements.
+	var attack_links := {}
+	var attack_target := attack_supply_target(state, army)
+	if attack_target >= 0 and not network.is_empty():
+		var blocked := _enemy_occupied_edge_keys(state, army.owner_nation)
+		var origins: Array = [start] if edge == null else [army.move_from, army.move_to]
+		for origin in origins:
+			if not _supply_endpoint_access(state, army.owner_nation, origin, true): continue
+			attack_links[origin] = _attack_supply_links(state, origin, attack_target, army.owner_nation, blocked)
 	var result: Array[Dictionary] = []
 	for source in network:
 		var dist: PackedFloat64Array = source["dist"]
 		var loss := INF
 		if edge == null:
-			loss = dist[start]
+			loss = _attack_supply_loss(dist, start, attack_links.get(start, {}))
 		else:
 			if from_access:
 				loss = minf(
 					loss,
 					progress * edge_loss
-						+ dist[army.move_from]
+						+ _attack_supply_loss(dist, army.move_from, attack_links.get(army.move_from, {}))
 				)
 			if to_access:
 				loss = minf(
 					loss,
 					(1.0 - progress) * edge_loss
-						+ dist[army.move_to]
+						+ _attack_supply_loss(dist, army.move_to, attack_links.get(army.move_to, {}))
 				)
 		if loss == INF:
 			continue
@@ -1063,6 +1076,53 @@ static func supply_sources_from_network(
 		return int(tie_ranks.get(int(a["city_id"]), 1 << 30)) < int(tie_ranks.get(int(b["city_id"]), 1 << 30))
 	)
 	return result
+
+
+## Only the actual terminal hostile target may extend a formation's supply.
+## City residents/relief keep their established siege isolation/rear rules.
+static func attack_supply_target(state: GameState, army: Army) -> int:
+	if state.atlas_layout.is_empty(): return -1
+	var goal := -1
+	if army.state == Army.State.MOVING and not army.path.is_empty():
+		goal = army.path.back()
+	elif army.state == Army.State.FIGHTING and army.battle_id >= 0:
+		var battle := state.battle_by_id(army.battle_id)
+		if battle != null and not battle.finished and battle.has_army(army):
+			if battle.kind == Battle.Kind.FIELD and not army.path.is_empty():
+				goal = army.path.back()
+			elif battle.kind == Battle.Kind.SIEGE and battle.city != null and (battle.side_a.has(army) or not battle.side_b_defends_city):
+				goal = battle.city.id
+	if goal < 0 or goal >= state.cities.size() or not state.cities[goal].is_settlement(): return -1
+	return goal if state.is_enemy(army.owner_nation, state.cities[goal].owner_nation) else -1
+
+
+## Query-local terminal corridor offsets. The shared rear network remains
+## unchanged; enemy presence and zero-capacity roads still sever this link.
+static func _attack_supply_links(state: GameState, start: int, goal: int, nation: int, blocked: Dictionary) -> Dictionary:
+	var offsets := {start: 0.0}
+	var queue: Array[Dictionary] = [{"city":start,"distance":0.0,"rank":0}]
+	while not queue.is_empty():
+		var entry := _heap_pop(queue)
+		var city := int(entry.city)
+		if float(entry.distance) > float(offsets[city]): continue
+		# Friendly settlements terminate the corridor at a real rear endpoint.
+		if city != start and not state.cities[city].is_traffic: continue
+		for neighbor in state.neighbors(city):
+			var edge := state.edge_of(city,neighbor)
+			if edge == null or edge.control_city_id != goal or edge.max_manpower <= 0 or blocked.has(GameState.edge_key(city,neighbor)): continue
+			if not _supply_endpoint_access(state,nation,neighbor,true): continue
+			var distance := float(entry.distance) + _supply_edge_loss(edge)
+			if distance < float(offsets.get(neighbor,INF)):
+				offsets[neighbor] = distance
+				_heap_push(queue,{"city":neighbor,"distance":distance,"rank":0})
+	return offsets
+
+
+static func _attack_supply_loss(dist: PackedFloat64Array, start: int, links: Dictionary) -> float:
+	var loss := float(dist[start])
+	for city in links:
+		loss = minf(loss,float(links[city]) + float(dist[int(city)]))
+	return loss
 
 
 ## 人口补员通路：与粮食补给共用控制区/争夺边规则，但不要求粮仓当前有粮。

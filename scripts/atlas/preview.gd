@@ -131,7 +131,8 @@ func _ready() -> void:
 	navigation_timer.timeout.connect(navigation_timeout); add_child(navigation_timer)
 	resized.connect(func():
 		if symbol_layers.is_empty() and not high_performance_renderer: return
-		forest_view.size = Vector2i(size)+Vector2i.ONE*SYMBOL_PAD*2; symbol_view.size = Vector2i(size) if high_performance_renderer else forest_view.size; limit_pan(); schedule_symbols())
+		forest_view.size = Vector2i(2,2) if high_performance_renderer else Vector2i(size)+Vector2i.ONE*SYMBOL_PAD*2
+		symbol_view.size = Vector2i(size) if high_performance_renderer else forest_view.size; limit_pan(); schedule_symbols())
 	var actual_seed := 1
 	var reference_mode := false
 	var cache_path := ""
@@ -405,24 +406,7 @@ func build_view() -> void:
 			political_buffers.append(buffer)
 			political_buffer_tiles.append(political_cache.tiles.duplicate())
 		render_scheduler.remember("political-buffers",null,128*128*4*128*2,true)
-	if symbol_view.get_parent(): remove_child(symbol_view); symbol_view.queue_free()
-	else: symbol_view.free()
-	if forest_view.get_parent(): remove_child(forest_view); forest_view.queue_free()
-	else: forest_view.free()
-	forest_view = SubViewport.new(); forest_view.size = Vector2i(size)+Vector2i.ONE*SYMBOL_PAD*2
-	forest_view.transparent_bg = true; forest_view.disable_3d = true; forest_view.render_target_update_mode = SubViewport.UPDATE_ONCE; add_child(forest_view)
-	var forest_shapes := Symbols.new(); forest_shapes.data = data; forest_shapes.forest = display.forest; forest_shapes.layer = "forest"; forest_view.add_child(forest_shapes)
-	symbol_view = SubViewport.new(); symbol_view.size = forest_view.size
-	symbol_view.transparent_bg = true; symbol_view.disable_3d = true
-	if RenderingServer.get_current_rendering_method() != "gl_compatibility": symbol_view.msaa_2d = Viewport.MSAA_4X
-	symbol_view.render_target_update_mode = SubViewport.UPDATE_ONCE; add_child(symbol_view)
-	var forest_sprite := Sprite2D.new(); forest_sprite.centered = false; forest_sprite.texture = forest_view.get_texture()
-	forest_material = ShaderMaterial.new(); forest_material.shader = load("res://assets/atlas/forest.gdshader")
-	forest_material.set_shader_parameter("shade_distance",data.mesh.spacing*.42); forest_sprite.material = forest_material; symbol_view.add_child(forest_sprite)
-	var crowns := Symbols.new(); crowns.data = data; crowns.forest = display.forest; crowns.layer = "crowns"
-	crown_material = ShaderMaterial.new(); crown_material.shader = load("res://assets/atlas/crown_clip.gdshader"); crown_material.set_shader_parameter("canopy_mask",forest_view.get_texture()); crowns.material = crown_material; symbol_view.add_child(crowns)
-	var symbols := Symbols.new(); symbols.data = data; symbols.glyphs = display.glyphs; symbols.layer = "glyphs"; symbol_view.add_child(symbols)
-	symbol_layers = [forest_shapes,crowns,symbols]; symbol_screen.texture = symbol_view.get_texture()
+	setup_symbol_viewports()
 	var fields := Fields.upload_all(prepared_display.fields) if not prepared_display.is_empty() else Fields.textures(raster,data,display.glyphs)
 	field_textures = fields
 	habitat_texture = Fields.upload(prepared_display.habitat) if not prepared_display.is_empty() else Fields.habitat_texture(data,raster)
@@ -450,12 +434,6 @@ func build_view() -> void:
 	if not prepared_display.is_empty(): text_layer.labels=prepared_display.geometry.names
 	else: refit_names()
 	if high_performance_renderer:
-		for node in symbol_view.get_children(): node.queue_free()
-		forest_view.render_target_update_mode = SubViewport.UPDATE_DISABLED
-		symbol_layers.clear()
-		symbol_view.render_target_update_mode = SubViewport.UPDATE_DISABLED
-		symbol_view.msaa_2d = Viewport.MSAA_DISABLED # Tiles already contain resolved 4x MSAA.
-		symbol_view.size = Vector2i(size)
 		symbol_tiles = SymbolTiles.new(); symbol_tiles.static_world=true; symbol_tiles.world_screen=symbol_screen
 		add_child(symbol_tiles); symbol_tiles.world_ready.connect(func():
 			for copy in copies:
@@ -469,6 +447,35 @@ func build_view() -> void:
 	if high_performance_renderer and not await await_render_ready(60000): printerr("ATLAS_INITIAL_RENDER_TIMEOUT")
 	view_ready = true
 	startup_profile.display_upload_ms=Time.get_ticks_msec()-upload_begin
+
+func setup_symbol_viewports() -> void:
+	if symbol_view.get_parent(): remove_child(symbol_view); symbol_view.queue_free()
+	else: symbol_view.free()
+	if forest_view.get_parent(): remove_child(forest_view); forest_view.queue_free()
+	else: forest_view.free()
+	symbol_layers.clear(); forest_material=null; crown_material=null
+	forest_view=SubViewport.new(); forest_view.transparent_bg=true; forest_view.disable_3d=true
+	symbol_view=SubViewport.new(); symbol_view.transparent_bg=true; symbol_view.disable_3d=true
+	add_child(forest_view); add_child(symbol_view)
+	if high_performance_renderer:
+		# Static tiles supply both symbols and the political mask. Do not create
+		# the legacy whole-world draw nodes, even for one startup frame.
+		forest_view.size=Vector2i(2,2); symbol_view.size=Vector2i(size).max(Vector2i(2,2))
+		forest_view.render_target_update_mode=SubViewport.UPDATE_DISABLED
+		symbol_view.render_target_update_mode=SubViewport.UPDATE_DISABLED
+		symbol_screen.texture=symbol_view.get_texture()
+		return
+	forest_view.size=Vector2i(size)+Vector2i.ONE*SYMBOL_PAD*2; symbol_view.size=forest_view.size
+	forest_view.render_target_update_mode=SubViewport.UPDATE_ONCE; symbol_view.render_target_update_mode=SubViewport.UPDATE_ONCE
+	if RenderingServer.get_current_rendering_method()!="gl_compatibility": symbol_view.msaa_2d=Viewport.MSAA_4X
+	var forest_shapes := Symbols.new(); forest_shapes.data=data; forest_shapes.forest=display.forest; forest_shapes.layer="forest"; forest_view.add_child(forest_shapes)
+	var forest_sprite := Sprite2D.new(); forest_sprite.centered=false; forest_sprite.texture=forest_view.get_texture()
+	forest_material=ShaderMaterial.new(); forest_material.shader=load("res://assets/atlas/forest.gdshader")
+	forest_material.set_shader_parameter("shade_distance",data.mesh.spacing*.42); forest_sprite.material=forest_material; symbol_view.add_child(forest_sprite)
+	var crowns := Symbols.new(); crowns.data=data; crowns.forest=display.forest; crowns.layer="crowns"
+	crown_material=ShaderMaterial.new(); crown_material.shader=load("res://assets/atlas/crown_clip.gdshader"); crown_material.set_shader_parameter("canopy_mask",forest_view.get_texture()); crowns.material=crown_material; symbol_view.add_child(crowns)
+	var symbols := Symbols.new(); symbols.data=data; symbols.glyphs=display.glyphs; symbols.layer="glyphs"; symbol_view.add_child(symbols)
+	symbol_layers=[forest_shapes,crowns,symbols]; symbol_screen.texture=symbol_view.get_texture()
 
 func political_colors() -> Array:
 	var colors: Array=[]

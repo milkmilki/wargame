@@ -2,6 +2,7 @@ extends "res://scripts/atlas/preview.gd"
 const MilitaryMap = preload("res://scripts/atlas/military_map.gd")
 const Overlay = preload("res://scripts/atlas/military_overlay.gd")
 const WarFronts = preload("res://scripts/atlas/war_fronts.gd")
+const AttackArrows = preload("res://scripts/atlas/attack_arrows.gd")
 const Information = preload("res://scripts/atlas/information_model.gd")
 const BattleInformation = preload("res://scripts/atlas/battle_information.gd")
 const FamilyModel = preload("res://scripts/atlas/family_model.gd")
@@ -93,6 +94,8 @@ var information_road := -1
 var information_message := ""
 var front_layer: Node2D
 var last_front_state_key: Array = []
+var attack_arrows: Node2D
+var attack_arrow_key: Array = []
 var state: GameState
 var simulation: Simulation
 var military_payload: Dictionary = {}
@@ -379,6 +382,9 @@ func present_world(prepared: GameState,payload: Dictionary,source: String = "atl
 	text_layer.z_index = 7
 	if overlay!=null: overlay.queue_free()
 	overlay = Overlay.new(); overlay.scheduler = render_scheduler; overlay.high_performance = high_performance_renderer; overlay.state = state; overlay.selection = selected_army; overlay.z_index = 6; map_root.add_child(overlay)
+	attack_arrow_key.clear()
+	attack_arrows = AttackArrows.new(); attack_arrows.z_index = 5; map_root.add_child(attack_arrows)
+	refresh_attack_arrows(true)
 	front_layer = WarFronts.new(); front_layer.scheduler = render_scheduler; front_layer.high_performance = high_performance_renderer; front_layer.z_index = 8; map_root.add_child(front_layer)
 	refresh_fronts(state)
 	if startup_display_result.has("geometry") and startup_display_result.geometry.has("state_lines"):
@@ -421,6 +427,7 @@ func _process(_delta: float) -> void:
 	if state==null or not view_ready or not is_instance_valid(overlay): return
 	if not navigation_in_progress: overlay.set_view(zoom,Rect2(-map_root.position/zoom,size/zoom))
 	overlay.selection = selected_army
+	refresh_attack_arrows()
 	military_status.text = "历史：第%d天 · 只读政治快照"%overlay.state.day if historical_view else "第%d天 · 军队%d · 战斗%d · %s"%[state.day,state.armies.size(),state.battles.size(),"暂停" if simulation.paused else "运行军事AI"]
 	history_control.max_value = maxi(0,history.snapshot_count()-1)
 	if not historical_view and last_owner_revision!=state.ownership_revision:
@@ -443,6 +450,18 @@ func _process(_delta: float) -> void:
 		if source!=null and (trade_key[0]!=source.get_instance_id() or trade_key[1]!=source.region_analysis_revision): update_trade_mode()
 	refresh_diplomacy()
 	history.maybe_capture(state); run_log.checkpoint(state)
+
+func refresh_attack_arrows(force: bool = false) -> void:
+	if not is_instance_valid(attack_arrows) or state == null: return
+	attack_arrows.visible = mode_control.selected == 0 and not historical_view
+	if not attack_arrows.visible or (simulation != null and simulation.runtime_day_in_progress()): return
+	var observer := diplomatic_observer if diplomacy_enabled else int(player_nation.value)
+	# The planner only mutates goals/rallies during a day. Capture after commit;
+	# idle frames and camera input never scan plans or rebuild arrow geometry.
+	var key := [state.get_instance_id(), state.day, state.campaign_fronts.size(), state.state_campaigns.size(), state.diplomacy_revision, state.ownership_revision, observer]
+	if not force and key == attack_arrow_key: return
+	attack_arrows.configure(state, observer)
+	attack_arrow_key = key
 
 func refresh_city_hover() -> void:
 	if not is_instance_valid(text_layer): return
@@ -568,6 +587,7 @@ func show_history() -> void:
 	var view := history.build_view_state(state,int(history_control.value))
 	if view==null: return
 	historical_view = true; overlay.state = view
+	refresh_attack_arrows()
 	for c in range(data.cities.size()): data.ownership[c] = view.cities[c].owner_nation
 	sync_nations(view)
 	refresh_ownership(); refresh_diplomacy(); details.text = "历史：第%d天"%view.day
@@ -576,6 +596,7 @@ func show_history() -> void:
 func return_to_current() -> void:
 	if state==null or simulation.runtime_day_in_progress(): return
 	historical_view=false; simulation.paused=true
+	refresh_attack_arrows(true)
 	if overlay!=null: overlay.state=state
 	last_owner_revision=-1; refresh_diplomacy()
 	if info_panel!=null and info_panel.visible: info_panel.show_document(information_document())
@@ -647,6 +668,7 @@ func road_at(position_value: Vector2) -> Edge:
 	return found
 
 func update_mode() -> void:
+	refresh_attack_arrows(true)
 	if is_instance_valid(trade_hubs): trade_hubs.visible=mode_control.selected==TRADE_MODE and not historical_view
 	if is_instance_valid(trade_routes_layer): trade_routes_layer.visible=mode_control.selected==TRADE_MODE and not historical_view
 	if mode_control.selected==TRADE_MODE:

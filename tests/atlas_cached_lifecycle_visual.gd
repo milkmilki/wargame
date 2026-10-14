@@ -29,6 +29,7 @@ func run():
 	root.size = Vector2i(1600,900); await process_frame; await process_frame
 	check(await scene.await_render_ready(30000),"resized visible area completes")
 	check(scene.symbol_view.size==Vector2i(1600,900),"GPU compositors follow window size")
+	check(scene.forest_view.size==Vector2i(2,2) and scene.forest_view.get_child_count()==0,"resize does not revive the legacy forest compositor")
 	check(scene.copies[0].ink.persistent_layers[2].chunks[0].mesh==road,"resize retains road geometry")
 	root.size = Vector2i(1280,720); await process_frame; await process_frame
 	# Queue cold-region jobs, then replace the world before they publish.

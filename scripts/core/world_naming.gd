@@ -237,6 +237,7 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 	var unnamed_docks: Array[int] = []
 	for city_index in range(game_state.cities.size()):
 		var city = game_state.cities[city_index]
+		if city.is_traffic: continue # Road junctions are not named settlements.
 		var city_id := int(city.id)
 		var existing := str(city.name).strip_edges()
 		if not existing.is_empty() and _reserve(city_registry, existing, city_id):
@@ -270,6 +271,7 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 	var short_registry := _registry(game_state, _CITY_SHORT_REGISTRY_META)
 	for city_index in range(game_state.cities.size()):
 		var city = game_state.cities[city_index]
+		if city.is_traffic: continue
 		var current_short := str(city.short_name).strip_edges()
 		if (
 			_is_single_character(current_short)
@@ -1329,7 +1331,7 @@ static func _backfill_city_registry(
 	excluded_id: int
 ) -> void:
 	for city in game_state.cities:
-		if int(city.id) == excluded_id:
+		if city.is_traffic or int(city.id) == excluded_id:
 			continue
 		var assigned := str(city.name).strip_edges()
 		if not assigned.is_empty():
@@ -1342,7 +1344,7 @@ static func _backfill_city_short_registry(
 	excluded_id: int
 ) -> void:
 	for city in game_state.cities:
-		if int(city.id) == excluded_id:
+		if city.is_traffic or int(city.id) == excluded_id:
 			continue
 		var assigned := str(city.short_name).strip_edges()
 		if _is_single_character(assigned):
@@ -1368,7 +1370,7 @@ static func _valid_city_id(game_state, city_id: int) -> bool:
 static func _valid_land_city_id(game_state, city_id: int) -> bool:
 	return (
 		_valid_city_id(game_state, city_id)
-		and not game_state.cities[city_id].is_dock
+		and game_state.cities[city_id].is_settlement()
 	)
 
 

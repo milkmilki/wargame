@@ -52,6 +52,15 @@ Reference runs disable river boundary/road costs and visible rivers, use
 strict suitability > 1 for city eligibility, and do not generate sea routes.
 # Additional native dependency ports
 
+`scripts/atlas/attack_arrow_geometry.gd` ports OL Plot's `AttackArrow` and
+quadratic B-spline helpers at commit `c919e60b4edeaeca53c08f9552f793b2ae9537f0`.
+Upstream: https://github.com/sakitam-fdd/ol-plot, Copyright (c) 2017 sakitam-fdd
+(MIT); its notice and license are preserved in `LICENSE-ol-plot.txt`.
+The native renderer uses existing campaign rally/entry/target fields; OL,
+TypeScript and browser libraries are not runtime dependencies. The independent
+TypeScript contour fixture in `tests/fixtures/ol-attack-arrow-reference.json`
+uses this same pinned implementation and is covered by the same notice.
+
 `scripts/atlas/delaunator.gd` ports Delaunator 5.1.0, Copyright (c) 2026
 Mapbox (ISC). Its license is preserved in `LICENSE-Delaunator.txt`. The
 near-collinear sign fallback uses exact floating-point expansion arithmetic.

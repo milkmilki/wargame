@@ -8,6 +8,9 @@ const SymbolState = preload("res://scripts/atlas/symbol_state.gd")
 const SymbolMesh = preload("res://scripts/atlas/symbol_mesh.gd")
 const TileTexture = preload("res://scripts/atlas/tile_texture.gd")
 const TILE := 512.
+const WORLD_SIZE := Vector2i(2048,1024)
+const WORLD_DETAIL := 4.
+const WORLD_TILE_PIXELS := 1024
 class Canvas extends Node2D:
 	var rows: Array = []
 	func _draw() -> void:
@@ -50,6 +53,11 @@ var composite_update_count := 0
 var static_world := false
 var world_screen: Sprite2D
 var world_copies: Array = []
+var world_tiles: Array[Rect2] = []
+var world_tile_index := 0
+var world_atlas: TileTexture.Atlas
+var world_failed := false
+var peak_bake_pixels := 0
 signal world_ready
 
 func setup(map_data: Dictionary,plan: Dictionary,service: Node,target: SubViewport) -> void:
@@ -66,7 +74,12 @@ func setup(map_data: Dictionary,plan: Dictionary,service: Node,target: SubViewpo
 			for shift in [-8192.,8192.]:
 				var sprite := Sprite2D.new(); sprite.centered=false; sprite.position.x=shift
 				world_screen.add_child(sprite); world_copies.append(sprite)
-		request("overview",Rect2(0,0,2048,1024),4.,true,-10)
+		world_atlas=TileTexture.Atlas.new(); world_atlas.size=Vector2i(Vector2(WORLD_SIZE)*WORLD_DETAIL)+Vector2i.ONE*2
+		var step := WORLD_TILE_PIXELS/WORLD_DETAIL
+		for y in range(ceili(WORLD_SIZE.y/step)):
+			for x in range(ceili(WORLD_SIZE.x/step)):
+				world_tiles.append(Rect2(Vector2(x,y)*step,Vector2(minf(step,WORLD_SIZE.x-x*step),minf(step,WORLD_SIZE.y-y*step))))
+		request_world_tile()
 		return
 	for i in range(2):
 		var view := SubViewport.new(); view.disable_3d = true; view.transparent_bg = true; view.size = output.size
@@ -119,6 +132,7 @@ func create_tile(key: String,rect: Rect2,detail: float,pinned: bool,geometry: Di
 	clip.set_shader_parameter("canopy_mask",forest.get_texture()); clip.set_shader_parameter("view_origin",view_origin); clip.set_shader_parameter("view_scale",detail); crowns.material = clip; symbols.add_child(crowns)
 	var mountains := Batch.new(); mountains.mesh = ArrayMesh.new(); mountains.scale = Vector2.ONE*detail; mountains.position = view_origin; symbols.add_child(mountains)
 	var bytes: int = size_value.x*size_value.y*4*(5 if symbols.msaa_2d!=Viewport.MSAA_DISABLED else 1)
+	peak_bake_pixels=maxi(peak_bake_pixels,size_value.x*size_value.y*(6 if symbols.msaa_2d!=Viewport.MSAA_DISABLED else 2))
 	var row := {"rect":rect,"detail":detail,"pad":pad,"pixels":pixels,"region_size":rect.size*detail,"forest":forest,"view":symbols,"texture":symbols.get_texture(),"ready_frame":9223372036854775807,"registered":false,"copying":false,"bytes":bytes,"pinned":pinned}
 	entries[key] = row
 	var nodes := [canopy,crowns,mountains]; var kinds := ["forest","crowns","glyphs"]
@@ -167,6 +181,8 @@ func _process(delta: float) -> void:
 		var row: Dictionary = entries[key]
 		if not row.registered and not row.copying and Engine.get_process_frames()>=row.ready_frame:
 			row.copying = true
+			if static_world:
+				copy_world_tile(key,row); continue
 			var owner := self; var name_value: String = key; var source: Dictionary = row
 			TileTexture.copy(row.texture,Rect2i(Vector2i.ONE*(row.pad-1),row.pixels+Vector2i.ONE*2),func(texture,copied):
 				if not is_instance_valid(owner): return
@@ -200,6 +216,32 @@ func _process(delta: float) -> void:
 			blend_material.set_shader_parameter("older",groups[active_group].view.get_texture()); blend_material.set_shader_parameter("newer",groups[1-active_group].view.get_texture()); blend_material.set_shader_parameter("blend",0.)
 			clear_group(1-active_group)
 			groups_dirty = true
+
+func request_world_tile() -> void:
+	if world_failed or not is_inside_tree(): return
+	request("world-bake:%d"%world_tile_index,world_tiles[world_tile_index],WORLD_DETAIL,false,-10)
+
+func copy_world_tile(key: String,row: Dictionary) -> void:
+	var owner := self
+	var region := Rect2i(Vector2i.ONE*(row.pad-1),row.pixels+Vector2i.ONE*2)
+	var position := Vector2i(row.rect.position*WORLD_DETAIL)
+	TileTexture.copy_into(row.texture,region,world_atlas,position,func(copied: bool):
+		if not is_instance_valid(owner) or not owner.is_inside_tree(): return
+		row.view.queue_free(); row.forest.queue_free()
+		owner.entries.erase(key); owner.requests.erase(key)
+		if not copied:
+			owner.world_failed=true; owner.world_atlas=null
+			printerr("ATLAS_SYMBOL_BAKE_COPY_FAIL ",key); return
+		owner.world_tile_index+=1
+		if owner.world_tile_index<owner.world_tiles.size():
+			# Deferred viewport deletion finishes before another pair is allocated.
+			owner.get_tree().process_frame.connect(owner.request_world_tile,CONNECT_ONE_SHOT)
+			return
+		var texture: Texture2D=owner.world_atlas.finish()
+		owner.overview={"texture":texture,"pad":1,"detail":WORLD_DETAIL,"region_size":Vector2(WORLD_SIZE)*WORLD_DETAIL}
+		owner.scheduler.remember("overview",owner.overview,owner.world_atlas.size.x*owner.world_atlas.size.y*4,true)
+		owner.group_update_count+=1
+		owner.place_world_screen(); owner.world_ready.emit())
 
 func request_composite() -> void:
 	# Cached textures are rendered only when their placement/content changes.
@@ -288,3 +330,4 @@ func _exit_tree() -> void:
 	if is_instance_valid(scheduler):
 		scheduler.invalidate("symbols")
 		for key in entries: scheduler.forget(key)
+		if static_world: scheduler.forget("overview")

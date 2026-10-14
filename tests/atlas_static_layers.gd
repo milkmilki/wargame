@@ -40,8 +40,9 @@ func run():
 	symbols.setup({"seed":1,"mesh":{"spacing":1.,"x":[],"y":[],"adj_start":[0],"adj":[]},"environment":{"water":[]}}, {"forest":PackedByteArray(),"glyphs":[]},service,output)
 	await wait_ready(symbols)
 	var texture: Texture2D=screen.texture
+	var symbol_builds: int=symbols.tile_build_count
 	for i in range(20): symbols.set_camera(Vector2(-i*100,0),[1.,2.,4.,8.][i%4],Vector2(1280,720)); await process_frame
-	check(symbols.tile_build_count==1 and symbols.group_update_count==1 and screen.texture==texture,"global symbols reuse one frozen drawing at every camera position")
+	check(symbols.tile_build_count==symbol_builds and symbols.group_update_count==1 and screen.texture==texture,"global symbols reuse one frozen drawing at every camera position")
 	check(symbols.world_copies.size()==2 and symbols.groups.is_empty(),"seam copies share the image without viewport compositors")
 	# Dummy renderer cannot compile the production shader's TEXTURE helper.
 	# Real GPU lifecycle tests exercise wash.gdshader; here verify binding only.

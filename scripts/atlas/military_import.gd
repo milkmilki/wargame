@@ -29,8 +29,9 @@ static func install(state: GameState,payload: Dictionary) -> void:
 			city.food_storage = city.food_per_half_year*GameState.FOOD_CAPACITY_HALF_YEARS
 			city.terrain_height = maxf(0.,data.environment.elevation[source.cell])/maxf(1.,data.environment.maxElevation)
 			for slot in range(data.mesh.adj_start[source.cell],data.mesh.adj_start[source.cell+1]): city.terrain_relief = maxf(city.terrain_relief,absf(data.environment.elevation[data.mesh.adj[slot]]-data.environment.elevation[source.cell])/maxf(1.,data.environment.maxElevation))
-			var parent_name: String = data.regions.get("names",[])[source.region] if data.regions.has("names") else "州%d"%source.region
-			city.name = parent_name if source.role=="zhou" else "%s·府%d"%[parent_name,h.members[h.state_by_city[id]].find(id)]
+			# Fresh settlements use WorldNaming after capitals are initialized;
+			# explicit template names are restored below without reallocation.
+			city.name = ""; city.short_name = ""
 			if payload.has("settlement_records"):
 				var initial: Dictionary = payload.settlement_records[id]
 				city.owner_nation = initial.owner; city.name = initial.name; city.short_name = initial.short_name
@@ -57,7 +58,9 @@ static func install(state: GameState,payload: Dictionary) -> void:
 	state._initialize_city_garrisons_free(); state._initialize_capitals_and_warehouses(); state._initialize_city_loyalty(false)
 	for id in range(state.nations.size()):
 		var nation := state.nations[id]; var source: Dictionary = payload.nations[id]
-		nation.name = source.name; nation.short_name = source.name.left(1)
+		nation.name = source.name; nation.short_name = str(source.get("short_name",source.name.left(1)))
+		nation.name_kind = str(source.get("name_kind",nation.name_kind))
+		nation.founding_city_id = int(source.get("founding_city_id",-1))
 		nation.color = Color8(source.color[0],source.color[1],source.color[2])
 		if not state.random_ruler_profiles_enabled(): nation.ruler_name = "中性君主"
 		if source.has("ruler"):
@@ -65,6 +68,12 @@ static func install(state: GameState,payload: Dictionary) -> void:
 			nation.ruler_name = ruler.name; nation.ruler_archetype = ruler.archetype
 			nation.ruler_traits.assign(ruler.traits); nation.trade_policy = ruler.trade_policy
 			nation.strategic_region_anchor_city_id = int(ruler.get("region_anchor",-1))
+	if not payload.has("settlement_records"):
+		WorldNaming.assign_initial_names(state,int(data.seed))
+	else:
+		# Original capital is a historical identity, even after losing the city.
+		# Legacy version-9 templates have no anchor: use their initial capital.
+		for nation in state.nations: WorldNaming.ensure_founding_city_id(state,nation.id)
 	state._generate_armies(); RegionalStrategy.initialize_targets(state); EmpireStatus.reconcile(state); state.refresh_derived()
 
 static func source_fingerprint() -> String:

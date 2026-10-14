@@ -2735,11 +2735,12 @@ func _precompute_supply_sources_over_frames() -> Dictionary:
 		if siege_garrison != null and _succession_battle_context(siege_garrison) == null and (siege_garrison.city.food_storage > 0 or not army.is_city_garrison):
 			continue
 		if not (army.on_edge and army.move_to != -1):
+			var attack_target := Pathfinding.attack_supply_target(state,army)
 			var city_cache: Dictionary = _stable_supply_city_source_cache.get(army.owner_nation, {})
-			if city_cache.has(army.location_city):
+			if attack_target < 0 and city_cache.has(army.location_city):
 				result[army.get_instance_id()] = city_cache[army.location_city]
 				continue
-			var position := Vector2i(army.owner_nation, army.location_city)
+			var position := Vector3i(army.owner_nation, army.location_city, attack_target)
 			if representatives.has(position):
 				aliases[army.get_instance_id()] = representatives[position]
 				continue
@@ -2776,6 +2777,9 @@ func _precompute_supply_sources_over_frames() -> Dictionary:
 		for army: Army in payload["armies"]:
 			if army.on_edge and army.move_to != -1:
 				continue
+			# Terminal hostile roads have daily enemy-presence dependencies that
+			# are deliberately absent from the persistent friendly rear field.
+			if Pathfinding.attack_supply_target(state,army) >= 0: continue
 			if not _stable_supply_city_source_cache.has(army.owner_nation):
 				_stable_supply_city_source_cache[army.owner_nation] = {}
 			(_stable_supply_city_source_cache[army.owner_nation] as Dictionary)[army.location_city] = result[army.get_instance_id()]
@@ -3093,7 +3097,7 @@ func _build_supply_plan_for_army(
 	# this cache is discarded before withdrawals or morale recovery can change food.
 	var route_loss: float
 	if not army.on_edge and stationary_loss_cache is Dictionary:
-		var loss_key := Vector2i(army.owner_nation, army.location_city)
+		var loss_key := Vector3i(army.owner_nation, army.location_city, Pathfinding.attack_supply_target(state,army))
 		if not stationary_loss_cache.has(loss_key):
 			stationary_loss_cache[loss_key] = _weighted_supply_loss(sources)
 		route_loss = float(stationary_loss_cache[loss_key])
@@ -3403,9 +3407,11 @@ func _cached_supply_sources(
 ) -> Array[Dictionary]:
 	var on_edge := army.on_edge and army.move_to != -1
 	var position_key := _supply_position_key(army)
+	var attack_target := Pathfinding.attack_supply_target(state,army)
 	var source_cache := cache
 	var key: Variant = "%d:%s" % [army.owner_nation, position_key]
-	if not on_edge and stable_city_cache is Dictionary:
+	if attack_target >= 0: key = "%s:A%d" % [key,attack_target]
+	if not on_edge and attack_target < 0 and stable_city_cache is Dictionary:
 		var stable_cache: Dictionary = stable_city_cache
 		if not stable_cache.has(army.owner_nation):
 			stable_cache[army.owner_nation] = {}

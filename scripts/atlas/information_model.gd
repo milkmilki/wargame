@@ -134,6 +134,7 @@ static func city(state: GameState,id: int) -> Dictionary:
 	var doc := {"title":c.name,"subtitle":"%s · 第%d天"%["州治" if center==id else "府",state.day],"color":color,"point":c.map_position*Vector2(2048,1024),"actions":[action("nation","所属国家","flag",owner),action("focus","设为中心","center"),action("order","行军至此","route",id),action("copy","复制信息","copy")],"sections":[]}
 	var capital := owner>=0 and owner<state.nations.size() and state.nations[owner].capital_city_id==id
 	doc.sections.append(section("概况",[row("实控国家",nation_name(state,owner),"nation",owner),row("法理国家",nation_name(state,state.recognized_owner_of(id)),"nation",state.recognized_owner_of(id)),row("隶属州治",city_name(state,center),"city",center),row("行政身份","州治" if center==id else "府"),row("首都","是" if capital else "否")]))
+	if center==id: doc.sections[0].rows.append(row("简称",c.short_name if not c.short_name.is_empty() else "未记录"))
 	var production := [row("月人口产出",c.manpower_per_month),row("月金钱产出",c.gold_per_month),row("半年粮食产出",c.food_per_half_year)]
 	if c.has_warehouse: production.append(row("本城粮仓",c.food_storage))
 	doc.sections.append(section("资源与产出",production))
@@ -177,6 +178,7 @@ static func nation(state: GameState,id: int) -> Dictionary:
 	var traits: Array[String] = []
 	for trait_id in n.ruler_traits: traits.append(RulerProfile.trait_name(trait_id))
 	doc.sections.append(section("概况",[row("状态","存续" if n.alive else "已灭亡"),row("首都",city_name(state,capital),"city",capital),row("控制治所",seats),row("控制州治",centers),row("控制府",seats-centers),row("君主",n.ruler_name if not n.ruler_name.is_empty() else "未记录","person",n.ruler_person_id),row("君主特质","、".join(traits) if not traits.is_empty() else "无附加特质"),row("平均忠诚度","%.1f"%n.average_loyalty)]))
+	doc.sections[0].rows.append(row("国号来源",city_name(state,n.founding_city_id),"city",settlement_id(state,n.founding_city_id)))
 	var crown := PrincePolitics.person(state,id,n.crown_prince_person_id)
 	var politics := [row("继承人",crown.get("name","未记录"),"person",n.crown_prince_person_id),
 		row("竞争状态",prince_report(state,id).get("status","未记录")),

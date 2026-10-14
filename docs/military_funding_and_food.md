@@ -66,6 +66,53 @@ outcome when starting a fresh simulation with the fix.
 The final full regression run passed all 163 entries, including the real
 reverse-war annexation chain and the 365-day sync/frame equivalence scenario.
 
+## Atlas Terminal Attack Supply (2026-10-14)
+
+Splitting a hostile final attack road into ownerless traffic junctions used
+to sever logistics after its first segment. Movement allowed the target's
+district, but the warehouse field correctly excluded that district; the
+formation's next rear junction therefore had no warehouse distance. This
+was a segmentation bug: the same unsplit road supplied the formation from
+its friendly endpoint.
+
+Attack supply now joins a query-local corridor in the actual hostile target
+district to the existing rear warehouse field. The corridor traverses traffic
+junctions and terminates at friendly settlements; it cannot pass an uncaptured
+enemy settlement, another foreign district, enemy road presence or a closed
+road. A field encounter keeps its committed attack destination; arrived
+besiegers use the battle's target. Resident defenders retain local isolation.
+Real warehouse withdrawals and the existing distance-consumption formula
+remain the source of the supply ratio.
+
+Stationary attack queries include the destination in their daily source and
+weighted-loss keys. They cannot reuse the persistent owner/city cache of an
+idle formation, and refresh terminal-road interdiction every day even when
+the ordinary rear field is unchanged. Worker aliases share only matching
+owner, rear junction and target. No global hostile logistics permission,
+snapshot field or extension interface was added.
+
+The user's PID34836 log identified seed1, 40 initial nations, Eurasia mask
+(20–55 north, -15–145 east), and a final day565. A same-parameter rerun of the
+pre-fix source reproduced day510 battle72 at Changyin: attacking formations
+19/130/126 each had 11,658 soldiers, supply0 and a rear anchor at junction513;
+Badong warehouse128 still held 29,673 food. Applying the fixed daily settlement
+to that reproduced state gives all three supply1 while the city's empty local
+stock and resident defender remain at supply0. The original log contains
+periodic summaries, not a restorable runtime save; this is a reproduced case,
+not a claim of byte-identical recovery of every user action.
+
+`atlas_attack_supply` covers additive unsplit/split marching loss, field
+contact, actual siege entry/withdrawals, resident and idle isolation, empty
+warehouses, foreign districts, hostile settlements, road closures and enemy
+interdiction. Warm-cache interdiction/reopening uses both synchronous and
+worker settlement and compares complete native snapshots byte-for-byte.
+The final dedicated test passes 91 checks. All 17 selected supply/access/war
+regressions passed; after adding field-contact coverage, nine relevant entries
+were rerun and passed, including compilation and the shared suite (502/0).
+The final seed1 Eurasia run reached day565 with no territory, road occupancy,
+army/battle binding or resource-stock audit failures (PID30840). These runs
+validate the corrected rules; their war outcomes need not match the old log.
+
 ## Food Qualification And Cash Reporting
 
 ResourceForecastRules returns food_feasible, food_growth_allowed and

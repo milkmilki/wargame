@@ -14,7 +14,9 @@ static func encode(state: GameState) -> Dictionary:
 	for nation in state.nations:
 		if not nation.alive or state.land_cities_of(nation.id).is_empty(): continue
 		nation_map[nation.id] = nations.size()
-		nations.append({"name":nation.name,"seat":state.cities[nation.capital_city_id].id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)],
+		# Templates start independent countries, not runtime rebels or vassals.
+		var name_kind: String = nation.name_kind if nation.name_kind in [WorldNaming.KIND_DYNASTY,WorldNaming.KIND_WARRING_STATE] else WorldNaming.KIND_WARRING_STATE
+		nations.append({"name":nation.name,"short_name":nation.short_name,"name_kind":name_kind,"founding_city_id":nation.founding_city_id,"seat":state.cities[nation.capital_city_id].id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)],
 			"ruler":{"name":nation.ruler_name,"archetype":nation.ruler_archetype,"traits":nation.ruler_traits.duplicate(),"trade_policy":nation.trade_policy,"region_anchor":nation.strategic_region_anchor_city_id}})
 	payload.nations = nations; payload.settlement_records = []
 	for c in range(payload.hierarchy.cities.size()):
@@ -47,6 +49,8 @@ static func validate(definition: Dictionary) -> String:
 	if not payload.get("district_pixels") is PackedInt32Array or not payload.get("ownership") is PackedInt32Array: return "Atlas 显示编号格式无效。"
 	for nation in payload.nations:
 		if not nation is Dictionary or not nation.get("name") is String or not nation.get("color") is Array or nation.color.size()!=3: return "Atlas 国家资料无效。"
+		if nation.has("short_name") and (not nation.short_name is String or nation.short_name.strip_edges().is_empty()): return "Atlas 国家简称无效。"
+		if nation.has("name_kind") and nation.name_kind not in [WorldNaming.KIND_DYNASTY,WorldNaming.KIND_WARRING_STATE,WorldNaming.KIND_VASSAL,WorldNaming.KIND_REBEL]: return "Atlas 国家命名类型无效。"
 		for channel in nation.color:
 			if not whole_number(channel,0,256): return "Atlas 国家颜色无效。"
 		if nation.has("ruler"):
@@ -79,6 +83,7 @@ static func validate(definition: Dictionary) -> String:
 	if not h.get("cities") is Array or not h.get("members") is Array or not graph.get("nodes") is Array or not graph.get("edges") is Array: return "Atlas 州府或交通维度无效。"
 	if h.cities.is_empty() or graph.nodes.size()<h.cities.size(): return "Atlas 缺少治所。"
 	for nation in payload.nations:
+		if nation.has("founding_city_id") and not whole_number(nation.founding_city_id,-1,h.cities.size()): return "Atlas 国号来源城市无效。"
 		if nation.has("ruler") and not whole_number(nation.ruler.get("region_anchor",-1),-1,h.cities.size()): return "Atlas 经营区域锚点无效。"
 	for key in ["district_of_cell","center_by_city","state_by_city","state_parents","guardian_by_parent","state_by_parent"]:
 		if not h.get(key) is PackedInt32Array: return "Atlas 固定映射格式无效。"
