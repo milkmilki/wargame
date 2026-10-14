@@ -10954,10 +10954,29 @@ func _manage_administrative_campaign(
 		entry_city = _campaign_entry_fu(
 			nation_id, center_city_id, attacker_bloc
 		)
-	plan.entry_city_id=entry_city
-	if entry_city>=0 and not state.is_enemy(nation_id,state.cities[entry_city].owner_nation):entry_city=-1
-	if entry_city>=0 and _campaign_staging_cities(nation_id,entry_city).is_empty():entry_city=-1
+	var valid_entry := (
+		entry_city >= 0 and state.is_fu_city(entry_city)
+		and state.administrative_center_of(entry_city) == center_city_id
+		and state.is_enemy(nation_id, state.cities[entry_city].owner_nation)
+	)
+	if valid_entry and _campaign_staging_cities(nation_id, entry_city).is_empty():
+		valid_entry = false
+		# A changed rear border must not administratively cancel a cohort that
+		# is already marching or fighting at its committed entry.
+		for army in _campaign_plan_armies(plan):
+			if _campaign_army_at_or_advancing(army, entry_city):
+				valid_entry = true
+				break
+	if not valid_entry:
+		entry_city = _campaign_entry_fu(nation_id, center_city_id, attacker_bloc)
+	plan.entry_city_id = entry_city
 	if entry_city < 0:
+		if plan.phase == CoalitionCampaignFront.Phase.BREAK_IN:
+			# Losing the entry is a route change, not an increase in V. Rebuild
+			# a legal rally instead of retrying an impossible center assault.
+			plan.phase = CoalitionCampaignFront.Phase.ASSEMBLE
+			plan.staging_city_id = -1
+			plan.tactical_target_city_ids.clear()
 		# A rear fu behind the hostile center is not an entry. Direct-center
 		# deployment uses the same path and readiness checks as a fu-less zhou.
 		return _manage_campaign_direct_center(

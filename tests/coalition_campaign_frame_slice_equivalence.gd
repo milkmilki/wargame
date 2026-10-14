@@ -24,7 +24,7 @@ func run() -> void:
 	if failures > 0:
 		quit(1)
 		return
-	for scenario in ["peace", "mobilize", "lost_camp", "reverse"]:
+	for scenario in ["peace", "mobilize", "lost_camp", "reverse", "lost_entry", "reverse_lost_entry"]:
 		await compare(scenario)
 	check(queued_commands > 0, "equivalence includes executable buffered commands")
 	print("COALITION_SLICE_RESULT checks=%d failures=%d queued=%d" % [checks, failures, queued_commands])
@@ -34,6 +34,33 @@ func fixture(scenario: String) -> GameState:
 	var state := Direct.fixture()
 	if scenario == "peace":
 		state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
+		return state
+	if scenario.ends_with("lost_entry"):
+		var actor := 1 if scenario.begins_with("reverse") else 0
+		var center := 0 if actor == 1 else 3
+		if actor == 1:
+			state.cities[2].owner_nation = 2
+			state.recognized_city_owners[2] = 2
+		var entry := City.new(); entry.id = state.cities.size(); entry.owner_nation = 1 - actor
+		entry.map_position = Vector2(.7, .1)
+		state.cities.append(entry); state.adjacency[entry.id] = [] as Array[int]
+		state.administrative_center_by_city.append(center); state.region_ids.append(0)
+		state.recognized_city_owners.append(entry.owner_nation)
+		var home := state.nations[actor].capital_city_id
+		state._add_edge(home, entry.id); state._add_edge(entry.id, center)
+		var front := state.create_campaign_front(state.war_id_between(0, 1),
+			[actor] as Array[int], actor, CoalitionCampaignFront.Mode.OFFENSE, center)
+		front.phase = CoalitionCampaignFront.Phase.BREAK_IN
+		front.entry_city_id = 1 if actor == 1 else 4
+		front.tactical_target_city_ids = [front.entry_city_id] as Array[int]
+		front.staging_city_id = home; front.had_forces = true
+		for index in range(3):
+			var troop := Direct.army(state, actor, home)
+			troop.campaign_front_id = front.front_id; troop.campaign_war_id = front.war_id
+			front.army_assignments[troop.id] = home
+		Direct.army(state, 1 - actor, center)
+		state.ownership_revision += 1; state.administrative_region_revision += 1
+		state.refresh_derived()
 		return state
 	var first := Direct.army(state, 0, 0, 45000)
 	Direct.army(state, 0, 1, 45000)
@@ -91,6 +118,9 @@ func compare(scenario: String) -> void:
 		check(sim.ai_last_command_commit_failures == 0, scenario + ": real command commit")
 	check(var_to_bytes(Fixture.snapshot(sims[0].state)) == var_to_bytes(Fixture.snapshot(sims[1].state)),
 		scenario + ": state after command commit")
+	if scenario.ends_with("lost_entry"):
+		check(sims[0].state.armies.any(func(a): return a.state == Army.State.MOVING and a.ai_action == ActionCandidate.Kind.ATTACK and a.ai_target_city == 8),
+			scenario + ": replacement entrance starts actual movement after commit")
 	for sim in sims: sim.free()
 
 func command_rows(sim: Simulation) -> Array:
