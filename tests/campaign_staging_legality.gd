@@ -2,7 +2,7 @@ extends SceneTree
 var failures:=0
 class LegacySimulation extends Simulation:
 	func _campaign_staging_cities(nation:int,target:int) -> Array[int]:
-		return DiplomacyAI.war_staging_cities_for_objective(state,nation,target)
+		return DiplomacyAI.staging_cities_for_objective(state,nation,target)
 func check(ok:bool,label:String):
 	if not ok:failures+=1;push_error(label)
 func _init():
@@ -18,7 +18,8 @@ func _init():
 		var edge:=Edge.new();edge.city_a=pair.x;edge.city_b=pair.y;edge.control_city_id=0 if pair.x==0 else 2;edge.max_manpower=15000
 		state.edges.append(edge);state.edge_lookup[GameState.edge_key(pair.x,pair.y)]=edge;state.adjacency[pair.x].append(pair.y);state.adjacency[pair.y].append(pair.x)
 	var sim:Simulation=LegacySimulation.new() if OS.get_cmdline_user_args().has("--baseline-repro") else Simulation.new();sim.state=state
-	check(DiplomacyAI.war_staging_cities_for_objective(state,0,1).has(0),"coarse territorial border presents the friendly staging point")
+	check(DiplomacyAI.staging_cities_for_objective(state,0,1).has(0),"coarse territorial border presents the friendly staging point")
+	check(DiplomacyAI.war_staging_cities_for_objective(state,0,1).is_empty(),"objective selection shares the actual military road check")
 	check(sim._campaign_staging_cities(0,1).is_empty(),"actual road through neutral jurisdiction cannot be a campaign entrance")
 	var prewar_cache := {}
 	check(DiplomacyAI.war_preparation_staging_cities(state,0,1,prewar_cache).is_empty(),"prewar qualification must reject the same unusable attack road before declaring")

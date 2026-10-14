@@ -288,6 +288,22 @@ static func bootstrap(state: GameState, components: Array[Dictionary]) -> void:
 		if not front.retiring and front.mode == CoalitionCampaignFront.Mode.OFFENSE and front.state_campaign_ids.is_empty() and state.is_zhou_city(front.center_city_id) and not members_for(components, front.war_id, front.participant_nation_ids).is_empty():
 			adopt_offense(state, front, components)
 
+static func _enemy_fu_under_neutral_center(state: GameState, record: StateCampaign) -> bool:
+	var owner := state.cities[record.center_city_id].owner_nation
+	# A state grouping can contain another country's independent Fu. Its
+	# legally neutral seat is not the attack objective. A seat captured from
+	# either campaign side still follows the ordinary third-party ending rule.
+	if state.recognized_owner_of(record.center_city_id) != owner or record.attacker_members.has(owner) or record.defender_members.has(owner): return false
+	for attacker in record.attacker_members:
+		if state.is_enemy(attacker, owner): return false
+	for city_id in state.administrative_members(record.center_city_id):
+		if not state.is_fu_city(city_id): continue
+		var defender := state.cities[city_id].owner_nation
+		if not record.defender_members.has(defender): continue
+		for attacker in record.attacker_members:
+			if state.is_enemy(attacker, defender) and state.war_id_between(attacker, defender) == record.war_id: return true
+	return false
+
 static func reconcile(state: GameState, components: Array[Dictionary], activity: Dictionary) -> void:
 	var ids := state.state_campaigns.keys(); ids.sort()
 	var unique := {}
@@ -312,7 +328,7 @@ static func reconcile(state: GameState, components: Array[Dictionary], activity:
 		record.attacker_members = attackers
 		record.defender_members = defenders
 		var owner := state.cities[record.center_city_id].owner_nation
-		if not attackers.has(owner) and not defenders.has(owner): end(state, id, "目标被第三方取得"); continue
+		if not attackers.has(owner) and not defenders.has(owner) and not _enemy_fu_under_neutral_center(state, record): end(state, id, "目标被第三方取得"); continue
 		var pair := state.find_campaign_pair(record.war_id, attackers[0], defenders[0])
 		record.pair_id = pair.pair_id if pair != null else -1
 		if record.incidental and not bool(state.campaign_defense_context(defenders[0], record.center_city_id, record.war_id, activity).active):

@@ -4255,7 +4255,8 @@ static func _objective_staging_cities(
 	if context == ObjectiveContext.PREWAR:
 		return war_preparation_staging_cities(state, nation_id, city_id, cache, allow_expedition)
 	if not allow_expedition:
-		return staging_cities_for_objective(state, nation_id, city_id, cache)
+		var direct := staging_cities_for_objective(state, nation_id, city_id, cache)
+		return _legal_campaign_staging_cities(state, nation_id, city_id, direct, cache) if not state.atlas_layout.is_empty() else direct
 	return war_staging_cities_for_objective(state, nation_id, city_id, cache)
 
 
@@ -5836,11 +5837,32 @@ static func war_staging_cities_for_objective(
 	var direct := staging_cities_for_objective(
 		state, nation_id, objective_city, evaluation_cache
 	)
+	if not state.atlas_layout.is_empty():
+		direct = _legal_campaign_staging_cities(state, nation_id, objective_city, direct, evaluation_cache)
 	if not direct.is_empty():
 		return direct
-	return _dock_expedition_staging_cities(
+	var expedition := _dock_expedition_staging_cities(
 		state, nation_id, objective_city, evaluation_cache
 	)
+	return _legal_campaign_staging_cities(state, nation_id, objective_city, expedition, evaluation_cache) if not state.atlas_layout.is_empty() else expedition
+
+
+static func _legal_campaign_staging_cities(
+	state: GameState, nation_id: int, objective_city: int,
+	candidates: Array[int], cache: Dictionary
+) -> Array[int]:
+	# Scoring and execution share physical military access. A territorial
+	# border alone can hide a road segment controlled by a neutral seat.
+	var key := "legal_stage:%d:%d:%d:%d:%d:%s" % [nation_id, objective_city, state.ownership_revision, state.diplomacy_revision, state.road_network_revision, str(candidates)]
+	if cache.has(key): return cache[key]
+	var legal: Array[int] = []
+	var fields: Dictionary = cache.get("campaign_staging_path_fields", {})
+	for candidate in candidates:
+		var field := AiWorldView.cached_path_field(state, state.day, fields, candidate, nation_id, false, true, objective_city)
+		if float(field["dist"].get(objective_city, INF)) < INF: legal.append(candidate)
+	cache["campaign_staging_path_fields"] = fields
+	cache[key] = legal
+	return legal
 
 
 static func war_preparation_staging_cities(

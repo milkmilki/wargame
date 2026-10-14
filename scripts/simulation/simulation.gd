@@ -4294,15 +4294,27 @@ func _capital_capture_transfer_city_ids(
 		var opponents := state.wars_of(surrendering)
 		if not opponents.is_empty():
 			victor = int(opponents[0])
+	# An independent country's capital may be a Fu under a neutral seat.
+	# The state-center loop cannot discover it; the actual captured legal
+	# capital must participate in surrender without transferring that seat.
+	if state.recognized_owner_of(captured_capital_id) == surrendering:
+		result.append(captured_capital_id)
+	var capital_center := state.administrative_center_of(captured_capital_id)
 	for center_value in state.administrative_center_city_ids:
 		var center_id := int(center_value)
+		var fu_capital_state := center_id == capital_center and state.is_fu_city(captured_capital_id)
 		if (
 			center_id != captured_capital_id
 			and state.cities[center_id].owner_nation != victor
+			and not fu_capital_state
 		):
 			continue
 		for city_id in state.administrative_members(center_id):
-			if state.recognized_owner_of(city_id) == surrendering:
+			# A Fu capital does not grant its neutral parent seat or other
+			# unoccupied cities. Confirm already occupied legal Fu in that state
+			# so surrender cannot return the attacker's camp to the loser.
+			if fu_capital_state and state.cities[center_id].owner_nation != victor and city_id != captured_capital_id and state.cities[city_id].owner_nation != victor: continue
+			if state.recognized_owner_of(city_id) == surrendering and not result.has(city_id):
 				result.append(city_id)
 	for city in state.cities:
 		if (
@@ -9712,6 +9724,11 @@ func _plan_campaign_pair(pair: CoalitionCampaignPair, cache: Dictionary) -> bool
 			slot["counterattack"] = false
 			_end_front_state_campaigns(front, "进攻路线失效")
 			_retire_campaign_front(front)
+			# Residual troops can still require an independent local defense.
+			# That physical threat must not reserve a canceled offensive slot.
+			slot["center_city_id"] = -1
+			slot["state_campaign_id"] = -1
+			slot["awaiting_mobilization"] = false
 			changed = true
 			front = null
 		if front != null and _administrative_campaign_complete(front.center_city_id, pair.opponents_for(front.anchor_nation_id)) and not _front_has_active_field_engagement(front):
@@ -9805,7 +9822,7 @@ func _pending_declared_battlefield(pair: CoalitionCampaignPair) -> Dictionary:
 					continue
 				var bloc := DiplomacyAI._cached_alliance_bloc(state, int(actor), _coalition_campaign_query_cache)
 				var entry := _campaign_entry_fu(int(actor), center, bloc)
-				if _controlled_campaign_fu(int(actor), center, bloc) < 0 and _campaign_staging_city(int(actor), entry if entry >= 0 else center) < 0:
+				if _campaign_staging_city(int(actor), entry if entry >= 0 else center) < 0:
 					continue
 				var declared_day := int(declared.get("started_day", 0))
 				if best.is_empty() or declared_day < int(best["started_day"]) or (declared_day == int(best["started_day"]) and EquivariantOrder.mirror_orbit_city_less(state, center, int(best["center"]))):
@@ -9824,12 +9841,22 @@ func _campaign_front_has_entry(front: CoalitionCampaignFront) -> bool:
 	if _front_has_active_field_engagement(front):
 		return true
 	for army in _campaign_plan_armies(front):
-		var city_id := army.current_city_node()
-		if (army.on_edge or (city_id >= 0 and state.administrative_center_of(city_id) == front.center_city_id)):
+		var target := army.ai_target_city
+		if (army.ai_action == ActionCandidate.Kind.ATTACK
+			and target >= 0 and target < state.cities.size()
+			and state.administrative_center_of(target) == front.center_city_id
+			and state.is_enemy(army.owner_nation, state.cities[target].owner_nation)
+			and _campaign_army_at_or_advancing(army, target)):
 			return true
 	var bloc := DiplomacyAI._cached_alliance_bloc(state, front.anchor_nation_id, _coalition_campaign_query_cache)
 	if state.campaign_has_forward_camp(front):
-		return true
+		for actor in front.participant_nation_ids:
+			if not state.has_military_access(actor, state.cities[front.camp_city_id].owner_nation): continue
+			for target in state.administrative_members(front.center_city_id):
+				if not state.is_enemy(actor, state.cities[target].owner_nation): continue
+				var field := _cached_ai_path_field(actor, front.camp_city_id, actor, false, true, target)
+				if float(field["dist"].get(target, INF)) < INF: return true
+		return false
 	if state.campaign_has_rear_camp(front):
 		var field := _cached_ai_path_field(
 			front.anchor_nation_id, front.camp_city_id, front.anchor_nation_id,
@@ -9870,6 +9897,10 @@ func _select_component_objective(
 				center_id, enemy_ids, component["members"] as Array[int],
 				excluded_centers
 			):
+				continue
+			var bloc := DiplomacyAI._cached_alliance_bloc(state, member_id, _coalition_campaign_query_cache)
+			var entry := _campaign_entry_fu(member_id, center_id, bloc)
+			if _campaign_staging_city(member_id, entry if entry >= 0 else center_id) < 0:
 				continue
 			if (
 				initial.is_empty()
@@ -11080,16 +11111,7 @@ func _campaign_entry_fu(
 func _campaign_staging_cities(nation_id: int, objective_city: int) -> Array[int]:
 	var cache: Dictionary = _coalition_campaign_query_cache.get("campaign_staging_queries", {})
 	_coalition_campaign_query_cache["campaign_staging_queries"] = cache
-	var candidates:=DiplomacyAI.war_staging_cities_for_objective(state,nation_id,objective_city,cache)
-	if state.atlas_layout.is_empty():return candidates
-	var key:="legal_stage:%d:%d:%d:%d:%d"%[nation_id,objective_city,state.ownership_revision,state.diplomacy_revision,state.road_network_revision]
-	if cache.has(key):return cache[key]
-	var legal: Array[int]=[]
-	for candidate in candidates:
-		var field:=_cached_ai_path_field(nation_id,candidate,nation_id,false,true,objective_city,0)
-		if float(field.dist.get(objective_city,INF))<INF:legal.append(candidate)
-	cache[key]=legal
-	return legal
+	return DiplomacyAI.war_staging_cities_for_objective(state,nation_id,objective_city,cache)
 
 
 func _campaign_staging_city(nation_id: int, objective_city: int) -> int:
