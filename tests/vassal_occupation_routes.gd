@@ -17,6 +17,8 @@ func run_routes() -> void:
 	_test_nested_vassal()
 	_test_vassal_capital_victory(false)
 	_test_vassal_capital_victory(true)
+	_test_indirect_allied_siege(0)
+	_test_indirect_allied_siege(3)
 	for message in _failures: push_error("VASSAL_OCCUPATION_FAIL: "+message)
 	print("VASSAL_OCCUPATION checks=%d failures=%d"%[_checks,_failures.size()])
 	quit(0 if _failures.is_empty() else 1)
@@ -216,4 +218,32 @@ func _test_nested_vassal() -> void:
 	_capture(state,sim,army,4)
 	_check(state.cities[4].owner_nation==0,"nested disconnected vassal returns new territory to the peaceful sovereign root")
 	_check(state.suzerainty_structure_valid() and state.territory_structure_valid(),"nested capture keeps the existing political hierarchy")
+	sim.free()
+
+func _test_indirect_allied_siege(first_owner: int) -> void:
+	var state := _political_fixture()
+	state.set_diplomatic_relation(2,3,GameState.DiplomaticRelation.ALLIED)
+	state.set_diplomatic_relation(2,1,GameState.DiplomaticRelation.WAR)
+	_check(not state.has_military_access(2,0) and state.alliance_bloc(2).has(0),"indirect ally shares the war component without direct transit rights")
+	var war := state.war_id_between(0,1)
+	for member in [2,3]: state.merge_war_ids(war,state.war_id_between(member,1))
+	_add_branch(state,Edge.Kind.LAND,3)
+	state._add_edge(4,2); state.edge_of(4,2).control_city_id=2
+	state.cities[4].garrison_manpower=100
+	var sim := Simulation.new(); sim.setup(state)
+	var first := _army(state,first_owner,4); first.occupation_claimant_nation=first_owner
+	sim._start_or_join_siege(first,state.cities[4],state.edge_of(TRAFFIC_ID,4))
+	var siege := sim._siege_battle_of(state.cities[4])
+	_check(siege!=null and siege.siege_claimant_nation==first_owner,"first siege participant freezes the lawful claim")
+	if siege==null: sim.free(); return
+	var ally := _army(state,2,4); ally.size=30000; ally.max_size=30000
+	sim._start_or_join_siege(ally,state.cities[4],state.edge_of(TRAFFIC_ID,4))
+	_check(siege.side_a.has(ally),"stronger indirect ally joins the same actual siege")
+	if first_owner==3:
+		state.edge_of(3,TRAFFIC_ID).max_manpower=0; state.road_network_revision+=1
+	sim._complete_siege_capture(siege)
+	_check(state.cities[4].owner_nation==0 and siege.siege_claimant_nation==0,"indirect strongest captor preserves or redirects the claim to the sovereign root")
+	_check(state.cities[4].occupation_sponsor_nation==2,"indirect captor remains the actual occupation sponsor")
+	_check(not state.has_military_access(2,0),"receiving war spoils does not grant new military transit rights")
+	_check(state.territory_structure_valid(),"indirect siege capture preserves political territory invariants")
 	sim.free()

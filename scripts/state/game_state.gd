@@ -4232,6 +4232,7 @@ func occupation_connects_to_capital(nation_id: int, target: City) -> bool:
 		return false
 	var projected := {target.id: true}
 	if is_zhou_city(target.id):
+		var allies := alliance_bloc(nation_id)
 		var old_owner := target.owner_nation
 		var capitulation := (old_owner >= 0 and old_owner < nations.size()
 			and nations[old_owner].capital_city_id == target.id
@@ -4242,7 +4243,7 @@ func occupation_connects_to_capital(nation_id: int, target: City) -> bool:
 			elif cities[member].is_capital and member != target.id:
 				continue
 			elif (is_enemy(nation_id,cities[member].owner_nation)
-				or (has_military_access(nation_id,cities[member].owner_nation)
+				or (allies.has(cities[member].owner_nation)
 					and is_enemy(nation_id,recognized_owner_of(member)))):
 				projected[member] = true
 	var reached := {capital: true}

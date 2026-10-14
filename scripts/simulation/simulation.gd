@@ -4258,7 +4258,7 @@ func _zhou_defection_operations(
 		normalized_sponsor = claimant
 	for member_id in state.administrative_members(center_id):
 		var controller := state.cities[member_id].owner_nation
-		var shared_occupation := (state.has_military_access(normalized_sponsor,controller)
+		var shared_occupation := (_occupation_allied(normalized_sponsor,controller)
 			and state.is_enemy(normalized_sponsor,state.recognized_owner_of(member_id)))
 		if (
 			member_id == center_id
@@ -14698,26 +14698,31 @@ func _occupation_recipient_for_capture(claimant: int, actor: int, target: City) 
 	if (legal >= 0 and legal < state.nations.size()
 		and not state.land_cities_of(legal).is_empty()
 		and state.is_enemy(legal,target.owner_nation)
-		and (legal == actor or state.is_allied(actor,legal))):
+		and _occupation_allied(actor,legal)):
 		return legal
 	if (claimant < 0 or claimant >= state.nations.size()
 		or not state.nations[claimant].alive
-		or (claimant != actor and not state.has_military_access(actor,claimant))):
+		or not _occupation_allied(actor,claimant)):
 		claimant = actor
 	# Residual enemy prefectures follow the already captured friendly seat.
 	var center := state.administrative_center_of(target.id)
 	if center >= 0 and center != target.id:
 		var controller := state.cities[center].owner_nation
-		if (controller >= 0 and state.has_military_access(actor,controller)
+		if (controller >= 0 and _occupation_allied(actor,controller)
 			and state.is_enemy(controller,target.owner_nation)):
 			claimant = controller
 	if (target.is_settlement() and state.is_vassal(claimant)
 		and not state.is_in_civil_war(claimant)
 		and not state.occupation_connects_to_capital(claimant,target)):
 		var root := state.external_territory_recipient(claimant)
-		if root != claimant and state.has_military_access(actor,root):
+		if root != claimant and _occupation_allied(actor,root):
 			return root
 	return claimant
+
+## War spoils follow the alliance component; this grants no military transit rights.
+func _occupation_allied(actor: int, recipient: int) -> bool:
+	return (state.has_military_access(actor,recipient)
+		or (not state.is_enemy(actor,recipient) and state.alliance_bloc(actor).has(recipient)))
 
 ## Atlas junctions have no political owner; retain the last real departure city.
 func _occupation_origin_city(army: Army, from_city: int) -> int:
