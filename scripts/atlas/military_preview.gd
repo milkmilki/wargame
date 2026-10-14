@@ -114,6 +114,7 @@ var diplomacy_palette_updates := 0
 var player_nation := SpinBox.new()
 var military_status := Label.new()
 var last_owner_revision := -1
+var last_nation_revision: Array = []
 var history_control := SpinBox.new()
 var historical_view := false
 var pending_selection := {}
@@ -385,6 +386,7 @@ func present_world(prepared: GameState,payload: Dictionary,source: String = "atl
 	raster = payload.raster; data = visual_data(); provinces = military_payload.district_pixels.duplicate(); display = payload.display.duplicate(true); display.nations = data.nations
 	sync_settlement_mask()
 	default_owners = data.ownership.duplicate(); last_owner_revision = state.ownership_revision
+	last_nation_revision = [state.naming_revision, state.family_revision]
 	await super.build_view()
 	text_layer.z_index = 7
 	if overlay!=null: overlay.queue_free()
@@ -430,7 +432,7 @@ func visual_data() -> Dictionary:
 	result.regions = {"count":cities.size(),"of":h.district_of_cell,"seat":seats,"area":areas,"capacity":capacities,"names":names}
 	result.cities = cities; result.ownership = owners; result.nations = []
 	for nation in state.nations:
-		result.nations.append({"name":nation.name,"seat":nation.capital_city_id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)]})
+		result.nations.append({"name":state.nation_display_name(nation.id),"seat":nation.capital_city_id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)]})
 	result.roads = military_payload.network.routes; result.traffic_graph = military_payload.graph
 	return result
 
@@ -448,10 +450,15 @@ func _process(_delta: float) -> void:
 	refresh_attack_arrows()
 	military_status.text = "历史：第%d天 · 只读政治快照"%overlay.state.day if historical_view else "第%d天 · 军队%d · 战斗%d · %s"%[state.day,state.armies.size(),state.battles.size(),"暂停" if simulation.paused else "运行军事AI"]
 	history_control.max_value = maxi(0,history.snapshot_count()-1)
-	if not historical_view and last_owner_revision!=state.ownership_revision:
-		for c in range(data.cities.size()): data.ownership[c] = state.cities[c].owner_nation
-		sync_nations(state)
-		last_owner_revision = state.ownership_revision; refresh_ownership()
+	if not historical_view:
+		var owners_changed := last_owner_revision != state.ownership_revision
+		var names_changed := false
+		if owners_changed or last_nation_revision != [state.naming_revision, state.family_revision]:
+			names_changed = sync_nations(state)
+		if owners_changed:
+			for c in range(data.cities.size()): data.ownership[c] = state.cities[c].owner_nation
+			last_owner_revision = state.ownership_revision
+		if owners_changed or names_changed: refresh_ownership()
 	if not political_pending and not historical_view and WarFronts.state_key(state)!=last_front_state_key:
 		refresh_fronts(state)
 	if is_instance_valid(front_layer): front_layer.set_view_zoom(zoom)
@@ -619,11 +626,15 @@ func return_to_current() -> void:
 	last_owner_revision=-1; refresh_diplomacy()
 	if info_panel!=null and info_panel.visible: info_panel.show_document(information_document())
 
-func sync_nations(source: GameState) -> void:
-	data.nations = []
-	for nation in source.nations: data.nations.append({"name":nation.name,"seat":nation.capital_city_id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)]})
+func sync_nations(source: GameState) -> bool:
+	var nations: Array = []
+	for nation in source.nations: nations.append({"name":source.nation_display_name(nation.id),"seat":nation.capital_city_id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)]})
+	var changed: bool = nations != data.nations
+	data.nations = nations
 	display.nations = data.nations
+	last_nation_revision = [source.naming_revision, source.family_revision]
 	if not historical_view: player_nation.max_value = maxi(0,source.nations.size()-1)
+	return changed
 
 func select_at(position_value: Vector2) -> void:
 	if state==null or generating or not view_ready: return

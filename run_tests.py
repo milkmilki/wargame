@@ -32,7 +32,7 @@ CORE = [
     "ultimatum_forecast_cache_equivalence",
 ]
 ATLAS = [
-	"environment_nations_atlas", "atlas_shipping", "atlas_shipping_world", "trade_corridors", "atlas_trade_declutter", "atlas_trade_corridor_world", "atlas_geographic_names",
+	"environment_nations_atlas", "atlas_shipping", "atlas_shipping_world", "trade_corridors", "atlas_trade_declutter", "atlas_trade_corridor_world", "atlas_geographic_names", "atlas_formal_nation_labels",
     "atlas_diplomacy_wakes",
     "atlas_alliance_cache", "atlas_alliance_runtime",
     "atlas_coalition_components", "atlas_coalition_runtime",
