@@ -26,8 +26,9 @@ static func rows(state: GameState,observer: int,search: String = "") -> Array:
 		if city.is_settlement() and city.owner_nation>=0 and city.owner_nation<counts.size(): counts[city.owner_nation]+=1
 	var query := search.strip_edges().to_lower()
 	for nation in state.nations:
-		if not nation.alive or (not query.is_empty() and not nation.name.to_lower().contains(query)): continue
+		var display_name := WorldNaming.nation_display_name(state,nation.id)
+		if not nation.alive or (not query.is_empty() and not display_name.to_lower().contains(query)): continue
 		var capital := nation.capital_city_id
-		result.append({"id":nation.id,"name":nation.name,"capital":state.cities[capital].name if capital>=0 and capital<state.cities.size() else "无","count":counts[nation.id],"relation":LABELS[kind(state,observer,nation.id)],"color":color(state,observer,nation.id)})
+		result.append({"id":nation.id,"name":display_name,"capital":state.cities[capital].name if capital>=0 and capital<state.cities.size() else "无","count":counts[nation.id],"relation":LABELS[kind(state,observer,nation.id)],"color":color(state,observer,nation.id)})
 	result.sort_custom(func(a,b): return a.id<b.id)
 	return result

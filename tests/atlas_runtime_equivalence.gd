@@ -4,7 +4,7 @@ func snapshot(state: GameState) -> Array:
 	var armies:=NativeSnapshotBuilder._build_armies(state)
 	var edges:=NativeSnapshotBuilder._build_edges(state)
 	return [state.day,state.rng.state,state.diplomatic_relations,state.war_relation_ids,
-		NativeSnapshotBuilder._build_nations(state),armies.snapshot,
+		NativeSnapshotBuilder._build_nations(state),state.nations.map(func(n):return [n.name,n.short_name,n.environment_kind,n.state_level]),armies.snapshot,
 		NativeSnapshotBuilder._build_battles(state,edges.indices,armies.indices),NativeSnapshotBuilder._build_campaign_fronts(state),
 		NativeSnapshotBuilder._build_campaign_pairs(state),state.campaign_raid_records,
 		state.nations.map(func(n):return n.battle_groups.map(func(g):return [g.id,g.reserve_target_city])),

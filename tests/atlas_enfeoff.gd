@@ -100,6 +100,7 @@ func test_transaction(payload: Dictionary) -> void:
 		sim.free()
 		return
 	check(state.overlord_of(subject) == selected and state.nations[subject].ruler_person_id == prince, "existing prince becomes actual vassal ruler")
+	check(state.nations[subject].environment_kind == NationEnvironment.founding_kind(state,state.nations[subject].founding_city_id), "actual new fief derives environment from its founding seat")
 	check(state.nations[selected].capital_city_id == original_capital and state.cities[original_capital].owner_nation == selected, "overlord retains capital")
 	for city_id in region:
 		check(state.cities[city_id].owner_nation == subject and state.recognized_owner_of(city_id) == subject, "control and legal fief transferred together")

@@ -4317,7 +4317,7 @@ func _execute_ultimatum(action: Dictionary, cache: Dictionary, frozen_gold_flows
 	var attacker_id := int(action["a"])
 	var target_id := int(action["b"])
 	var nation := state.nations[attacker_id]
-	var target_name_snapshot := str(state.nations[target_id].name)
+	var target_name_snapshot := state.nation_display_name(target_id)
 	if nation.war_preparation_target_nation != target_id or nation.war_preparation_objective_city != int(action.get("objective_city", -1)):
 		return false
 	# Revalidate dynamic resources at submission even if scoring happened on
@@ -4361,7 +4361,7 @@ func _execute_ultimatum(action: Dictionary, cache: Dictionary, frozen_gold_flows
 				attacker_id,
 				target_id,
 				outcome,
-				str(state.nations[target_id].name),
+				state.nation_display_name(target_id),
 				[],
 				target_name_snapshot
 			)
@@ -5321,7 +5321,7 @@ func _commit_coalition_peace_plan(plan: Dictionary) -> Dictionary:
 		state.rebellions[rebel_id] = record
 		if bool(update.get("recognized", false)):
 			WorldNaming.promote_special_nation_to_sovereign(state, rebel_id)
-			ChronicleRules.record_rebellion(state, rebel_id, parent_id, ruler_name, center_names, true, str(state.nations[rebel_id].name))
+			ChronicleRules.record_rebellion(state, rebel_id, parent_id, ruler_name, center_names, true, state.nation_display_name(rebel_id))
 		elif bool(update.get("suppressed", false)):
 			ChronicleRules.record_rebellion(state, rebel_id, parent_id, ruler_name, center_names, false, "")
 		if not bool(update.get("suppressed", false)):
@@ -8807,6 +8807,7 @@ func _cached_campaign_objective(
 		state.administrative_region_revision, state.regional_strategy_revision,
 		state.trade_revision, int(reclamation_only), str(excluded_ids), int(camp_counterattack)
 	]
+	cache_key += ":"+state.nations[nation_id].environment_kind+":"+NationEnvironment.VERSION
 	if not cache.has(cache_key):
 		cache[cache_key] = DiplomacyAI.select_war_objective(
 			state,
@@ -9761,8 +9762,8 @@ func _plan_campaign_pair(pair: CoalitionCampaignPair, cache: Dictionary) -> bool
 				return prefer_a
 			if a.has("started_day") and b.has("started_day") and int(a["started_day"]) != int(b["started_day"]):
 				return int(a["started_day"]) < int(b["started_day"])
-			if float(a.get("value", 0.0)) != float(b.get("value", 0.0)):
-				return float(a.get("value", 0.0)) > float(b.get("value", 0.0))
+			if float(a.get("selection_score",a.get("value",0.0))) != float(b.get("selection_score",b.get("value",0.0))):
+				return float(a.get("selection_score",a.get("value",0.0))) > float(b.get("selection_score",b.get("value",0.0)))
 			return EquivariantOrder.mirror_orbit_city_less(state, int(a["administrative_center_city_id"]), int(b["administrative_center_city_id"])))
 		var proposal: Dictionary = proposals[0]
 		var actor := int(proposal["anchor_nation_id"])
@@ -9916,7 +9917,7 @@ func _select_component_objective(
 				continue
 			objective = objective.duplicate()
 			objective["anchor_nation_id"] = member_id
-			var value := float(objective.get("value", 0.0))
+			var value := float(objective.get("selection_score",objective.get("value",0.0)))
 			var center_id := int(objective.get(
 				"administrative_center_city_id", objective.get("city_id", -1)
 			))
@@ -9927,9 +9928,9 @@ func _select_component_objective(
 				continue
 			if (
 				best.is_empty()
-				or value > float(best.get("value", -INF))
+				or value > float(best.get("selection_score",best.get("value",-INF)))
 				or (
-					is_equal_approx(value, float(best.get("value", -INF)))
+					is_equal_approx(value, float(best.get("selection_score",best.get("value",-INF))))
 					and EquivariantOrder.mirror_orbit_city_less(
 						state, center_id,
 						int(best.get("administrative_center_city_id", -1))

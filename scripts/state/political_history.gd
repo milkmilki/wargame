@@ -248,7 +248,7 @@ func _capture(game_state: GameState) -> void:
 		payment_ratios.append(game_state.nations[nation_id].military_payment_ratio)
 		var nation := game_state.nations[nation_id]
 		var political := {}
-		for key in ["name", "short_name", "name_kind", "vassal_single_char", "vassal_title_base", "ruler_name", "ruler_archetype", "ruler_traits", "ruler_person_id", "ruler_revision", "ruler_started_day", "family_tree_id", "prince_person_ids", "crown_prince_person_id", "succession_competition_closed", "succession_identity", "capital_city_id", "state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]:
+		for key in ["name", "short_name", "name_kind", "environment_kind", "vassal_single_char", "vassal_title_base", "ruler_name", "ruler_archetype", "ruler_traits", "ruler_person_id", "ruler_revision", "ruler_started_day", "family_tree_id", "prince_person_ids", "crown_prince_person_id", "succession_competition_closed", "succession_identity", "capital_city_id", "state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]:
 			var value = nation.get(key)
 			political[key] = value.duplicate(true) if value is Array or value is Dictionary else value
 		nation_politics[nation_id] = political

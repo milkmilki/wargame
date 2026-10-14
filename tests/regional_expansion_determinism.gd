@@ -69,6 +69,11 @@ func _test_direct_base_execution_equivalence() -> void:
 		sim.setup(state)
 		sim.paused = true
 		sim.diplomacy_enabled = false
+		# This compact fixture has no strategic economy/launch budget. Issue the
+		# same legal counterattack orders so all three executions reach combat.
+		for troop in state.armies:
+			if troop.owner_nation == 1:
+				_check(bool(sim.order_army_to(troop,2).get("ok",false)),"counterattack fixture accepts the real marching order")
 		contexts.append({"state": state, "sim": sim})
 	for _day in range(35):
 		contexts[0].sim._advance_day()

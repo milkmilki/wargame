@@ -1,5 +1,27 @@
 # Regional Strategy
 
+Founding geography (`Nation.environment_kind`) adds land preference only. The
+seven types are farm, nomad, sea, highland, river, lake and forest. Immutable
+state-seat profiles are prepared once by `NationEnvironment`; no daily mesh
+scan occurs. A new business-region score gains `0.15 * affinity`, averaging each
+state's affinity by its land area once, without counting Fu a second time.
+A new state objective gains `2.0 * affinity` in `selection_score`. Its original
+economic/strategic `value` remains unchanged for diplomacy. Region and objective
+hard gates, committed objectives, defensive allocations and within-state Fu
+ordering retain their existing rules. Shared campaign proposals use the existing
+requesting/anchor nation's type; they remain one component-wide plan.
+Objective cache keys include the requesting nation and its environment kind.
+
+Classification priority is low steppe/desert (<1500 m), highland (>1300 m),
+adjacent large lake (at least five connected water cells), deterministic coastal
+selection (harbor 35%, otherwise island 40%, otherwise coast 8%), adjacent/on
+major river (six times existing river threshold), inland forest/tundra/wetland,
+then farm. Small islands contain at most six original provinces. The coastal
+hash uses the world seed and province ID and never advances simulation RNG.
+Agricultural potential is normalized from the existing 0–110 scale. Capital
+relocation, territory loss and succession never change the founding type;
+new fiefs and local rebel states derive it from their founding state seat.
+
 Each ruler retains one business-region target, represented by a city anchor
 rather than a partition number. Administrative states follow their center's
 trade region; docks and politically inactive land do not count toward completion.

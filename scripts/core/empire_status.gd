@@ -56,6 +56,6 @@ static func reconcile(state: GameState) -> void:
 		state.family_revision += 1
 		state.chronicle_events.append({"day": state.day, "year": int(state.day / 360) + 1,
 			"kind": "empire", "actor_ids": [nation.id], "target_ids": [],
-			"person_id": nation.ruler_person_id, "actor_name": nation.name, "result": "recognized",
-			"text": "%d年 %s整合两大贸易区域，晋为帝国，%s为太祖" % [int(state.day / 360) + 1, nation.name, nation.ruler_name]})
+			"person_id": nation.ruler_person_id, "actor_name": WorldNaming.nation_display_name(state,nation.id), "result": "recognized",
+			"text": "%d年 %s整合两大贸易区域，晋为帝国，%s为太祖" % [int(state.day / 360) + 1, WorldNaming.nation_display_name(state,nation.id), nation.ruler_name]})
 	RoyalTitles.reconcile(state)

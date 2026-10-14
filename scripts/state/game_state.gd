@@ -218,8 +218,8 @@ var atlas_trade_cache: Dictionary = {}
 var atlas_trade_centers: Dictionary = {}
 var atlas_trade_mutex := Mutex.new()
 
-func generate_from_atlas(payload: Dictionary) -> void:
-	load("res://scripts/atlas/military_import.gd").install(self,payload)
+func generate_from_atlas(payload: Dictionary) -> Dictionary:
+	return load("res://scripts/atlas/military_import.gd").install(self,payload)
 
 func atlas_edge_access(edge: Edge,nation_id: int,goal: int = -1,logistics: bool = false,exit_city: int = -1) -> bool:
 	if edge.control_city_id<0 or edge.control_city_id>=cities.size(): return false
@@ -455,6 +455,8 @@ func _reset_world(world_seed: int) -> void:
 	nations.clear()
 	family_trees.clear()
 	remove_meta("royal_census")
+	remove_meta("environment_regions")
+	remove_meta("atlas_naming_usec")
 	remove_meta("royal_reconcile_revision")
 	next_internal_battle_id = 0
 	succession_conflicts.clear()
@@ -3479,6 +3481,7 @@ func start_regional_rebellion(
 		parent.treasury_gold, rebel_gold_output, parent_gold_output
 	)
 	var capital_id := administrative_center_of(unique_ids[0])
+	rebel.environment_kind = NationEnvironment.founding_kind(self,capital_id)
 	var territory_operations: Array[Dictionary] = []
 	for city_id in unique_ids:
 		territory_operations.append({
@@ -4645,6 +4648,7 @@ func enfeoff(
 		return -1
 	EquivariantOrder.sort_city_ids(capital_candidates, self, subject.id)
 	var capital_id := capital_candidates[0]
+	subject.environment_kind = NationEnvironment.founding_kind(self,capital_id)
 	var territory_operations: Array[Dictionary] = []
 	for city_id in city_ids:
 		territory_operations.append({

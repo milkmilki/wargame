@@ -16,7 +16,7 @@ static func encode(state: GameState) -> Dictionary:
 		nation_map[nation.id] = nations.size()
 		# Templates start independent countries, not runtime rebels or vassals.
 		var name_kind: String = nation.name_kind if nation.name_kind in [WorldNaming.KIND_DYNASTY,WorldNaming.KIND_WARRING_STATE] else WorldNaming.KIND_WARRING_STATE
-		nations.append({"name":nation.name,"short_name":nation.short_name,"name_kind":name_kind,"founding_city_id":nation.founding_city_id,"seat":state.cities[nation.capital_city_id].id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)],
+		nations.append({"name":nation.name,"short_name":nation.short_name,"name_kind":name_kind,"environment_kind":nation.environment_kind,"founding_city_id":nation.founding_city_id,"seat":state.cities[nation.capital_city_id].id,"color":[roundi(nation.color.r*255),roundi(nation.color.g*255),roundi(nation.color.b*255)],
 			"ruler":{"name":nation.ruler_name,"archetype":nation.ruler_archetype,"traits":nation.ruler_traits.duplicate(),"trade_policy":nation.trade_policy,"region_anchor":nation.strategic_region_anchor_city_id}})
 	payload.nations = nations; payload.settlement_records = []
 	for c in range(payload.hierarchy.cities.size()):
@@ -51,6 +51,7 @@ static func validate(definition: Dictionary) -> String:
 		if not nation is Dictionary or not nation.get("name") is String or not nation.get("color") is Array or nation.color.size()!=3: return "Atlas 国家资料无效。"
 		if nation.has("short_name") and (not nation.short_name is String or nation.short_name.strip_edges().is_empty()): return "Atlas 国家简称无效。"
 		if nation.has("name_kind") and nation.name_kind not in [WorldNaming.KIND_DYNASTY,WorldNaming.KIND_WARRING_STATE,WorldNaming.KIND_VASSAL,WorldNaming.KIND_REBEL]: return "Atlas 国家命名类型无效。"
+		if nation.has("environment_kind") and nation.environment_kind not in NationEnvironment.KINDS: return "Atlas 国家环境类型无效。"
 		for channel in nation.color:
 			if not whole_number(channel,0,256): return "Atlas 国家颜色无效。"
 		if nation.has("ruler"):
@@ -68,6 +69,26 @@ static func validate(definition: Dictionary) -> String:
 	var cell_count: int = payload.data.mesh.x.size(); var parent_count: int = payload.data.regions.seat.size()
 	if payload.data.mesh.get("n")!=cell_count or payload.data.regions.get("count")!=parent_count: return "Atlas 世界维度无效。"
 	if not payload.data.get("options") is Dictionary or not NativeMap.numeric_array(payload.data.mesh.get("areas")): return "Atlas 世界配置无效。"
+	# Founding profiles are derived from these existing geographic columns.
+	# Validate before reconstruction so a malformed template preserves the world.
+	var environment: Dictionary = payload.data.environment
+	for field in ["flux","agricultural_potential","coastDist"]:
+		if field != "flux" and not environment.has(field): continue
+		if not NativeMap.numeric_array(environment.get(field)) or environment[field].size()!=cell_count: return "Atlas 环境字段无效："+field
+		for value in environment[field]:
+			if not (value is int or value is float) or not is_finite(float(value)): return "Atlas 环境字段非有限："+field
+	if not (environment.get("riverThreshold") is float or environment.get("riverThreshold") is int) or not is_finite(float(environment.riverThreshold)) or float(environment.riverThreshold)<=0.: return "Atlas 河流阈值无效。"
+	var regions: Dictionary = payload.data.regions
+	for field in ["biome","elevation","landmass"]:
+		if not NativeMap.numeric_array(regions.get(field)) or regions[field].size()!=parent_count: return "Atlas 省份环境字段无效："+field
+		for value in regions[field]:
+			if not (value is int or value is float) or not is_finite(float(value)): return "Atlas 省份环境字段非有限："+field
+	if not NativeMap.numeric_array(regions.get("cellStart")) or not NativeMap.numeric_array(regions.get("cells")) or regions.cellStart.size()!=parent_count+1: return "Atlas 省份地块索引无效。"
+	if regions.cellStart[0]!=0 or regions.cellStart[-1]!=regions.cells.size(): return "Atlas 省份地块索引边界无效。"
+	for index in range(regions.cellStart.size()):
+		if not whole_number(regions.cellStart[index],0,regions.cells.size()+1) or (index>0 and regions.cellStart[index]<regions.cellStart[index-1]): return "Atlas 省份地块索引顺序无效。"
+	for cell in regions.cells:
+		if not whole_number(cell,0,cell_count): return "Atlas 省份地块编号无效。"
 	for field in ["cell","water"]:
 		if not NativeMap.numeric_array(payload.raster.get(field)) or payload.raster[field].size()!=2048*1024: return "Atlas 栅格无效。"
 	var parent_pixels := PackedInt32Array(); parent_pixels.resize(2048*1024)

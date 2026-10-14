@@ -4,9 +4,10 @@ extends RefCounted
 
 var id: int = 0
 var color: Color = Color.WHITE             ## 阵营色（渲染用）
-var name: String = ""                    ## 稳定国号；UI 不再直接展示裸 id
+var name: String = ""                    ## 主权国固定词根；正式国号由 WorldNaming 派生。
 var short_name: String = ""              ## 战略地图大字使用的 1～4 字简称
 var name_kind: String = "state"          ## dynasty/state/vassal/rebel
+var environment_kind: String = "farm"   ## Fixed founding environment; seven types.
 ## 国号字库与政治等级无关。帝国认可只升不降，宗室供养可由国家级藩国承接。
 var state_level: int = 0                ## 0 国家，1 帝国
 var empire_founder_person_id: int = -1

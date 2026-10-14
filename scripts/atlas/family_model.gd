@@ -10,7 +10,7 @@ static func capture(state: GameState, nation_id: int) -> Dictionary:
 	var countries: Array = []
 	for n in state.nations:
 		if n.family_tree_id != nation.family_tree_id: continue
-		countries.append({"id":n.id,"name":n.name,"ruler":n.ruler_person_id,"alive":n.alive,"started":n.ruler_started_day})
+		countries.append({"id":n.id,"name":WorldNaming.nation_display_name(state,n.id),"ruler":n.ruler_person_id,"alive":n.alive,"started":n.ruler_started_day})
 	var reigns := {}; var reign_ends := {}
 	for event in state.chronicle_events:
 		if event.get("kind","") != "ruler_succession": continue
@@ -30,7 +30,7 @@ static func capture(state: GameState, nation_id: int) -> Dictionary:
 	for e in state.chronicle_events:
 		if e.get("kind","") == "succession" and (members.has(e.get("person_ids",[-1])[0])): events.append(e.duplicate(true))
 	return {"source":state.get_instance_id(),"day":state.day,"tree_id":nation.family_tree_id,
-		"nation_id":nation_id,"name":nation.name,"current":nation.ruler_person_id if nation.alive else -1,"last_ruler":nation.ruler_person_id,
+		"nation_id":nation_id,"name":WorldNaming.nation_display_name(state,nation_id),"current":nation.ruler_person_id if nation.alive else -1,"last_ruler":nation.ruler_person_id,
 		"heir":nation.crown_prince_person_id,"members":members,"countries":countries,"events":events,
 		"root":int(tree.get("root_person_id",-1))}
 

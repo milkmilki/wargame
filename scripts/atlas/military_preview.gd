@@ -73,7 +73,9 @@ func load_native(seed_value: int) -> void:
 	timing=payload.get("generation_timing",payload.timing)
 	rainfall_model=payload.data.options.get("rainfall_model","atlas_original"); settlement_model=payload.data.options.get("settlement_model","atlas_original")
 	started=Time.get_ticks_msec()
-	var prepared := GameState.new(); prepared.generate_from_atlas(payload)
+	var prepared := GameState.new()
+	var installed := prepared.generate_from_atlas(payload)
+	if not installed.ok: generating=false; status.text=installed.error; return
 	startup_profile.military_import_ms=Time.get_ticks_msec()-started
 	started=Time.get_ticks_msec()
 	await present_world(prepared,payload,"atlas_startup_cache" if startup_profile.cache_hit else "atlas_native_zhoufu")
@@ -142,7 +144,9 @@ func _ready() -> void:
 func load_cached_payload(payload: Dictionary) -> void:
 	if payload.get("model")==MilitaryMap.MODEL:
 		active_seed = payload.data.seed; timing = payload.timing
-		var prepared := GameState.new(); prepared.generate_from_atlas(payload)
+		var prepared := GameState.new()
+		var installed := prepared.generate_from_atlas(payload)
+		if not installed.ok: status.text=installed.error; return
 		await present_world(prepared,payload,"atlas_development_cache")
 	else: await super.load_cached_payload(payload)
 
@@ -352,7 +356,9 @@ func build_view() -> void:
 	var base := {"data":data,"raster":raster,"display":display}
 	var payload := MilitaryMap.prepare(base)
 	if payload.has("error"): status.text=payload.error; return
-	var prepared := GameState.new(); prepared.generate_from_atlas(payload)
+	var prepared := GameState.new()
+	var installed := prepared.generate_from_atlas(payload)
+	if not installed.ok: generating=false; status.text=installed.error; return
 	await present_world(prepared,payload)
 
 func present_world(prepared: GameState,payload: Dictionary,source: String = "atlas_native_zhoufu") -> void:
@@ -546,7 +552,7 @@ func declare_war_on(target: int) -> void:
 	if simulation.runtime_day_in_progress(): information_notify("等待当天模拟结束后再宣战。"); return
 	var source := int(player_nation.value)
 	if target==source or source<0 or source>=state.nations.size() or not state.nations[source].alive or state.is_enemy(source,target): return
-	simulation._set_coalition_war(state.alliance_bloc(source),state.alliance_bloc(target)); information_notify("%s向%s宣战。"%[state.nations[source].name,state.nations[target].name])
+	simulation._set_coalition_war(state.alliance_bloc(source),state.alliance_bloc(target)); information_notify("%s向%s宣战。"%[state.nation_display_name(source),state.nation_display_name(target)])
 
 func order_selected() -> void:
 	if historical_view: information_notify("历史视图不可下令。"); return

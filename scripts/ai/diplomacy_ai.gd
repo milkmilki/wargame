@@ -2114,7 +2114,7 @@ static func war_desire_debug_lines(state: GameState, nation_id: int) -> Array[St
 	if state.is_vassal(nation_id):
 		lines.append("国家行动门禁：藩国不自主发起普通备战，以下仅为双边意愿")
 	if nation.war_preparation_target_nation >= 0 and nation.war_preparation_target_nation < state.nations.size():
-		lines.append("当前已对%s备战：第%d日开始；既有备战按实际集结资格推进，不重新要求意愿过线" % [state.nations[nation.war_preparation_target_nation].name, nation.war_preparation_started_day])
+		lines.append("当前已对%s备战：第%d日开始；既有备战按实际集结资格推进，不重新要求意愿过线" % [state.nation_display_name(nation.war_preparation_target_nation), nation.war_preparation_started_day])
 	if nation.war_preparation_cancelled_day >= 0 and state.day - nation.war_preparation_cancelled_day < WAR_PREPARATION_CANCEL_COOLDOWN_DAYS:
 		lines.append("国家行动门禁：取消备战冷却至第%d日" % (nation.war_preparation_cancelled_day + WAR_PREPARATION_CANCEL_COOLDOWN_DAYS))
 	if nation.war_preparation_target_nation >= 0:
@@ -2156,7 +2156,7 @@ static func war_desire_debug_lines(state: GameState, nation_id: int) -> Array[St
 		lines.append("态度条目：边疆 %+.3f、目标利益 %+.3f、共同敌国%d、敌国盟友%d、边防释放 %+.3f、叛乱母国 %+.3f" % [attitude.border_component, attitude.objective_component, attitude.common_enemies, attitude.enemy_allies, attitude.frontier_relief, attitude.parent_rebel_component])
 		lines.append("多线作战扣分 %.3f；最终 %.3f" % [report.overextension_penalty, report.score])
 	if best_target >= 0:
-		lines.append("当前最高双边意愿：%s %.3f（%s）；仍受上述国家行动门禁和外交批次占用限制" % [state.nations[best_target].name, best_score, "过线" if best_score >= WAR_DECLARE_SCORE else "未过线"])
+		lines.append("当前最高双边意愿：%s %.3f（%s）；仍受上述国家行动门禁和外交批次占用限制" % [state.nation_display_name(best_target), best_score, "过线" if best_score >= WAR_DECLARE_SCORE else "未过线"])
 	else:
 		lines.append("当前无可评分的普通备战目标")
 	return lines
@@ -3938,6 +3938,7 @@ static func _cached_war_objective(
 		state.administrative_region_revision,
 		state.garrison_revision,
 	]
+	cache_key += ":"+state.nations[nation_id].environment_kind+":"+NationEnvironment.VERSION
 	if bool(evaluation_cache.get("__war_desire_debug", false)):
 		cache_key += ":debug"
 	if evaluation_cache.has(cache_key):
@@ -4127,11 +4128,13 @@ static func select_war_objective(
 			+ region_unification_value
 			+ node_betweenness_value
 		)
+		var affinity := NationEnvironment.affinity(state,nation_id,center_id)
+		var selection_score := value+2.0*affinity
 		if (
 			best.is_empty()
-			or value > float(best["value"])
+			or selection_score > float(best["selection_score"])
 			or (
-				is_equal_approx(value, float(best["value"]))
+				is_equal_approx(selection_score, float(best["selection_score"]))
 					and EquivariantOrder.city_id_less(
 						state,
 						nation_id,
@@ -4145,6 +4148,8 @@ static func select_war_objective(
 				"administrative_center_city_id": center_id,
 				"tactical_city_id": tactical_city,
 				"value": value,
+				"selection_score":selection_score,
+				"environment_affinity":affinity,
 				"reason": (
 					"州治%d%s（州金%d/月、州粮%d/半年、州人%d/月、战略值%.2f、包围值%.2f、目标守军%d空虚值%.2f、州统一值%.2f、交通中心值%.2f）"
 					% [

@@ -195,6 +195,10 @@ static func title_for_nation(state: GameState, nation_id: int) -> String:
 		return ""
 	var nation := state.nations[nation_id]
 	var display_name := WorldNaming.nation_display_name(state, nation_id)
+	# Personal offices keep their established root-based title. Environmental
+	# state suffixes are for country labels, not additional ruler ranks.
+	if str(nation.name_kind) not in [WorldNaming.KIND_VASSAL,WorldNaming.KIND_REBEL] and not nation.name.is_empty():
+		display_name = nation.name
 	if str(nation.name_kind) == WorldNaming.KIND_VASSAL:
 		return display_name
 	if display_name.ends_with("帝"):

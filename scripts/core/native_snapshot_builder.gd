@@ -3,13 +3,15 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 29
+const SCHEMA_VERSION: int = 30
 const ROYAL_NATION_FIELDS := ["state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]
 
 
 static func succession_validation_error(snapshot: Dictionary) -> String:
 	if int(snapshot.get("schema_version", -1)) != SCHEMA_VERSION:
 		return "Incompatible native snapshot schema"
+	if snapshot.get("environment_rules_version","") != NationEnvironment.VERSION or snapshot.get("regional_names_sha256","") != RegionalNames.fingerprint():
+		return "Incompatible environment rules or regional vocabulary"
 	var campaign_error:=campaign_validation_error(snapshot)
 	if not campaign_error.is_empty():return campaign_error
 	var faction_error := vassal_validation_error(snapshot)
@@ -30,6 +32,10 @@ static func succession_validation_error(snapshot: Dictionary) -> String:
 		return "Invalid chronicle pending list"
 	var nations: Dictionary = snapshot.get("nations", {})
 	var count := int(nations.get("count", -1))
+	if not nations.get("environment_kind") is PackedStringArray or nations.environment_kind.size() != count:
+		return "Invalid nation environment column"
+	for kind in nations.environment_kind:
+		if kind not in NationEnvironment.KINDS: return "Invalid nation environment kind"
 	for key in ["family_tree_ids", "ruler_person_ids", "crown_prince_ids", "competition_closed", "succession_identity", "ruler_archetypes", "ruler_revisions", "ruler_started_days", "ruler_traits", "alive"]:
 		if not nations.has(key) or nations[key].size() != count:
 			return "Invalid nation politics column: " + key
@@ -364,6 +370,9 @@ static func battle_validation_error(battles: Dictionary) -> String:
 
 static func build(state: GameState) -> Dictionary:
 	var nations := _build_nations(state)
+	var environments := PackedStringArray()
+	for nation in state.nations: environments.append(nation.environment_kind)
+	nations.environment_kind = environments
 	for key in ROYAL_NATION_FIELDS:
 		var column: Array = []
 		for nation in state.nations:
@@ -380,6 +389,8 @@ static func build(state: GameState) -> Dictionary:
 	)
 	return {
 		"schema_version": SCHEMA_VERSION,
+		"environment_rules_version":NationEnvironment.VERSION,
+		"regional_names_sha256":RegionalNames.fingerprint(),
 		"revision": state.day,
 		"day": state.day,
 		"rng_state": state.rng.state,

@@ -11,12 +11,12 @@ static func begin_war(state: GameState, war_id: int, attackers: Array, defenders
 			var id := int(value)
 			if id >= 0 and not existing["actor_ids"].has(id):
 				existing["actor_ids"].append(id)
-				if id < state.nations.size(): existing["actor_names"][id] = str(state.nations[id].name)
+				if id < state.nations.size(): existing["actor_names"][id] = state.nation_display_name(id)
 		for value in defenders:
 			var id := int(value)
 			if id >= 0 and not existing["target_ids"].has(id):
 				existing["target_ids"].append(id)
-				if id < state.nations.size(): existing["target_names"][id] = str(state.nations[id].name)
+				if id < state.nations.size(): existing["target_names"][id] = state.nation_display_name(id)
 		existing["actor_ids"].sort(); existing["target_ids"].sort()
 		state.war_chronicle_contexts[war_id] = existing
 		return
@@ -35,9 +35,9 @@ static func begin_war(state: GameState, war_id: int, attackers: Array, defenders
 	var actor_names := {}
 	var target_names := {}
 	for id in actor_ids:
-		if id < state.nations.size(): actor_names[id] = str(state.nations[id].name)
+		if id < state.nations.size(): actor_names[id] = state.nation_display_name(id)
 	for id in target_ids:
-		if id < state.nations.size(): target_names[id] = str(state.nations[id].name)
+		if id < state.nations.size(): target_names[id] = state.nation_display_name(id)
 	state.war_chronicle_contexts[war_id] = {
 		"war_id": war_id, "actor_ids": actor_ids, "target_ids": target_ids,
 		"actor_names": actor_names, "target_names": target_names,
@@ -173,7 +173,7 @@ static func finalize_war(state: GameState, war_id: int) -> bool:
 static func record_ultimatum(state: GameState, attacker_id: int, target_id: int, outcome: int, title: String = "", affected_members: Array = [], target_name_snapshot: String = "") -> void:
 	if state == null or attacker_id < 0 or target_id < 0 or attacker_id >= state.nations.size() or target_id >= state.nations.size(): return
 	var year := int(state.day / 360) + 1
-	var target := target_name_snapshot if not target_name_snapshot.is_empty() else str(state.nations[target_id].name)
+	var target := target_name_snapshot if not target_name_snapshot.is_empty() else state.nation_display_name(target_id)
 	var label := "纳土" if outcome == 2 else "称臣"
 	var text := "%d年 威服%s，%s" % [year, target, label]
 	if not title.is_empty(): text += "，封%s" % title
@@ -183,10 +183,10 @@ static func record_ultimatum(state: GameState, attacker_id: int, target_id: int,
 		if id >= 0 and id < state.nations.size() and not members.has(id): members.append(id)
 	if members.is_empty(): members = [target_id]
 	var target_names: Array[String] = []
-	for id in members: target_names.append(str(state.nations[id].name))
+	for id in members: target_names.append(state.nation_display_name(id))
 	if members.has(target_id):
 		target_names[members.find(target_id)] = target
-	state.chronicle_events.append({"day": state.day, "year": year, "kind": "ultimatum", "actor_ids": [attacker_id], "target_ids": members, "actor_name": str(state.nations[attacker_id].name), "target_names": target_names, "result": label, "text": text})
+	state.chronicle_events.append({"day": state.day, "year": year, "kind": "ultimatum", "actor_ids": [attacker_id], "target_ids": members, "actor_name": state.nation_display_name(attacker_id), "target_names": target_names, "result": label, "text": text})
 
 static func record_rebellion(state: GameState, rebel_id: int, parent_id: int, ruler_name: String, centers: Array[String], recognized: bool, sovereign_name: String) -> void:
 	if state == null: return

@@ -6,7 +6,7 @@ static func row(label: String,value: Variant,kind: String = "",id: int = -1) -> 
 static func section(title: String,rows: Array) -> Dictionary:
 	return {"title":title,"rows":rows}
 static func nation_name(state: GameState,id: int) -> String:
-	return state.nations[id].name if id>=0 and id<state.nations.size() else "无归属"
+	return WorldNaming.nation_display_name(state,id) if id>=0 and id<state.nations.size() else "无归属"
 static func prince_report(state: GameState,id: int) -> Dictionary:
 	if state.has_meta("historical_prince_reports"): return state.get_meta("historical_prince_reports").get(id,{"status":"未记录","princes":[],"central":0})
 	return PrincePolitics.report(state,id,PrincePolitics.military_index(state).get(id,{}))
@@ -173,12 +173,14 @@ static func nation(state: GameState,id: int) -> Dictionary:
 		if c>=0 and c<state.cities.size() and state.cities[c].owner_nation==id: stock += state.cities[c].food_storage
 	var capital := n.capital_city_id
 	var point := state.cities[capital].map_position*Vector2(2048,1024) if capital>=0 and capital<state.cities.size() else Vector2(1024,512)
-	var doc := {"title":n.name,"subtitle":"%s · 第%d天"%["帝国" if n.state_level>0 else "国家",state.day],"color":n.color,"point":point,"actions":[action("city","查看首都","city",capital),action("focus","设为中心","center"),action("player","操控此国","flag",id),action("declare","对其宣战","war",id),action("family","家族树","flag",id)],"sections":[]}
+	var doc := {"title":nation_name(state,id),"subtitle":"%s · 第%d天"%["帝国" if n.state_level>0 else "国家",state.day],"color":n.color,"point":point,"actions":[action("city","查看首都","city",capital),action("focus","设为中心","center"),action("player","操控此国","flag",id),action("declare","对其宣战","war",id),action("family","家族树","flag",id)],"sections":[]}
 	doc["politics_recorded"] = state.has_meta("historical_prince_reports")
 	var traits: Array[String] = []
 	for trait_id in n.ruler_traits: traits.append(RulerProfile.trait_name(trait_id))
 	doc.sections.append(section("概况",[row("状态","存续" if n.alive else "已灭亡"),row("首都",city_name(state,capital),"city",capital),row("控制治所",seats),row("控制州治",centers),row("控制府",seats-centers),row("君主",n.ruler_name if not n.ruler_name.is_empty() else "未记录","person",n.ruler_person_id),row("君主特质","、".join(traits) if not traits.is_empty() else "无附加特质"),row("平均忠诚度","%.1f"%n.average_loyalty)]))
 	doc.sections[0].rows.append(row("国号来源",city_name(state,n.founding_city_id),"city",settlement_id(state,n.founding_city_id)))
+	doc.sections[0].rows.append(row("建国环境",NationEnvironment.LABELS.get(n.environment_kind,"农耕")))
+	doc.sections[0].rows.append(row("土地偏好",{"farm":"农业适宜的土地","nomad":"草原、荒漠与稀树草原","sea":"海岸","highland":"高地","river":"大河沿岸","lake":"大湖沿岸","forest":"林地、苔原与湿地"}.get(n.environment_kind,"农业适宜的土地")))
 	var crown := PrincePolitics.person(state,id,n.crown_prince_person_id)
 	var politics := [row("继承人",crown.get("name","未记录"),"person",n.crown_prince_person_id),
 		row("竞争状态",prince_report(state,id).get("status","未记录")),
@@ -218,7 +220,7 @@ static func nation(state: GameState,id: int) -> Dictionary:
 		if other.id==id or not other.alive: continue
 		var relation := Diplomacy.kind(state,id,other.id)
 		if relation not in ["neutral",""]:
-			relations.append(row(Diplomacy.LABELS[relation],other.name,"nation",other.id))
+			relations.append(row(Diplomacy.LABELS[relation],nation_name(state,other.id),"nation",other.id))
 	doc.sections.append(section("外交关系",relations if not relations.is_empty() else [row("关系","暂无敌对或同盟")]))
 	doc.sections.append(section("军队",[row("野战兵力",troops)]+army_rows))
 	doc.sections.append(section("贸易",[row("状态","已启用" if state.trade_enabled else "未启用"),row("最近月度贸易收入",n.last_trade_gold),row("贸易线路",n.last_trade_route_count),row("粮食进口",n.last_trade_food_import),row("粮食出口",n.last_trade_food_export),row("人口进口",n.last_trade_manpower_import)]))

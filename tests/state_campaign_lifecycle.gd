@@ -194,7 +194,7 @@ func test_snapshot_and_visibility():
 	Direct.front(state,[troop] as Array[Army])
 	var sim := Simulation.new(); sim.setup(state); sim._prepare_coalition_campaign_batch()
 	var snapshot := NativeSnapshotBuilder.build(state)
-	check(snapshot.schema_version==29 and NativeSnapshotBuilder.campaign_validation_error(snapshot).is_empty(),"schema29 validates paired records and reverse references")
+	check(snapshot.schema_version==30 and NativeSnapshotBuilder.campaign_validation_error(snapshot).is_empty(),"schema30 validates paired records and reverse references")
 	var codec := preload("res://tests/support/native_runtime_fixture.gd").new()
 	var plain := GameState.new()
 	for property in state.get_property_list():

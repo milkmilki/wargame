@@ -53,10 +53,12 @@ func test_capital_loss_and_template(state: GameState):
 	var opponent := (actor+1)%state.nations.size()
 	var nation: Nation = state.nations[actor]
 	var old_capital := nation.capital_city_id; var old_name := nation.name
+	var old_environment := nation.environment_kind
 	state.set_diplomatic_relation(actor,opponent,GameState.DiplomaticRelation.WAR)
 	var changed := state.apply_territory_transaction([{"city_id":old_capital,"controller_id":opponent,"legal_owner_id":actor,"sponsor_id":opponent,"reason":"naming_capital_loss"}] as Array[Dictionary])
 	check(changed.get("ok",false) and nation.capital_city_id != old_capital, "real occupation relocates the losing country's capital")
 	check(nation.name == old_name and nation.founding_city_id == old_capital, "capital loss preserves country name and founding anchor")
+	check(nation.environment_kind == old_environment,"real capital loss and relocation preserve founding environment")
 	check(field(Information.nation(state,actor),"国号来源") == state.cities[old_capital].name, "country inspector identifies its original naming seat")
 	var definition := MapDefinition.from_state(state)
 	var error := MapDefinition.validate(definition)

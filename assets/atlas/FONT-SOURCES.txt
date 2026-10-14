@@ -1,4 +1,4 @@
-地图文字用的字体子集(由 scripts/subset-fonts.ts 生成,按地名字表裁剪,请勿手改)。
+地图文字用的字体子集；上游 WOFF2 按原地名字表裁剪，Godot TTF 另按下方记录扩充。
 两款字体都以 SIL Open Font License 1.1 授权,许可证全文见同目录的 OFL-*.txt。
 霞鹜文楷的许可证附加条款允许为网页字体裁剪 / 转换成 WOFF2 后沿用原名。
 
@@ -18,7 +18,10 @@ Godot 原生预览转换记录：
 仅使用 lxgw-wenkai-gb-500；未使用上述 Noto 字体。
 固定上游子集 WOFF2 SHA256：87bd3d21fc05c15b0c5a07aae042c8c3a6b4ef4b5c4fbd94a0ea56e6cc41ca4f
 fontTools 解压为同字形、同字重 TTF，不重绘或替换字体。
-Godot TTF SHA256：9e28389354e3f339c2a453f6dc63f9e2e0e9d19494fbc970c7e973e67a15ad0f
+原 Godot TTF SHA256：9e28389354e3f339c2a453f6dc63f9e2e0e9d19494fbc970c7e973e67a15ad0f
+2026-10-14 地域词库扩充：从上述 v1.522 完整 Medium TTF 裁剪，保留原字形、字重、名称、版权及 OFL。
+保留原子集字符并加入 U+4E00–U+9FFF 全部 20992 个基础汉字，覆盖七库共 7168 个根字、州治后缀和府简称。
+扩充 Godot TTF SHA256：85fda7760c85550734a766e10808952c84a2c77eea21a2e0f1e5bbde8c078acb
 手绘模式国名、国都名、城名和地理名均使用原版 Medium (500) 字重。
 Godot 与浏览器的字形光栅化、基线和描边不保证逐像素相同。
 noto-serif-sc-700.woff2

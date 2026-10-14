@@ -233,6 +233,9 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 	var changed := false
 	# 城市必须先命名，国家国号随后才可从首都或发迹城市的简称产生。
 	var city_registry := _registry(game_state, _CITY_REGISTRY_META)
+	var regional: bool = not game_state.atlas_layout.is_empty() and game_state.atlas_layout.has("nation_environment")
+	if regional:
+		RegionalNames.assign(game_state,world_seed,city_registry,_registry(game_state,_CITY_SHORT_REGISTRY_META),stable_index)
 	var unnamed_land: Array[int] = []
 	var unnamed_docks: Array[int] = []
 	for city_index in range(game_state.cities.size()):
@@ -282,7 +285,8 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 				changed = true
 			continue
 		var allocated := _allocate_city_short_name(
-			world_seed, int(city.id), str(city.name), short_registry
+			world_seed, int(city.id), str(city.name), short_registry,
+			regional and not game_state.is_zhou_city(int(city.id))
 		)
 		if city.short_name != allocated:
 			city.short_name = allocated
@@ -635,7 +639,8 @@ static func _ensure_city_short_name(game_state, city_id: int) -> void:
 			city.short_name = current_short
 		return
 	city.short_name = _allocate_city_short_name(
-		int(game_state.world_seed), city_id, str(city.name), short_registry
+		int(game_state.world_seed), city_id, str(city.name), short_registry,
+		not game_state.atlas_layout.is_empty() and not game_state.is_zhou_city(city_id)
 	)
 
 
@@ -664,6 +669,12 @@ static func nation_display_name(
 		return _vassal_display_name(game_state_or_nation, fallback_id)
 	if short_form and not short_name.is_empty():
 		return short_name
+	if str(nation.name_kind) not in [KIND_VASSAL,KIND_REBEL] and not formal_name.is_empty():
+		# Version-9 templates may carry an explicit multi-character formal name.
+		# Preserve authored legacy names; automatic roots are always single Han.
+		if formal_name.length()!=1: return formal_name
+		if nation.environment_kind == "nomad": return formal_name+("汗" if nation.state_level>=1 else "部")
+		return formal_name+("国" if nation.state_level<1 else "")
 	if not formal_name.is_empty():
 		return formal_name
 	if not short_name.is_empty():
@@ -902,10 +913,12 @@ static func _allocate_city_short_name(
 	world_seed: int,
 	city_id: int,
 	city_name: String,
-	registry: Dictionary
+	registry: Dictionary,
+	exclude_regional: bool = false
 ) -> String:
 	var preferred := _preferred_city_short_name(city_id, city_name, world_seed)
 	for candidate in _city_short_candidates(preferred, city_name):
+		if exclude_regional and RegionalNames.reserved(candidate): continue
 		if _reserve(registry, candidate, city_id):
 			return candidate
 	# 单字词典理论上够用；极端自定义地图撞满时从 CJK 基本区扫描保持单字唯一。
@@ -915,6 +928,7 @@ static func _allocate_city_short_name(
 	)
 	for offset in range(cjk_count):
 		var candidate := String.chr(0x4E00 + (cjk_start + offset) % cjk_count)
+		if exclude_regional and RegionalNames.reserved(candidate): continue
 		if _reserve(registry, candidate, city_id):
 			return candidate
 	push_error("城市简称字符池已耗尽，无法为城市 %d 分配唯一简称。" % city_id)

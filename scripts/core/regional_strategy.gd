@@ -251,6 +251,7 @@ static func choose_next_region(state: GameState, nation_id: int) -> int:
 		var normalized := value / maximum
 		var economic := (normalized.x + normalized.y + normalized.z + normalized.w) / 4.0
 		var score := weight * similarity(state, reference, region) + (1.0 - weight) * economic
+		score += 0.15 * NationEnvironment.region_affinity(state,nation_id,region)
 		if score > best_score or (is_equal_approx(score, best_score) and EquivariantOrder.city_id_less(
 			state, nation_id, int(geo["anchors"][region]), int(geo["anchors"].get(best, -1)))):
 			best = region

@@ -43,7 +43,7 @@ func _initialize():
 	army.campaign_war_id=0
 	check(value(model.army(state,9),"战争")=="1","displayed war number follows the existing ID-plus-one convention")
 	state.cities[1].owner_nation=1
-	check(value(model.city(state,1),"实控国家")=="国1" and value(model.city(state,1),"法理国家")=="国0","occupation distinguishes controller and legal owner")
+	check(value(model.city(state,1),"实控国家")==state.nation_display_name(1) and value(model.city(state,1),"法理国家")==state.nation_display_name(0),"occupation distinguishes controller and legal owner")
 	check(state.rng.state==random_state and state.cities[0].food_storage==456,"information queries do not mutate simulation or random flow")
 	check(model.nation(state,-1).is_empty() and model.army(state,99).is_empty(),"stale selections are handled")
 	var front := state.create_campaign_front(0,[0,1] as Array[int],0,CoalitionCampaignFront.Mode.OFFENSE,2)

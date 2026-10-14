@@ -108,7 +108,7 @@ func refresh_diplomacy() -> void:
 	diplomacy_row.visible=valid; relation_legend.visible=valid and host.diplomacy_enabled
 	if valid:
 		var suffix := "外交着色" if host.diplomacy_enabled and host.mode_control.selected==0 else "其他图层保留原色" if host.diplomacy_enabled else "普通国色"
-		observer_label.text="观察国：%s · %s"%[source.nations[id].name,suffix]
+		observer_label.text="观察国：%s · %s"%[WorldNaming.nation_display_name(source,id),suffix]
 	countries.refresh()
 
 func _process(_delta: float) -> void:

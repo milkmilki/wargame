@@ -26,6 +26,7 @@ static func generate(seed_value: int = 1,city_threshold: float = 1.0,progress: C
 	if habitat.has("agricultural_potential"): world.agricultural_potential = habitat.agricultural_potential
 	for field in ["climate_suitability","potential_evaporation","aridity_index","growing_months"]:
 		if habitat.has(field): world[field] = habitat[field]
+	for field in ["coastDist","harbor"]: world[field] = habitat[field]
 	var regions := Regions.build(world.mesh,world,seed_value)
 	var cities := Roads.seat_cities(world.mesh,world,regions,city_threshold)
 	var ownership := Ownership.build(world.mesh,regions,cities); stages.regions_ms = Time.get_ticks_msec()-started

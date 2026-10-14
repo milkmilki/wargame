@@ -45,6 +45,7 @@ func _perspective_fixture() -> GameState:
 		var nation := Nation.new()
 		nation.id = id
 		nation.name = ["秦", "赵", "韩"][id]
+		nation.state_level = 1 # Established kingdoms retain bare formal roots.
 		nation.alive = true
 		state.nations.append(nation)
 	for id in range(3):
@@ -110,6 +111,7 @@ func _test_coalition_names() -> void:
 	var nation := Nation.new()
 	nation.id = 3
 	nation.name = "吴"
+	nation.state_level = 1
 	state.nations.append(nation)
 	state.nations[2].name = "蜀"
 	ChronicleRules.begin_war(state, 20, [3, 0, 3], [2, 1, 2])
@@ -163,6 +165,7 @@ func _test_coalition_declaration() -> void:
 			state.set_diplomatic_relation(a, b, GameState.DiplomaticRelation.NEUTRAL)
 	for id in range(4):
 		state.nations[id].name = ["秦", "蜀", "韩", "吴"][id]
+		state.nations[id].state_level = 1
 	state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
 	state.set_diplomatic_relation(1, 3, GameState.DiplomaticRelation.ALLIED)
 	state.nations[0].ruler_archetype = RulerProfile.CONQUEROR
@@ -198,13 +201,16 @@ func _test_defender_annexation(with_ally: bool = false) -> void:
 	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_grid_world(13579)
 	state.nations[0].name = "秦"
+	state.nations[0].state_level = 1
 	state.nations[1].name = "赵"
+	state.nations[1].state_level = 1
 	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
 	_check(state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR), "counterattack integration declares war")
 	var war_id := state.war_id_between(0, 1)
 	_check(war_id >= 0, "counterattack integration has a war ledger")
 	if with_ally:
 		state.nations[2].name = "韩"
+		state.nations[2].state_level = 1
 		state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
 		state.set_diplomatic_relation(2, 1, GameState.DiplomaticRelation.NEUTRAL)
 		state.set_diplomatic_relation(2, 1, GameState.DiplomaticRelation.WAR)

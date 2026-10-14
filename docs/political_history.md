@@ -44,3 +44,6 @@ relations without rewinding the simulation.
   and the absence of military state.
 - Scene smoke tests verify that the timeline is present and switches between a
   historical view and the live view.
+# 环境与国号历史（2026-10-14）
+
+国家政治记录额外冻结 `environment_kind`，与原有 `state_level` 一起恢复历史正式国号。升格前的“某国／某部”不会被当前等级改写成“某／某汗”；编年史和战争事务名称在发生时保存正式称号。新局模板版本 9 不变；运行期 Native 快照为版本 30，拒绝旧运行快照，不猜测迁移。
