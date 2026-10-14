@@ -4220,6 +4220,55 @@ func external_territory_recipient(nation_id: int) -> int:
 	return current
 
 
+## Preview the actual capture without borrowing an ally's land, docks or sea links.
+## Junctions are traversable only on roads controlled by this country or the new land.
+func occupation_connects_to_capital(nation_id: int, target: City) -> bool:
+	if (nation_id < 0 or nation_id >= nations.size() or target == null
+		or target.id < 0 or target.id >= cities.size() or cities[target.id] != target
+		or not target.is_settlement()):
+		return false
+	var capital := nations[nation_id].capital_city_id
+	if capital < 0 or capital >= cities.size() or cities[capital].owner_nation != nation_id:
+		return false
+	var projected := {target.id: true}
+	if is_zhou_city(target.id):
+		var old_owner := target.owner_nation
+		var capitulation := (old_owner >= 0 and old_owner < nations.size()
+			and nations[old_owner].capital_city_id == target.id
+			and not is_vassal(old_owner) and not rebellions.has(old_owner))
+		for member in administrative_members(target.id):
+			if capitulation:
+				if recognized_owner_of(member) == old_owner: projected[member] = true
+			elif cities[member].is_capital and member != target.id:
+				continue
+			elif (is_enemy(nation_id,cities[member].owner_nation)
+				or (has_military_access(nation_id,cities[member].owner_nation)
+					and is_enemy(nation_id,recognized_owner_of(member)))):
+				projected[member] = true
+	var reached := {capital: true}
+	var queue: Array[int] = [capital]
+	var cursor := 0
+	while cursor < queue.size():
+		var current := queue[cursor]
+		cursor += 1
+		if current == target.id: return true
+		for neighbor in neighbors(current):
+			if reached.has(neighbor): continue
+			var edge := edge_of(current,neighbor)
+			if edge == null or edge.kind != Edge.Kind.LAND or edge.max_manpower <= 0:
+				continue
+			var node := cities[neighbor]
+			if node.is_dock or (not node.is_traffic and node.owner_nation != nation_id and not projected.has(neighbor)):
+				continue
+			if not atlas_layout.is_empty():
+				var control := edge.control_city_id
+				if control < 0 or control >= cities.size(): continue
+				if cities[control].owner_nation != nation_id and not projected.has(control): continue
+			reached[neighbor] = true
+			queue.append(neighbor)
+	return false
+
+
 ## nation_id 所属宗藩体系的全部成员（含宗主与各级藩王），按 id 升序。
 ## 与 alliance_bloc 的区别：bloc 是对外军事共同体（对称 ALLIED 连通分量），
 ## 可能包含平等盟友；本方法只沿有向宗藩链聚合同一个宗主根下的成员。

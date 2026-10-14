@@ -7309,12 +7309,14 @@ func _test_external_territory_sovereignty() -> void:
 	for border_edge in gs.edges:
 		var border_a := gs.cities[border_edge.city_a]
 		var border_b := gs.cities[border_edge.city_b]
-		if border_a.owner_nation == 1 and border_b.owner_nation == 3:
+		if (border_a.owner_nation == 1 and border_b.owner_nation == 3
+			and gs.cities[gs.administrative_center_of(border_b.id)].owner_nation == 3):
 			subject_origin = border_a
 			subject_target = border_b
 			border_edge.max_manpower = Edge.STANDARD_MANPOWER
 			break
-		if border_b.owner_nation == 1 and border_a.owner_nation == 3:
+		if (border_b.owner_nation == 1 and border_a.owner_nation == 3
+			and gs.cities[gs.administrative_center_of(border_a.id)].owner_nation == 3):
 			subject_origin = border_b
 			subject_target = border_a
 			border_edge.max_manpower = Edge.STANDARD_MANPOWER
@@ -7332,6 +7334,12 @@ func _test_external_territory_sovereignty() -> void:
 	sim.setup(gs)
 	# A 宗主军从自己的藩王领土出发攻下 B 藩王城市：实控归提供
 	# 进攻出发地的 A 藩王，B 藩王法理暂时保留，sponsor 仍是实际交战军。
+	# The legacy grid fixture can have disconnected islands. This case explicitly
+	# requires a land connection from the prince's capital to the departure city.
+	if gs.nations[1].capital_city_id != subject_origin.id:
+		gs._add_edge(gs.nations[1].capital_city_id,subject_origin.id)
+		var home_link := gs.edge_of(gs.nations[1].capital_city_id,subject_origin.id)
+		home_link.kind = Edge.Kind.LAND; home_link.max_manpower = Edge.STANDARD_MANPOWER
 	var subject_army := _make_army(12991, 0, 5000, 10, 10)
 	subject_army.location_city = subject_origin.id
 	subject_army.move_from = subject_origin.id
@@ -7477,6 +7485,9 @@ func _test_external_territory_sovereignty() -> void:
 			break
 	_check(departed_target != null, "死亡藩王 sponsor 回归必须找到敌方普通城市")
 	if departed_target != null:
+		departed_state._add_edge(departed_state.nations[1].capital_city_id,departed_target.id)
+		var departure := departed_state.edge_of(departed_state.nations[1].capital_city_id,departed_target.id)
+		departure.kind = Edge.Kind.LAND; departure.max_manpower = Edge.STANDARD_MANPOWER
 		var departed_sim := Simulation.new()
 		departed_sim.setup(departed_state)
 		var departed_army := _make_army(12993, 1, 5000, 10, 10)

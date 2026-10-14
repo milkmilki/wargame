@@ -4238,9 +4238,9 @@ func _resolve_capital_capture_capitulation(
 	return forced_peace_marker
 
 
-## 州治易帜：州治陷落后，本州所有敌方持有的属府向占领方易主（望风归附）。
-## 只转实控、法理留待和平结算；库存随城移交而非掠夺。第三方、盟友持有
-## 的属府与首都不动，由肃清收尾机制继续处理。
+## 州治易帜：敌方属府与盟军暂时占有的敌方法理属府统一归州治控制者。
+## 只转实控，法理留待和平结算；库存随城移交。第三方与盟友已有法理土地、
+## 各国首都保持不动，由既有战役与肃清流程继续处理。
 func _zhou_defection_operations(
 	claimant: int,
 	sponsor: int,
@@ -4257,12 +4257,14 @@ func _zhou_defection_operations(
 	if normalized_sponsor == -1:
 		normalized_sponsor = claimant
 	for member_id in state.administrative_members(center_id):
+		var controller := state.cities[member_id].owner_nation
+		var shared_occupation := (state.has_military_access(normalized_sponsor,controller)
+			and state.is_enemy(normalized_sponsor,state.recognized_owner_of(member_id)))
 		if (
 			member_id == center_id
 			or state.cities[member_id].is_capital
-			or not state.is_enemy(
-				claimant, state.cities[member_id].owner_nation
-			)
+			or controller == claimant
+			or (not state.is_enemy(claimant,controller) and not shared_occupation)
 		):
 			continue
 		operations.append({
@@ -12892,7 +12894,8 @@ func _set_occupation_claimant_for_crossing(
 		)
 	):
 		return
-	var origin_owner := state.cities[from_city].owner_nation
+	var origin_city := _occupation_origin_city(army, from_city)
+	var origin_owner := state.cities[origin_city].owner_nation
 	if (
 		origin_owner == army.owner_nation
 		or state.is_allied(
@@ -14432,6 +14435,11 @@ func _capture_city(
 		claimant = owner_override
 	if claimant < 0 or claimant >= state.nations.size():
 		return
+	# Siege claims are provisional: control can change while a battle is running.
+	claimant = _occupation_recipient_for_capture(
+		claimant, army.owner_nation if army != null else claimant, city
+	)
+	if resolving_battle != null: resolving_battle.siege_claimant_nation = claimant
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
 	# 未获承认的地方叛军驻地没有独立法理，不能进入主权国首都投降：
@@ -14660,38 +14668,16 @@ func _occupation_claimant_for_army(
 	army: Army,
 	target_city: City = null
 ) -> int:
-	# 此函数只在真正破城后决定控制权接收者，与围城阶段的 CITY_DEFENDER/
-	# CHALLENGER 角色正交：战斗阵营按当前控制与军事通行权，控制权则优先归还
-	# 仍存活且与攻方结盟的法理所有者。
-	if target_city != null:
-		var recognized_owner := state.recognized_owner_of(
-			target_city.id
-		)
-		if (
-			recognized_owner >= 0
-			and recognized_owner < state.nations.size()
-			and not state.land_cities_of(recognized_owner).is_empty()
-			and state.is_enemy(
-				recognized_owner,
-				target_city.owner_nation
-			)
-			and (
-				recognized_owner == army.owner_nation
-				or state.is_allied(
-					army.owner_nation,
-					recognized_owner
-				)
-			)
-		):
-			return recognized_owner
+	# Preview the recipient at siege creation; the capture commit revalidates it.
+	if army == null: return -1
 	if (
 		army.occupation_claimant_nation >= 0
 		and army.occupation_claimant_nation
 			< state.nations.size()
 		and state.nations[army.occupation_claimant_nation].alive
 	):
-		return army.occupation_claimant_nation
-	var origin_city := army.move_from
+		return _occupation_recipient_for_capture(army.occupation_claimant_nation,army.owner_nation,target_city)
+	var origin_city := _occupation_origin_city(army, army.move_from)
 	if origin_city < 0 or origin_city >= state.cities.size():
 		origin_city = army.location_city
 	if origin_city >= 0 and origin_city < state.cities.size():
@@ -14703,8 +14689,47 @@ func _occupation_claimant_for_army(
 				origin_owner
 			)
 		):
-			return origin_owner
-	return army.owner_nation
+			return _occupation_recipient_for_capture(origin_owner,army.owner_nation,target_city)
+	return _occupation_recipient_for_capture(army.owner_nation,army.owner_nation,target_city)
+
+func _occupation_recipient_for_capture(claimant: int, actor: int, target: City) -> int:
+	if target == null: return claimant
+	var legal := state.recognized_owner_of(target.id)
+	if (legal >= 0 and legal < state.nations.size()
+		and not state.land_cities_of(legal).is_empty()
+		and state.is_enemy(legal,target.owner_nation)
+		and (legal == actor or state.is_allied(actor,legal))):
+		return legal
+	if (claimant < 0 or claimant >= state.nations.size()
+		or not state.nations[claimant].alive
+		or (claimant != actor and not state.has_military_access(actor,claimant))):
+		claimant = actor
+	# Residual enemy prefectures follow the already captured friendly seat.
+	var center := state.administrative_center_of(target.id)
+	if center >= 0 and center != target.id:
+		var controller := state.cities[center].owner_nation
+		if (controller >= 0 and state.has_military_access(actor,controller)
+			and state.is_enemy(controller,target.owner_nation)):
+			claimant = controller
+	if (target.is_settlement() and state.is_vassal(claimant)
+		and not state.is_in_civil_war(claimant)
+		and not state.occupation_connects_to_capital(claimant,target)):
+		var root := state.external_territory_recipient(claimant)
+		if root != claimant and state.has_military_access(actor,root):
+			return root
+	return claimant
+
+## Atlas junctions have no political owner; retain the last real departure city.
+func _occupation_origin_city(army: Army, from_city: int) -> int:
+	if (
+		not state.atlas_layout.is_empty()
+		and from_city >= 0 and from_city < state.cities.size()
+		and state.cities[from_city].is_traffic
+		and army.route_origin_city_id >= 0
+		and army.route_origin_city_id < state.cities.size()
+	):
+		return army.route_origin_city_id
+	return from_city
 
 # ------------------------------------------------------------------ 6. 战争状态刷新
 

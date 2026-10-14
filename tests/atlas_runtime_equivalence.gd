@@ -8,7 +8,8 @@ func snapshot(state: GameState) -> Array:
 		NativeSnapshotBuilder._build_battles(state,edges.indices,armies.indices),NativeSnapshotBuilder._build_campaign_fronts(state),
 		NativeSnapshotBuilder._build_campaign_pairs(state),state.campaign_raid_records,
 		state.nations.map(func(n):return n.battle_groups.map(func(g):return [g.id,g.reserve_target_city])),
-		state.cities.map(func(c):return [c.owner_nation,c.food_storage,c.garrison_manpower,c.garrison_supply_ratio])]
+		state.cities.map(func(c):return [c.owner_nation,state.recognized_owner_of(c.id),c.occupation_sponsor_nation,c.food_storage,c.garrison_manpower,c.garrison_supply_ratio]),
+		state.armies.map(func(a):return a.route_origin_city_id),state.suzerainty]
 func run():
 	var days:=365
 	for argument in OS.get_cmdline_user_args():
