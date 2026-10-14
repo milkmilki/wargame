@@ -24,9 +24,9 @@ func original_bytes(packed: PackedByteArray) -> PackedByteArray:
 				expanded.append(["city",records[o],records[o+1],bool(records[o+2]),records[o+3],positions[i],records[o+4],records[o+5],records[o+6],bool(records[o+7]),bool(records[o+8]),bool(records[o+9]),bool(records[o+10]),bool(records[o+11]),records[o+12],records[o+13]])
 		elif field is Array and field.size()>1 and field[0]=="edges_packed":
 			var records: PackedInt64Array = field[1];var values: PackedFloat64Array = field[2]
-			for i in range(records.size()/7):
-				var o := i*7;var f := i*4
-				expanded.append(["edge",records[o],records[o+1],records[o+2],records[o+3],records[o+4],records[o+5],values[f],records[o+6],values[f+1],values[f+2],values[f+3]])
+			for i in range(records.size()/8):
+				var o := i*8;var f := i*4
+				expanded.append(["edge",records[o],records[o+1],records[o+2],records[o+3],records[o+4],records[o+5],values[f],records[o+6],values[f+1],values[f+2],values[f+3],records[o+7]])
 		else: expanded.append(field)
 	expanded[0]="trade_structure_v5"
 	return var_to_bytes(expanded)
@@ -48,7 +48,7 @@ func run():
 		for property in ["is_capital","has_warehouse","is_port_market","is_crossroads","is_food_hub"]:
 			var saved = city.get(property)
 			dependency(state,func():city.set(property,not bool(saved)),func():city.set(property,saved),property)
-		for property in ["max_manpower","base_max_manpower","distance","control_city_id","kind"]:
+		for property in ["max_manpower","base_max_manpower","distance","control_city_id","kind","road_tier"]:
 			var saved = edge.get(property)
 			for value in [0,-1,1<<32,(1<<54)+1]:
 				dependency(state,func():edge.set(property,value),func():edge.set(property,saved),property+str(value))

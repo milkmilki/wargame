@@ -438,7 +438,12 @@ func _process(_delta: float) -> void:
 	refresh_city_hover()
 	if state==null or not view_ready or not is_instance_valid(overlay): return
 	if not navigation_in_progress: overlay.set_view(zoom,Rect2(-map_root.position/zoom,size/zoom))
-	if is_instance_valid(shipping_layer): shipping_layer.set_zoom(zoom); shipping_layer.set_view(Rect2(-map_root.position/zoom,size/zoom))
+	if is_instance_valid(shipping_layer):
+		var faded := mode_control.selected==TRADE_MODE
+		if faded!=bool(shipping_layer.get_meta("trade_faded",false)):
+			shipping_layer.set_meta("trade_faded",faded)
+			shipping_layer.material.set_shader_parameter("stroke_color",Color(.18,.39,.55,.18 if faded else .70))
+		shipping_layer.set_zoom(zoom); shipping_layer.set_view(Rect2(-map_root.position/zoom,size/zoom))
 	overlay.selection = selected_army
 	refresh_attack_arrows()
 	military_status.text = "历史：第%d天 · 只读政治快照"%overlay.state.day if historical_view else "第%d天 · 军队%d · 战斗%d · %s"%[state.day,state.armies.size(),state.battles.size(),"暂停" if simulation.paused else "运行军事AI"]
@@ -774,7 +779,7 @@ func refresh_trade_routes() -> void:
 		trade_route_key=key
 		trade_routes_layer.set_segments(TradeView.route_segments(source))
 	if mode_control.selected==TRADE_MODE and not trade_pending:
-		status.text="贸易区域：%d · %d条商路 · 金线为贸易往来，灰虚线为受阻，圆环为枢纽"%[source.region_count,source.trade_routes.size()]
+		status.text="贸易区域：%d · %d条关系 · 金线商路、灰线受阻，放大查看支线"%[source.region_count,source.trade_routes.size()]
 
 func refresh_trade_hubs() -> void:
 	if historical_view: return

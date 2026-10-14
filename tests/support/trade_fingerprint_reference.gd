@@ -48,6 +48,7 @@ static func fingerprint(state: GameState) -> PackedByteArray:
 			"edge", edge.city_a, edge.city_b, edge.kind,
 			edge.max_manpower, edge.base_max_manpower, edge.distance, edge.precise_distance, edge.control_city_id,
 			edge.travel_time_multiplier, edge.danger,
-			edge.supply_loss_multiplier,
+			edge.supply_loss_multiplier,edge.road_tier,
 		])
+	if not state.atlas_layout.is_empty(): fields.append(["shipping",state.atlas_layout.get("shipping",{}).get("fingerprint",""),TradeNetwork.CORRIDOR_RULES])
 	return var_to_bytes(fields)

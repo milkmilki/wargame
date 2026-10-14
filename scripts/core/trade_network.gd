@@ -66,6 +66,9 @@ const UNREACHABLE_COST: float = -1.0
 const DOMESTIC_IDEAL_SHARED_CACHE_MAX_ENTRIES: int = 256
 const INTERNATIONAL_IDEAL_SHARED_CACHE_MAX_ENTRIES: int = 256
 const OPERATIONAL_SHARED_CACHE_MAX_ENTRIES: int = 2048
+const CORRIDOR_RULES := "main-shared-corridors-v1"
+const MAIN_ROUTE_PREFERENCE := .90
+const SHARED_ROUTE_PREFERENCE := .90
 
 ## 仅用于性能等价测试/微基准，不写入 build()/build_structure() 返回值。
 ## 这些静态计数用于串行基准，不做并发同步；工作线程建网时不保证统计精度。
@@ -315,6 +318,7 @@ static func _build_structure_locked(state: GameState, use_connectivity_prefilter
 		state, occupied_edges
 	)
 	var field_cache := {}
+	if not state.atlas_layout.is_empty(): _prepare_trade_corridors(state,graph)
 	var native_trade_batch := NativeCompute.begin_trade_batch(state, graph)
 	var routes := _atlas_regional_routes(state,graph) if not state.atlas_layout.is_empty() else _build_regional_routes(
 		state, graph, besieged, occupied_edges, field_cache,
@@ -660,11 +664,11 @@ static func _structure_fingerprint_locked(state: GameState) -> PackedByteArray:
 		])
 
 	# edges 的数组顺序也保留：重复端点时 _build_graph() 采用第一条边。
-	var edge_records := PackedInt64Array(); edge_records.resize(state.edges.size()*7)
+	var edge_records := PackedInt64Array(); edge_records.resize(state.edges.size()*8)
 	var edge_values := PackedFloat64Array(); edge_values.resize(state.edges.size()*4)
 	var edge_index := 0
 	for edge in state.edges:
-		var offset := edge_index * 7
+		var offset := edge_index * 8
 		edge_records[offset] = edge.city_a
 		edge_records[offset+1] = edge.city_b
 		edge_records[offset+2] = edge.kind
@@ -672,6 +676,7 @@ static func _structure_fingerprint_locked(state: GameState) -> PackedByteArray:
 		edge_records[offset+4] = edge.base_max_manpower
 		edge_records[offset+5] = edge.distance
 		edge_records[offset+6] = edge.control_city_id
+		edge_records[offset+7] = edge.road_tier
 		var value_offset := edge_index * 4
 		edge_values[value_offset] = edge.precise_distance
 		edge_values[value_offset+1] = edge.travel_time_multiplier
@@ -679,7 +684,7 @@ static func _structure_fingerprint_locked(state: GameState) -> PackedByteArray:
 		edge_values[value_offset+3] = edge.supply_loss_multiplier
 		edge_index += 1
 	fields.append(["edges_packed",edge_records,edge_values])
-	if not state.atlas_layout.is_empty(): fields.append(["shipping",state.atlas_layout.get("shipping",{}).get("fingerprint","")])
+	if not state.atlas_layout.is_empty(): fields.append(["shipping",state.atlas_layout.get("shipping",{}).get("fingerprint",""),CORRIDOR_RULES])
 	return var_to_bytes(fields)
 
 
@@ -2521,7 +2526,9 @@ static func _publish_atlas_centers(state: GameState) -> void:
 static func _prepare_atlas_trade_cache(state: GameState) -> void:
 	var month := state.day / 30
 	var layout_key: Array = [state.world_seed,state.cities.size(),state.region_analysis_revision]
-	var key: Array = [state.world_seed,state.cities.size(),state.edges.size(),state.road_network_revision,state.region_analysis_revision,_ideal_city_mask(state),state.atlas_layout.get("shipping",{}).get("fingerprint","")]
+	var tiers := PackedByteArray()
+	for edge in state.edges: tiers.append(edge.road_tier+1)
+	var key: Array = [state.world_seed,state.cities.size(),state.edges.size(),state.road_network_revision,state.region_analysis_revision,_ideal_city_mask(state),state.atlas_layout.get("shipping",{}).get("fingerprint",""),CORRIDOR_RULES,tiers]
 	var cache := state.atlas_trade_cache
 	if cache.get("geometry_key",[]) != key or month < int(cache.get("last_month",0)):
 		var preserve_centers: bool = cache.get("layout_key",[])==layout_key and month>=int(cache.get("last_month",0))
@@ -2544,6 +2551,49 @@ static func _prepare_atlas_trade_cache(state: GameState) -> void:
 	cache.centers=centers; cache.last_month=month
 
 
+## Build shared corridors from a deterministic first pass, never last month's
+## mutable route publication. Discounts affect selection only; maximum combined
+## preference is 0.81, so a main/shared detour cannot beat a much shorter route.
+static func _prepare_trade_corridors(state: GameState,graph: Dictionary) -> void:
+	var centers: Dictionary=state.atlas_trade_cache.centers
+	var regions: Array=centers.keys(); regions.sort()
+	var starts: Array[int]=[]
+	for region in regions: starts.append(int(centers[region]))
+	if graph.get("corridor_key",[])==starts: return
+	var weights := {}
+	for key in graph.edge_lookup:
+		var edge: Edge=graph.edge_lookup[key]
+		if edge.kind==Edge.Kind.LAND and edge.road_tier==Edge.RoadTier.MAIN: weights[key]=MAIN_ROUTE_PREFERENCE
+	graph.selection_weights=weights
+	var usage := {}; var allowed := _ideal_city_mask(state)
+	var native_batch := NativeCompute.begin_trade_batch(state,graph)
+	for index in range(starts.size()-1):
+		var source := starts[index]
+		var field := _dijkstra_field(state,graph,[source] as Array[int],allowed,false,{},{})
+		for destination in starts.slice(index+1):
+			var selection := _select_preferred_endpoints_from_field(state,[source] as Array[int],[destination] as Array[int],field)
+			var path: Array=selection.path
+			for step in range(1,path.size()):
+				var key := _edge_key(int(path[step-1]),int(path[step]))
+				usage[key]=int(usage.get(key,0))+1
+	if native_batch: NativeCompute.end_trade_batch(state)
+	for key in usage:
+		if int(usage[key])>=4: weights[key]=float(weights.get(key,1.))*SHARED_ROUTE_PREFERENCE
+	graph.corridor_key=starts.duplicate()
+	state.atlas_trade_cache.paths.clear(); state.atlas_trade_cache.fields.clear()
+	(state.atlas_trade_cache.get("tax_allocations",{}) as Dictionary).clear()
+
+
+static func _physical_path_cost(graph: Dictionary,path: Array,operational: bool) -> float:
+	if path.is_empty(): return UNREACHABLE_COST
+	var units := 0
+	for index in range(1,path.size()):
+		var edge: Edge=graph.edge_lookup.get(_edge_key(int(path[index-1]),int(path[index])),null)
+		if edge==null: return UNREACHABLE_COST
+		units+=_edge_transport_cost_units(edge,operational)
+	return float(units)/float(COST_SCALE)
+
+
 static func _atlas_regional_routes(state: GameState, graph: Dictionary) -> Array[Dictionary]:
 	var cache := state.atlas_trade_cache
 	var regions := (cache.centers as Dictionary).keys(); regions.sort()
@@ -2560,6 +2610,8 @@ static func _atlas_regional_routes(state: GameState, graph: Dictionary) -> Array
 			if not paths.has(pair):
 				paths[pair]=_derive_route(state,graph,[source] as Array[int],[destination] as Array[int],0,0,false,{},[],fields)
 				var stored: Dictionary = paths[pair]
+				stored.preferred_transport_cost=_physical_path_cost(graph,stored.preferred_city_path,false)
+				stored.transport_cost=_physical_path_cost(graph,stored.city_path,int(stored.status)!=RouteStatus.BLOCKED)
 				stored.tax_city_ids=_tax_cities_on_path(state,stored.city_path)
 				stored.region_crossings=_route_region_crossings_from_ids(_tax_cities_on_path(state,stored.preferred_city_path),trade_region_ids(state))
 				cache.path_builds=int(cache.path_builds)+1
@@ -3826,7 +3878,7 @@ static func _dijkstra_field_gdscript(
 				edge.max_manpower <= 0 or blocked_edges.has(edge_key)
 			):
 				continue
-			var edge_cost := _edge_transport_cost_units(edge, operational)
+			var edge_cost := _edge_selection_cost_units(graph,edge,operational)
 			var candidate := known_cost + edge_cost
 			var candidate_origin := origin[city_id]
 			var improves := candidate < dist[neighbor]
@@ -3844,6 +3896,11 @@ static func _dijkstra_field_gdscript(
 					heap, Vector3i(candidate, candidate_origin, neighbor)
 				)
 	return {"dist": dist, "prev": prev, "origin": origin}
+
+
+static func _edge_selection_cost_units(graph: Dictionary,edge: Edge,operational: bool) -> int:
+	var preference := float(graph.get("selection_weights",{}).get(_edge_key(edge.city_a,edge.city_b),1.))
+	return maxi(1,roundi(float(_edge_transport_cost_units(edge,operational))*preference))
 
 
 static func _edge_transport_cost(edge: Edge, operational: bool) -> float:

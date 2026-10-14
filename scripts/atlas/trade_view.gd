@@ -39,7 +39,7 @@ static func route_segments(state: GameState) -> Array[Dictionary]:
 						if point.is_equal_approx(points[-1]):
 							continue
 					points.append(point)
-				corridors[key] = {"edge_key": key, "path": points, "route_count": 0, "active_count": 0}
+				corridors[key] = {"edge_key": key, "path": points, "route_count": 0, "active_count": 0,"water":edge.kind in [Edge.Kind.SEA,Edge.Kind.RIVER],"main":edge.road_tier==Edge.RoadTier.MAIN}
 			corridors[key].route_count += 1
 			if not blocked:
 				corridors[key].active_count += 1
@@ -48,6 +48,33 @@ static func route_segments(state: GameState) -> Array[Dictionary]:
 	for key in keys:
 		if corridors[key].path.size() >= 2:
 			result.append(corridors[key])
+	return result
+
+## Sea graph edges may overlap along the same mesh cells despite different
+## port endpoints. Merge that physical ink without changing the trade network.
+static func drawing_segments(segments: Array) -> Array:
+	var result: Array=[]; var water := {}
+	for segment in segments:
+		if not segment.get("water",false): result.append(segment); continue
+		var path: PackedVector2Array=segment.path
+		for index in range(1,path.size()):
+			var a := Vector2(fposmod(path[index-1].x,2048.),path[index-1].y)
+			var b := Vector2(fposmod(path[index].x,2048.),path[index].y)
+			var first := Vector2i(roundi(a.x*1024.),roundi(a.y*1024.))
+			var second := Vector2i(roundi(b.x*1024.),roundi(b.y*1024.))
+			if first==second: continue
+			if first.x>second.x or (first.x==second.x and first.y>second.y):
+				var swap := a; a=b; b=swap
+				var key_swap := first; first=second; second=key_swap
+			var key := Vector4i(first.x,first.y,second.x,second.y)
+			if not water.has(key):
+				b.x+=roundf((a.x-b.x)/2048.)*2048.
+				water[key]={"path":PackedVector2Array([a,b]),"active_count":0,"route_count":0,"water":true}
+			# Keep the strongest usage classification, never add overlapping
+			# counts that could belong to the very same end-to-end trade route.
+			water[key].active_count=maxi(int(water[key].active_count),int(segment.active_count))
+			water[key].route_count=maxi(int(water[key].route_count),int(segment.route_count))
+	for key in water: result.append(water[key])
 	return result
 
 static func calculate(input: Dictionary) -> Dictionary:
@@ -78,6 +105,7 @@ class Routes extends Node2D:
 	var build_count := 0
 	var view_zoom := 1.
 	var visible_world := Rect2(-4096, -1024, 8192, 3072)
+	var drawing_count := 0
 
 	func set_segments(value: Array) -> void:
 		if segments == value:
@@ -86,10 +114,11 @@ class Routes extends Node2D:
 		build_count += 1
 		markers.clear()
 		var groups: Array = [[], [], []]
-		for segment in segments:
-			var tier := 2 if segment.active_count == 0 else 1 if segment.active_count >= 4 else 0
+		var drawing: Array=load("res://scripts/atlas/trade_view.gd").drawing_segments(segments); drawing_count=drawing.size()
+		for segment in drawing:
+			var tier := 2 if segment.active_count == 0 else 1 if segment.active_count >= 4 or segment.get("main",false) else 0
 			groups[tier].append(segment.path)
-			markers.append(_midpoint(segment.path, tier))
+			if not segment.get("water",false): markers.append(_midpoint(segment.path, tier))
 		if stroke_layers.is_empty():
 			for tier in range(3):
 				for pass_index in range(3):
@@ -97,13 +126,14 @@ class Routes extends Node2D:
 					stroke.scheduler = scheduler
 					stroke.pool = geometry_pool
 					stroke.z_index = -1
-					var width: float = [[5., 3., 1.6], [6.2, 4., 2.4], [3.8, 1.8, .9]][tier][pass_index]
+					var width: float = [[2.4, 1.3, .7], [3.8, 2.5, 1.5], [2.2, 1.3, .7]][tier][pass_index]
 					var color := PAPER if pass_index == 0 else CLOSED if tier == 2 else INK if pass_index == 1 else GOLD
-					var dash := 3. if tier == 2 and pass_index > 0 else 8. if pass_index == 2 else 0.
+					var dash := 3. if tier == 2 and pass_index > 0 else 0.
 					stroke.style(width, color, dash, 6. if tier == 2 else 5., -1.)
 					add_child(stroke)
 					stroke_layers.append(stroke)
 		for index in range(stroke_layers.size()):
+			stroke_layers[index].visible=(index/3!=0 or view_zoom>=2.5) and (index/3!=2 or view_zoom>=1.5)
 			stroke_layers[index].set_paths(groups[index / 3])
 			stroke_layers[index].set_zoom(view_zoom)
 			stroke_layers[index].set_view(visible_world)
@@ -122,7 +152,9 @@ class Routes extends Node2D:
 			return
 		view_zoom = maxf(.1, value)
 		visible_world = rect
-		for stroke in stroke_layers:
+		for index in range(stroke_layers.size()):
+			var stroke: Node2D=stroke_layers[index]
+			stroke.visible=(index/3!=0 or view_zoom>=2.5) and (index/3!=2 or view_zoom>=1.5)
 			stroke.set_zoom(view_zoom)
 			stroke.set_view(rect)
 		if changed:
@@ -142,11 +174,12 @@ class Routes extends Node2D:
 		return {}
 
 	func _draw() -> void:
+		if view_zoom<3.: return
 		var pen := 1. / maxf(.1, view_zoom)
 		for shift in [-2048., 0., 2048.]:
 			draw_set_transform(Vector2(shift, 0))
 			for marker in markers:
-				if marker.is_empty() or marker.length * view_zoom < 48.:
+				if marker.is_empty() or marker.length * view_zoom < 140.:
 					continue
 				var axis: Vector2 = marker.direction * pen
 				var normal := Vector2(-axis.y, axis.x)

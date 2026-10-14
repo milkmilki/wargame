@@ -478,7 +478,7 @@ static func trade_field(state: GameState, graph: Dictionary, starts: Array[int],
 				if data.edge_indices.has(key): enabled[int(data.edge_indices[key])] = 0
 	else:
 		for edge: Edge in data.edges:
-			costs.append(TradeNetwork._edge_transport_cost_units(edge, operational))
+			costs.append(TradeNetwork._edge_selection_cost_units(graph,edge,operational))
 			enabled.append(1 if not operational or (edge.max_manpower > 0 and not blocked.has(GameState.edge_key(edge.city_a, edge.city_b))) else 0)
 	var origins := PackedInt32Array(starts)
 	# The legacy API treats missing allowed entries as inaccessible, including
@@ -522,8 +522,8 @@ static func begin_trade_batch(state: GameState, graph: Dictionary) -> bool:
 	var enabled := PackedByteArray()
 	var all_enabled := PackedByteArray()
 	for edge: Edge in data.edges:
-		ideal.append(TradeNetwork._edge_transport_cost_units(edge, false))
-		operational.append(TradeNetwork._edge_transport_cost_units(edge, true))
+		ideal.append(TradeNetwork._edge_selection_cost_units(graph,edge,false))
+		operational.append(TradeNetwork._edge_selection_cost_units(graph,edge,true))
 		enabled.append(1 if edge.max_manpower > 0 else 0)
 		all_enabled.append(1)
 	var batch := {"source": graph, "ideal": ideal, "operational": operational, "enabled": enabled, "all_enabled": all_enabled}
