@@ -24,11 +24,24 @@ all parent-controlled land in that state; otherwise a new rebel nation forms wit
 the state center as its capital. Transactions reject partial-state or cross-state
 lists. Resource sharing, troop defection, uprising mobilization, legal title and
 peace rules are unchanged. Road closure alone does not repartition a state.
+
+An active, unrecognized local rebel capital is a military headquarters, not a
+sovereign capital for capitulation. A siege victory transfers its actual control
+and applies the ordinary same-state defection rule while preserving existing
+legal title. Freeze eligible dependent cities before the first transfer, since
+that transfer can relocate the rebel capital into a dependent city. Other rebel
+states continue resisting; only complete territorial loss triggers elimination
+cleanup. The 360-day voluntary peace lock does not prevent military recapture
+or cleanup after elimination. Recognized independent nations and vassal civil
+wars retain their existing capital-resolution rules.
 Monthly political transfers also reuse the siege-participant reconciliation
 entry point, so old city defenders cannot keep losing troops in an obsolete
 battle after the political change.
 
 Monthly grouping is linear in cities plus active rebellion records; each parent
 reads only its own state reports. No new daily task or regional route search is added.
-Regression gates: `tests/state_rebellion.gd`, `tests/politics_trade_smoke.gd`,
+Regression gates: `tests/regional_rebel_capital_capture.gd` (siege victory before
+and after the peace lock, surviving second state, rebel counterattack, and
+recognized sovereign capitulation),
+`tests/state_rebellion.gd`, `tests/politics_trade_smoke.gd`,
 `tests/war_campaign_pool.gd`, and `run_tests.sh`.

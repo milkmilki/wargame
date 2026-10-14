@@ -14410,6 +14410,14 @@ func _capture_city(
 		return
 	var old_owner_valid := old_owner >= 0 and old_owner < state.nations.size()
 	var captured_capital := old_owner_valid and state.nations[old_owner].capital_city_id == city.id
+	# 未获承认的地方叛军驻地没有独立法理，不能进入主权国首都投降：
+	# 该流程会筛出空领土列表，且最低战争期限拒绝议和，造成胜军反复遣返。
+	# 驻地按普通州治攻占；其他州仍可继续抵抗，全境失守才走灭国清理。
+	var regional_rebel_capital := (
+		captured_capital
+		and state.rebellions.has(old_owner)
+		and bool((state.rebellions[old_owner] as Dictionary).get("active", false))
+	)
 	var faction := VassalConflict.for_pair(state, old_owner, claimant)
 	var civil_war_capital_capture := (
 		captured_capital
@@ -14444,6 +14452,7 @@ func _capture_city(
 	elif (
 		captured_capital
 		and not state.is_vassal(old_owner)
+		and not regional_rebel_capital
 	):
 		var capital_transfers := _resolve_capital_capture_capitulation(
 			old_owner, claimant, city.id
@@ -14453,6 +14462,11 @@ func _capture_city(
 		captured_city_ids = capital_transfers
 		territory_changed = true
 	else:
+		# 冻结失守前的属府名单；首城提交会把叛军首都迁到残府，不能
+		# 因这次自动迁都把原本应易帜的属府重新排除。
+		var defection_operations: Array[Dictionary] = []
+		if state.is_zhou_city(city.id) and (not captured_capital or regional_rebel_capital):
+			defection_operations = _zhou_defection_operations(claimant, occupation_sponsor, city.id)
 		var capture_result := state.transfer_city_control(
 			city.id,
 			claimant,
@@ -14463,17 +14477,14 @@ func _capture_city(
 		if not bool(capture_result.get("ok", false)):
 			return
 		territory_changed = bool(capture_result.get("changed", false))
-		# 举州易帜：州治陷落，本州敌方属府随之易主。首都与削藩内战首都
+		# 举州易帜：州治陷落，本州敌方属府随之易主。主权国首都与削藩内战首都
 		# 走各自的通吃/兼并路径，不在此处处理。易帜是独立事务——失败
 		# 只退化为旧行为（残敌属府继续由肃清收尾），绝不阻断州治占领。
 		if (
 			state.is_zhou_city(city.id)
-			and not captured_capital
+			and (not captured_capital or regional_rebel_capital)
 			and not civil_war_capital_capture
 		):
-			var defection_operations := _zhou_defection_operations(
-				claimant, occupation_sponsor, city.id
-			)
 			if not defection_operations.is_empty():
 				var defection_result := state.apply_territory_transaction(
 					defection_operations
