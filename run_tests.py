@@ -11,7 +11,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 CORE = [
-	"environment_nations",
+	"environment_nations", "nomad_names",
     "state_campaign_lifecycle", "coalition_campaign_pairs", "coalition_campaign_frame_slice_equivalence",
     "native_city_partitions",
     "campaign_frozen_reinforcement",
@@ -31,7 +31,7 @@ CORE = [
     "ultimatum_forecast_cache_equivalence",
 ]
 ATLAS = [
-	"environment_nations_atlas",
+	"environment_nations_atlas", "atlas_shipping", "atlas_shipping_world",
     "atlas_diplomacy_wakes",
     "atlas_alliance_cache", "atlas_alliance_runtime",
     "atlas_coalition_components", "atlas_coalition_runtime",

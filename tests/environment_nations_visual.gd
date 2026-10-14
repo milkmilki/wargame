@@ -50,6 +50,7 @@ func run():
 	var heading := Label.new(); heading.text="建国环境 · 两级国号"; heading.add_theme_color_override("font_color",Color.BLACK); rows.add_child(heading)
 	for kind in NationEnvironment.KINDS:
 		var nation := Nation.new(); nation.name=str(RegionalNames.data().pools[kind].preferred).left(1); nation.short_name=nation.name; nation.environment_kind=kind
+		if kind=="nomad": nation.name="桂由"; nation.short_name="桂由"
 		var low := WorldNaming.nation_display_name(nation); nation.state_level=1
 		var label := Label.new(); label.add_theme_font_override("font",load("res://assets/atlas/lxgw-wenkai-gb-500.ttf")); label.add_theme_font_size_override("font_size",25)
 		label.add_theme_color_override("font_color",Color.BLACK)

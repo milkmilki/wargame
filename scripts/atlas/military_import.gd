@@ -12,7 +12,7 @@ static func install(state: GameState,payload: Dictionary) -> Dictionary:
 	payload.naming_sha256 = RegionalNames.fingerprint()
 	# Explicit legacy template identities do not allocate new roots.
 	if not payload.has("settlement_records"):
-		var capacity_error := RegionalNames.capacity_error(payload.nation_environment.profiles)
+		var capacity_error := RegionalNames.capacity_error(payload.nation_environment.profiles,h)
 		if not capacity_error.is_empty(): return {"ok":false,"error":capacity_error}
 	state._reset_world(int(data.seed))
 	state.atlas_layout = payload.duplicate()
@@ -67,6 +67,9 @@ static func install(state: GameState,payload: Dictionary) -> Dictionary:
 	state._initialize_recognized_city_owners(); state._initialize_manpower_pools()
 	state.rebuild_region_analysis(); state.rebuild_administrative_regions()
 	state._initialize_city_garrisons_free(); state._initialize_capitals_and_warehouses(); state._initialize_city_loyalty(false)
+	# Region and administrative analysis above are complete before sea links exist.
+	if payload.has("settlement_records") or payload.get("shipping",{}).get("version","") != preload("res://scripts/atlas/shipping.gd").VERSION:
+		state.atlas_layout.shipping=preload("res://scripts/atlas/shipping.gd").build(data,h)
 	for id in range(state.nations.size()):
 		var nation := state.nations[id]; var source: Dictionary = payload.nations[id]
 		nation.name = source.name; nation.short_name = str(source.get("short_name",source.name.left(1)))

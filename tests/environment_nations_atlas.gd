@@ -22,17 +22,18 @@ func run():
 	for city in state.land_cities():
 		if not state.is_zhou_city(city.id):
 			check(not RegionalNames.reserved(city.short_name),"prefecture short does not consume state pool")
+			if profiles[state.administrative_center_of(city.id)].kind=="nomad": check(city.short_name==city.name and RegionalNames.data().nomad_names.towns.has(city.name),"nomad prefecture uses a full transliteration identity")
 			continue
 		var kind: String = profiles[city.id].kind
 		var pool: Dictionary = RegionalNames.data().pools[kind]
-		check((str(pool.preferred)+str(pool.extension)).contains(city.short_name),"root stays inside its environment pool")
+		check((RegionalNames.data().nomad_names.preferred+RegionalNames.data().nomad_names.extension).has(city.short_name) if kind=="nomad" else (str(pool.preferred)+str(pool.extension)).contains(city.short_name),"root stays inside its environment pool")
 		check(not roots.has(city.short_name) and city.name.contains(city.short_name),"paired unique short and full names")
 		roots[city.short_name]=true; counts[kind]=int(counts.get(kind,0))+1
 	for nation in state.nations:
 		var city: City = state.cities[nation.founding_city_id]
 		check(nation.environment_kind==profiles[city.id].kind,"nation takes founding environment")
 		check(nation.name==city.short_name and nation.name==nation.short_name,"country persists founding root")
-		check(str(RegionalNames.data().pools[nation.environment_kind].preferred).contains(nation.name),"capitals receive preferred characters first")
+		check(RegionalNames.data().nomad_names.preferred.has(nation.name) if nation.environment_kind=="nomad" else str(RegionalNames.data().pools[nation.environment_kind].preferred).contains(nation.name),"capitals receive preferred identities first")
 		check(Information.nation(state,nation.id).title==state.nation_display_name(nation.id),"country inspector uses formal title")
 	check(hash(payload)==payload_hash,"install does not mutate cached payload")
 	var duplicate := GameState.new(); duplicate.generate_from_atlas(payload)

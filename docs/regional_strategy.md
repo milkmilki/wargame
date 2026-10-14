@@ -91,3 +91,8 @@ workload with three warmups and twelve timed samples. Set
 `REGIONAL_BENCH_PROFILE=1` for objective/allocation/execution breakdowns. Keep
 the same scenario and front count when comparing revisions, rather than
 comparing evolving simulations with different war counts.
+
+Shipping is appended to the commerce graph only. Administrative/state/trade
+partitions, regional affinity, administrative distances and military pathfinding
+retain the land graph. Sea transport affects actual trade costs and returns,
+without changing base city budgets or introducing maritime military movement.

@@ -23,6 +23,7 @@ var trade_hubs: Node2D
 var trade_hub_key: Array=[]
 var trade_center_ids: Array=[]
 var trade_routes_layer: Node2D
+var shipping_layer: Node2D
 var trade_route_key: Array=[]
 var startup_cache_writer: Thread
 var startup_cache_key := ""
@@ -392,6 +393,11 @@ func present_world(prepared: GameState,payload: Dictionary,source: String = "atl
 	attack_arrows = AttackArrows.new(); attack_arrows.z_index = 5; map_root.add_child(attack_arrows)
 	refresh_attack_arrows(true)
 	front_layer = WarFronts.new(); front_layer.scheduler = render_scheduler; front_layer.high_performance = high_performance_renderer; front_layer.z_index = 8; map_root.add_child(front_layer)
+	shipping_layer=preload("res://scripts/atlas/persistent_strokes.gd").new(); shipping_layer.scheduler=render_scheduler; shipping_layer.z_index=4
+	shipping_layer.style(1.5,Color(.18,.39,.55,.70),8.,5.)
+	var sea_paths: Array=[]
+	for route in state.atlas_layout.get("shipping",{}).get("routes",[]): sea_paths.append(route.path)
+	map_root.add_child(shipping_layer); shipping_layer.set_paths(sea_paths); shipping_layer.set_zoom(zoom)
 	refresh_fronts(state)
 	if startup_display_result.has("geometry") and startup_display_result.geometry.has("state_lines"):
 		overlay.state_lines=startup_display_result.geometry.state_lines
@@ -402,7 +408,7 @@ func present_world(prepared: GameState,payload: Dictionary,source: String = "atl
 		var parent_chains := Borders.trace(data.mesh,parent.of)
 		for line in Borders.build(parent_chains,parent_owners,data.mesh,raster,parent.of): overlay.state_lines.append(Geometry.points(line.pts))
 	for line in province_lines: overlay.district_lines.append(Geometry.points(line.pts))
-	status.text = "%d 州 · %d 府 · %d 交通点 · %d 条共享道路段"%[state.administrative_region_count,state.land_cities().size()-state.administrative_region_count,state.cities.size()-state.land_cities().size(),state.edges.size()]
+	status.text = "%d 州 · %d 府 · %d 交通点 · %d 条共享道路段 · %d 条航线"%[state.administrative_region_count,state.land_cities().size()-state.administrative_region_count,state.cities.size()-state.land_cities().size(),state.edges.size(),state.atlas_layout.get("shipping",{}).get("routes",[]).size()]
 
 func _pause_previous_world() -> void:
 	if simulation == null: return
@@ -432,6 +438,7 @@ func _process(_delta: float) -> void:
 	refresh_city_hover()
 	if state==null or not view_ready or not is_instance_valid(overlay): return
 	if not navigation_in_progress: overlay.set_view(zoom,Rect2(-map_root.position/zoom,size/zoom))
+	if is_instance_valid(shipping_layer): shipping_layer.set_zoom(zoom); shipping_layer.set_view(Rect2(-map_root.position/zoom,size/zoom))
 	overlay.selection = selected_army
 	refresh_attack_arrows()
 	military_status.text = "历史：第%d天 · 只读政治快照"%overlay.state.day if historical_view else "第%d天 · 军队%d · 战斗%d · %s"%[state.day,state.armies.size(),state.battles.size(),"暂停" if simulation.paused else "运行军事AI"]

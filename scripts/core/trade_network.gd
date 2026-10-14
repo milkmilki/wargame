@@ -302,7 +302,7 @@ static func _build_structure_locked(state: GameState, use_connectivity_prefilter
 		state.atlas_trade_cache.get("graph",{}) if not state.atlas_layout.is_empty() else {}
 	)
 	if graph.is_empty():
-		graph = _build_graph(state)
+		graph = _build_trade_graph(state)
 		if not state.atlas_layout.is_empty(): state.atlas_trade_cache.graph=graph
 	if profile_enabled:
 		_accumulate_build_profile(
@@ -679,6 +679,7 @@ static func _structure_fingerprint_locked(state: GameState) -> PackedByteArray:
 		edge_values[value_offset+3] = edge.supply_loss_multiplier
 		edge_index += 1
 	fields.append(["edges_packed",edge_records,edge_values])
+	if not state.atlas_layout.is_empty(): fields.append(["shipping",state.atlas_layout.get("shipping",{}).get("fingerprint","")])
 	return var_to_bytes(fields)
 
 
@@ -854,6 +855,28 @@ static func _build_graph(state: GameState) -> Dictionary:
 		"adjacency": adjacency,
 		"edge_lookup": edge_lookup,
 	}
+
+
+## Maritime links belong exclusively to the commerce graph. The land graph,
+## military adjacency and all regional partition inputs remain untouched.
+static func _build_trade_graph(state: GameState) -> Dictionary:
+	var graph := _build_graph(state)
+	for edge in preload("res://scripts/atlas/shipping.gd").edges(state):
+		var key := _edge_key(edge.city_a,edge.city_b)
+		var existing: Edge = graph.edge_lookup.get(key,null)
+		if existing!=null and existing.max_manpower>0 and _edge_transport_cost(existing,true)<=_edge_transport_cost(edge,true): continue
+		graph.edge_lookup[key]=edge
+		if existing==null:
+			(graph.adjacency[edge.city_a] as Array[int]).append(edge.city_b)
+			(graph.adjacency[edge.city_b] as Array[int]).append(edge.city_a)
+	for neighbors in graph.adjacency: (neighbors as Array[int]).sort()
+	return graph
+
+
+static func trade_edge(state: GameState,a: int,b: int) -> Edge:
+	var graph: Dictionary=state.atlas_trade_cache.get("graph",{})
+	if graph.is_empty(): graph=_build_trade_graph(state)
+	return graph.edge_lookup.get(_edge_key(a,b),null)
 
 
 static func _edge_key(a: int, b: int) -> int:
@@ -2498,7 +2521,7 @@ static func _publish_atlas_centers(state: GameState) -> void:
 static func _prepare_atlas_trade_cache(state: GameState) -> void:
 	var month := state.day / 30
 	var layout_key: Array = [state.world_seed,state.cities.size(),state.region_analysis_revision]
-	var key: Array = [state.world_seed,state.cities.size(),state.edges.size(),state.road_network_revision,state.region_analysis_revision,_ideal_city_mask(state)]
+	var key: Array = [state.world_seed,state.cities.size(),state.edges.size(),state.road_network_revision,state.region_analysis_revision,_ideal_city_mask(state),state.atlas_layout.get("shipping",{}).get("fingerprint","")]
 	var cache := state.atlas_trade_cache
 	if cache.get("geometry_key",[]) != key or month < int(cache.get("last_month",0)):
 		var preserve_centers: bool = cache.get("layout_key",[])==layout_key and month>=int(cache.get("last_month",0))
@@ -4117,7 +4140,7 @@ static func _tax_cities_on_path(state: GameState,path: Array) -> Array[int]:
 			result.append(city_id)
 		if index+1>=path.size() or state.atlas_layout.is_empty():
 			continue
-		var edge := state.edge_of(city_id,int(path[index+1]))
+		var edge := trade_edge(state,city_id,int(path[index+1]))
 		if edge==null:
 			continue
 		var controller := edge.control_city_id

@@ -25,6 +25,28 @@ ENDINGS = {
     'forest':['林','溪','岭','谷','岚','岑','坞','丘','樵','坪'],
 }
 
+NOMAD_PREFERRED = '''桂由 贵由 拖雷 托雷 铁木真 铁木尔 窝阔台 蒙哥 忽必烈 阿里不哥 术赤 察合台 合撒儿 合赤温 别勒古台 也速该 诃额伦 孛儿帖 弘吉剌 速不台 者勒蔑 博尔术 博尔忽 木华黎 失吉忽秃 赤老温 扎木合 塔塔统阿 哲别 别速台 兀良合 纳牙阿 速亦别额 巴鲁剌 豁儿赤 阿术 伯颜 阿合马 阿塔海 阔阔出 阔阔真 海都 昔里吉 乃颜 真金 甘麻剌 完者笃 和世拉 图帖睦尔 妥欢帖睦尔 脱脱 察罕帖木儿 扩廓帖木儿 脱欢 也先 达延 巴图蒙克 满都海 俺答 辛爱 黄台吉 兀鲁斯 博迪 达赉 哈萨尔 孛罗 合丹 八邻 斡亦剌 帖木哥 别儿哥 旭烈兀 阿八哈 阿鲁浑 海山 爱育黎拔力八达 硕德八剌 也孙铁木儿 阿速 阿鲁台 也速帖木儿 桑哥 忙哥剌 阔端 兀赤斡儿 托克托 也不干 额森 哈丹 察干 巴特尔 巴图 巴雅尔 阿古拉 阿日斯兰 额尔敦 乌力吉 苏和 宝音 赛罕 乌兰 娜仁 其木格 萨日娜 斯琴 高娃 格根 达来 达日汗 德勒格尔 嘎拉 森格 卓里克图 俄木布 和硕 昆都仑 哈喇 昭莫多 哈斯 额尔德尼 鄂齐尔 玛哈 穆麟 图门 阿剌知院 孛来 马可古儿 摩伦 阿勒坦 格勒博罗 赛因 孟克 珊丹 呼和 伊拉 阿木古郎 敖特根 纳日松 苏日格 科尔沁 哈勒图 巴音 傲拉 希拉 卓索 乌恩 吉雅 乌日根 图雅 洪郭尔 岱钦 特古斯 呼日查 乌日图'''.split()
+NOMAD_TOWNS = '''锡林 呼伦 海拉尔 库伦 哈拉和林 克鲁伦 鄂尔多斯 阿拉善 乌拉特 阿巴嘎 巴尔虎 察哈尔 苏尼特 扎鲁特 翁牛特 敖汉 喀喇沁 土默特 杜尔伯特 伊克昭 巴彦诺尔 科布多 乌里雅苏台 额济纳 呼图壁 阿尔泰 扎兰屯 伊敏 达尔罕 阿尔山 索伦 满洲里 呼和浩特 包克图 乌兰察布 巴彦淖尔 霍林郭勒 锡尼 布尔罕 额尔古纳 乌珠穆沁 伊勒都 巴彦塔拉 哈拉哈 纳林 卓资 沙尔沁 敖鲁古雅 莫尔道嘎 阿鲁科尔沁 巴彦浩特 乌海 希拉穆仁'''.split()
+
+def nomad_vocabulary():
+    preferred = [name for name in dict.fromkeys(NOMAD_PREFERRED) if 2 <= len(name) <= 4]
+    assert len(preferred) >= 128
+    towns = [name for name in dict.fromkeys(NOMAD_TOWNS) if name not in preferred]
+    used = set(preferred + towns)
+    prefixes = '阿 额 乌 布 巴 托 拖 哈 合 察 扎 忽 莫 蒙 库 达 苏 索 博 哲 泰 图 满 克 郭 鄂 伊 奇 纳 呼 勒 穆 赛 伯 塔 尼 斡 孛 兀 海 里 雅 敖'.split()
+    suffixes = '古 鲁 力 雷 台 敦 罕 尔 拉 图 伦 兰 海 温 木 真 仁 钦 格 思 日 穆 纳 勒 和 察 苏 索 莫 胡 术 速 脱 特 颜 沁 诺 博 秃 哥 烈 班 赤 兀 孛 达 戈 合 斡 拙'.split()
+    generated = []
+    for prefix in prefixes:
+        for suffix in suffixes:
+            name = prefix + suffix
+            if prefix != suffix and name not in used:
+                generated.append(name); used.add(name)
+    extension = generated[:1024-len(preferred)]
+    towns += generated[len(extension):len(extension)+1024-len(towns)]
+    assert len(preferred)+len(extension)==1024 and len(towns)==1024
+    assert len(set(preferred+extension+towns))==2048
+    return {'preferred':preferred,'extension':extension,'towns':towns}
+
 def build():
     preferred = {kind: [] for kind in SEEDS}
     used = set()
@@ -44,7 +66,7 @@ def build():
     all_roots = ''.join(p['preferred']+p['extension'] for p in pools.values())
     assert len(all_roots) == len(set(all_roots)) == 7168
     output = Path(__file__).with_name('regional_names.json')
-    output.write_text(json.dumps({'version':'regional-names-v1','pools':pools},ensure_ascii=False,indent=2)+'\n',encoding='utf8')
+    output.write_text(json.dumps({'version':'regional-names-v2','pools':pools,'nomad_names':nomad_vocabulary()},ensure_ascii=False,indent=2)+'\n',encoding='utf8')
     print({k:len(v) for k,v in preferred.items()})
 
 if __name__ == '__main__': build()

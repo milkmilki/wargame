@@ -277,7 +277,7 @@ static func assign_initial_names(game_state, world_seed: int) -> void:
 		if city.is_traffic: continue
 		var current_short := str(city.short_name).strip_edges()
 		if (
-			_is_single_character(current_short)
+			_valid_city_short(game_state,int(city.id),current_short)
 			and _reserve(short_registry, current_short, int(city.id))
 		):
 			if city.short_name != current_short:
@@ -632,7 +632,7 @@ static func _ensure_city_short_name(game_state, city_id: int) -> void:
 	_backfill_city_short_registry(game_state, short_registry, city_id)
 	var current_short := str(city.short_name).strip_edges()
 	if (
-		_is_single_character(current_short)
+		_valid_city_short(game_state,city_id,current_short)
 		and _reserve(short_registry, current_short, city_id)
 	):
 		if city.short_name != current_short:
@@ -671,8 +671,8 @@ static func nation_display_name(
 		return short_name
 	if str(nation.name_kind) not in [KIND_VASSAL,KIND_REBEL] and not formal_name.is_empty():
 		# Version-9 templates may carry an explicit multi-character formal name.
-		# Preserve authored legacy names; automatic roots are always single Han.
-		if formal_name.length()!=1: return formal_name
+		# Preserve authored legacy names; generated nomads retain full word roots.
+		if formal_name.length()!=1 and not (nation.environment_kind=="nomad" and RegionalNames.nomad_name(formal_name)): return formal_name
 		if nation.environment_kind == "nomad": return formal_name+("汗" if nation.state_level>=1 else "部")
 		return formal_name+("国" if nation.state_level<1 else "")
 	if not formal_name.is_empty():
@@ -758,7 +758,7 @@ static func city_short_name(game_state, city_id: int) -> String:
 		return ""
 	var city = game_state.cities[city_id]
 	var assigned := str(city.short_name).strip_edges()
-	if _is_single_character(assigned):
+	if _valid_city_short(game_state,city_id,assigned):
 		return assigned
 	return ""
 
@@ -773,7 +773,7 @@ static func _founding_sovereign_identity(
 	var founding_id := ensure_founding_city_id(game_state, nation_id)
 	if founding_id >= 0:
 		var symbol := city_short_name(game_state, founding_id)
-		if _is_single_character(symbol):
+		if not symbol.is_empty():
 			return {
 				"base": symbol,
 				"name": symbol,
@@ -1361,7 +1361,7 @@ static func _backfill_city_short_registry(
 		if city.is_traffic or int(city.id) == excluded_id:
 			continue
 		var assigned := str(city.short_name).strip_edges()
-		if _is_single_character(assigned):
+		if _valid_city_short(game_state,int(city.id),assigned):
 			_reserve(registry, assigned, int(city.id))
 
 
@@ -1371,6 +1371,11 @@ static func _valid_nation_id(game_state, nation_id: int) -> bool:
 		and nation_id >= 0
 		and nation_id < game_state.nations.size()
 	)
+
+
+static func _valid_city_short(game_state,city_id: int,value: String) -> bool:
+	if _is_single_character(value): return true
+	return _valid_city_id(game_state,city_id) and value==str(game_state.cities[city_id].name) and RegionalNames.nomad_name(value) and NationEnvironment.profile(game_state,city_id).get("kind","")=="nomad"
 
 
 static func _valid_city_id(game_state, city_id: int) -> bool:

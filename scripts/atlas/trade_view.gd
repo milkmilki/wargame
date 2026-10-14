@@ -12,6 +12,8 @@ static func route_segments(state: GameState) -> Array[Dictionary]:
 	if state == null or not state.trade_enabled:
 		return result
 	var corridors := {}
+	var graph: Dictionary=state.atlas_trade_cache.get("graph",{})
+	if graph.is_empty(): graph=TradeNetwork._build_trade_graph(state)
 	for route in state.trade_routes:
 		var path: Array = route.get("city_path", [])
 		var blocked := int(route.get("status", TradeNetwork.RouteStatus.ACTIVE)) == TradeNetwork.RouteStatus.BLOCKED
@@ -24,7 +26,7 @@ static func route_segments(state: GameState) -> Array[Dictionary]:
 			var key := GameState.edge_key(a, b)
 			if seen.has(key):
 				continue
-			var edge := state.edge_of(a, b)
+			var edge: Edge = graph.edge_lookup.get(GameState.edge_key(a,b),null)
 			if edge == null:
 				continue
 			seen[key] = true

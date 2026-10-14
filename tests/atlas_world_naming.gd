@@ -25,7 +25,8 @@ func run():
 		check(not city.name.contains("·府"), "prefectures have their own names instead of numbered state placeholders")
 		if WorldNaming.HISTORIC_CITY_NAMES.has(city.name): historic += 1
 		if not state.is_zhou_city(city.id): continue
-		check(city.short_name.length() == 1 and not shorts.has(city.short_name), "state seats have unique single-character short names")
+		var nomad: bool = NationEnvironment.profile(state,city.id).get("kind","")=="nomad"
+		check((city.short_name==city.name if nomad else city.short_name.length()==1) and not shorts.has(city.short_name), "state seats have unique environment-specific short names")
 		shorts[city.short_name] = true
 		check(field(Information.city(state,city.id),"简称") == city.short_name, "state seat inspector exposes the persistent short name")
 	for city in state.cities:

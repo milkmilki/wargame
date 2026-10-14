@@ -16,7 +16,7 @@ static func prepare(base: Dictionary,target_nations: int = 40) -> Dictionary:
 	var h := Hierarchy.build(data.mesh,data.environment,data.regions,data.cities,int(data.seed),float(data.options.city_threshold))
 	var environment_started := Time.get_ticks_usec()
 	var nation_environment := NationEnvironment.prepare(data,h)
-	var capacity_error := RegionalNames.capacity_error(nation_environment.profiles)
+	var capacity_error := RegionalNames.capacity_error(nation_environment.profiles,h)
 	if not capacity_error.is_empty(): return {"error":capacity_error}
 	var environment_usec := Time.get_ticks_usec()-environment_started
 	# The upstream interpolated coastline can erase a small island altogether.
@@ -54,7 +54,8 @@ static func prepare(base: Dictionary,target_nations: int = 40) -> Dictionary:
 			pairs[mini(a,b)*h.cities.size()+maxi(a,b)] = Vector2i(mini(a,b),maxi(a,b))
 	var keys: Array = pairs.keys(); keys.sort()
 	for key in keys: territorial.append(pairs[key])
-	return {"model":MODEL,"nation_environment":nation_environment,"naming_sha256":RegionalNames.fingerprint(),"simulation_options":{"trade_enabled":true,"rulers_enabled":true},"data":data,"raster":raster,"display":base.display,"hierarchy":h,"network":roads,"graph":graph,
+	var shipping := preload("res://scripts/atlas/shipping.gd").build(data,h)
+	return {"model":MODEL,"shipping":shipping,"nation_environment":nation_environment,"naming_sha256":RegionalNames.fingerprint(),"simulation_options":{"trade_enabled":true,"rulers_enabled":true},"data":data,"raster":raster,"display":base.display,"hierarchy":h,"network":roads,"graph":graph,
 		"ownership":political.ownership,"nations":political.nations,"district_pixels":district_pixels,
 		"settlement_adjacency":strategic,"strategic_routes":strategic_routes,"territorial_pairs":territorial,"timing":{"environment_usec":environment_usec,"hierarchy_ms":hierarchy_ms,"roads_ms":roads_ms,"total_ms":Time.get_ticks_msec()-total_started,"smoothing":smoothing},"distance_km":250.0}
 
