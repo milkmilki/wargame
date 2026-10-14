@@ -13,6 +13,29 @@ unreleased rebellion identities can accept. A vassal initiator can receive a
 foreign polity as its own direct subject when its existing war eligibility allows
 it. A refusal proceeds through the existing declaration and prepared-army launch.
 
+Prepared armies keep their actual staging point and IDs through declaration.
+The runtime defers movement to the same game day's military phase, before the
+ordinary coalition allocation. Qualified troops start an `ATTACK` march then;
+there is no additional assembly interval after a normal prepared declaration.
+Regression checks assert `MOVING`, the active road leg, attack target and front
+binding after the complete AI phase, rather than accepting `BREAK_IN` alone.
+
+Atlas territorial contact does not prove that the road to the objective is
+usable. Preparation staging now checks the real segmented road graph, allowing
+only the terminal objective's jurisdiction as a prospective attack target. It
+does not write a WAR relation or consume randomness. Third-party jurisdiction
+and zero-capacity roads still block the route; generated trade shipping routes
+remain unavailable to armies. Results share the preparation evaluation cache,
+whose ownership, diplomacy, road and day revisions invalidate them.
+
+Seed 1, 40 countries and the Eurasia mask (55/20/-15/145) reproduced two
+declarations with no executable road in the first 180 days. With the staging
+check, all 11 observed declarations and 36 prepared units entered attack paths
+on the declaration day and retained those orders at the day boundary. A second
+run from the original game's day-3900 replay state to day 4200 observed five
+declarations and 31 prepared units with the same result. These observations
+cover the sampled launches; changed preparation rules can change later battles.
+
 ## Deterministic Score
 
 `UltimatumRules` owns the thresholds and formula. Military intimidation counts

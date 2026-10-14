@@ -5860,14 +5860,43 @@ static func war_preparation_staging_cities(
 	var members := _expansion_members(state, nation_id, evaluation_cache)
 	var candidates := staging_cities_for_objective(state, nation_id, objective_city, evaluation_cache)
 	for city_id in candidates:
-		if members.has(state.cities[city_id].owner_nation) and _prewar_source_reaches(state, nation_id, city_id, evaluation_cache):
+		if members.has(state.cities[city_id].owner_nation) and _prewar_source_reaches(state, nation_id, city_id, evaluation_cache) and _prewar_attack_route_ready(state, nation_id, city_id, objective_city, evaluation_cache):
 			result.append(city_id)
 	if result.is_empty() and allow_expedition:
 		for city_id in _dock_expedition_staging_cities(state, nation_id, objective_city, evaluation_cache, ObjectiveContext.PREWAR):
-			if _prewar_source_reaches(state, nation_id, city_id, evaluation_cache):
+			if _prewar_source_reaches(state, nation_id, city_id, evaluation_cache) and _prewar_attack_route_ready(state, nation_id, city_id, objective_city, evaluation_cache):
 				result.append(city_id)
 	evaluation_cache[key] = result
 	return result
+
+
+static func _prewar_attack_route_ready(state: GameState, nation_id: int, staging_city: int, objective_city: int, cache: Dictionary) -> bool:
+	# Atlas borders are territorial contacts, not proof of a traversable road.
+	# Match the campaign's actual attack path before freezing or accepting a
+	# staging point, including third-party control of segmented road junctions.
+	if state.atlas_layout.is_empty(): return true
+	var key := "prewar_attack_route:%d:%d:%d" % [nation_id, staging_city, objective_city]
+	if not cache.has(key):
+		# The ordinary attack field requires an existing WAR relation. Preview
+		# only the terminal objective's jurisdiction as hostile, without writing
+		# diplomacy, consuming RNG, or permitting any other foreign settlement.
+		var visited := {staging_city: true}
+		var queue: Array[int] = [staging_city]
+		var cursor := 0
+		var reached := false
+		while cursor < queue.size():
+			var city_id := queue[cursor]; cursor += 1
+			if city_id == objective_city:
+				reached = true
+				break
+			for neighbor in state.neighbors(city_id):
+				if visited.has(neighbor): continue
+				var edge := state.edge_of(city_id, neighbor)
+				if edge == null or edge.max_manpower <= 0: continue
+				if edge.control_city_id != objective_city and not state.atlas_edge_access(edge, nation_id, -1, false, staging_city): continue
+				visited[neighbor] = true; queue.append(neighbor)
+		cache[key] = reached
+	return bool(cache[key])
 
 
 static func required_assault_troops(

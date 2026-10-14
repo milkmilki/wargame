@@ -20,6 +20,15 @@ func _init():
 	var sim:Simulation=LegacySimulation.new() if OS.get_cmdline_user_args().has("--baseline-repro") else Simulation.new();sim.state=state
 	check(DiplomacyAI.war_staging_cities_for_objective(state,0,1).has(0),"coarse territorial border presents the friendly staging point")
 	check(sim._campaign_staging_cities(0,1).is_empty(),"actual road through neutral jurisdiction cannot be a campaign entrance")
+	var prewar_cache := {}
+	check(DiplomacyAI.war_preparation_staging_cities(state,0,1,prewar_cache).is_empty(),"prewar qualification must reject the same unusable attack road before declaring")
 	state.edges[1].control_city_id=1;state.road_network_revision+=1
 	check(sim._campaign_staging_cities(0,1).has(0),"legal target-jurisdiction road allows the same entrance after invalidation")
+	check(DiplomacyAI.war_preparation_staging_cities(state,0,1,prewar_cache).has(0),"road recovery invalidates cached prewar attack access")
+	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.NEUTRAL)
+	var before_rng := state.rng.state
+	check(DiplomacyAI.war_preparation_staging_cities(state,0,1,prewar_cache).has(0),"neutral preparation previews the terminal hostile jurisdiction without requiring an existing war")
+	check(state.relation_between(0,1)==GameState.DiplomaticRelation.NEUTRAL and state.rng.state==before_rng,"route preview leaves diplomacy and random stream unchanged")
+	state.edges[1].max_manpower=0;state.road_network_revision+=1
+	check(DiplomacyAI.war_preparation_staging_cities(state,0,1,prewar_cache).is_empty(),"projected hostility cannot bypass a physically closed road")
 	sim.free();print("CAMPAIGN_STAGING_LEGALITY failures=",failures);quit(0 if failures==0 else 1)

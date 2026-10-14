@@ -272,7 +272,15 @@ func _init() -> void:
 	nation.treasury_gold = old_gold
 	for city in state.cities:
 		city.gold_per_month = old_incomes[city.id]
-	var declared := sim._execute_diplomatic_action({
+	# Runtime finishes the previous military command batch before diplomacy.
+	# Direct fixture calls to preparation must model that commit boundary too.
+	sim._commit_ai_command_collection([0, 1, 2, 3] as Array[int])
+	var declaration_day := state.day
+	var launch_snapshot := preload("res://tests/support/native_runtime_fixture.gd").new().pack(state)
+	# The synthetic generator adds no runtime fields; restore its state through
+	# the production GameState script supported by the object-graph decoder.
+	launch_snapshot.objects[0].script = "res://scripts/state/game_state.gd"
+	var declaration := {
 		"kind": DiplomacyAI.Action.DECLARE_WAR,
 		"a": 0,
 		"b": 1,
@@ -281,7 +289,8 @@ func _init() -> void:
 		"objective_reason": "宣战移交门禁",
 		"mobilization_armies": 0,
 		"reason": "集结完成后宣战",
-	})
+	}
+	var declared := sim._execute_diplomatic_action(declaration)
 	var plan := state.campaign_front_for(0, center_id)
 	var war_id := state.war_id_between(0, 1)
 	_check(declared and war_id >= 0 and plan != null, "集结完成后必须成功创建正式战争与州计划")
@@ -309,12 +318,39 @@ func _init() -> void:
 			and plan.army_assignments.has(army_id),
 			"到场备战军必须原地转入正式战争池且不经过三军重分配"
 		)
+		_check(
+			prepared_army.state == Army.State.MOVING
+			and prepared_army.ai_action == ActionCandidate.Kind.ATTACK
+			and prepared_army.ai_target_city == entry_id
+			and prepared_army.on_edge,
+			"宣战必须实际开拔，不能只把阶段标成破口或重新集结"
+		)
+	_check(state.day == declaration_day, "直接宣战交接不推进游戏日期即可开拔")
 	_check(
 		nation.war_preparation_army_ids.is_empty()
 		and nation.war_preparation_target_nation == -1,
 		"宣战移交后必须清空备战状态"
 	)
 	sim.free()
+	var runtime_state: GameState = preload("res://tests/support/native_runtime_fixture.gd").new().unpack(launch_snapshot)
+	var runtime_sim := Simulation.new(); runtime_sim.setup(runtime_state); runtime_sim.paused = true
+	runtime_sim._defer_declaration_launches = true
+	_check(runtime_sim._execute_diplomatic_action(declaration), "运行期外交提交正式宣战")
+	_check(runtime_sim._pending_declaration_launches.has(0), "运行期宣战交由同日军事阶段发动")
+	runtime_sim._defer_declaration_launches = false
+	await runtime_sim._ai_assign_targets(false)
+	var runtime_front := runtime_state.campaign_front_for(0, center_id)
+	_check(runtime_state.day == declaration_day, "运行期完整AI阶段不等待下一日或下一轮决策")
+	for army_id in prepared_ids:
+		var troop: Army = runtime_state.armies.filter(func(a): return a.id == army_id)[0]
+		_check(
+			troop.state == Army.State.MOVING and troop.on_edge
+			and troop.ai_action == ActionCandidate.Kind.ATTACK and troop.ai_target_city == entry_id
+			and runtime_front != null and troop.campaign_front_id == runtime_front.front_id,
+			"同日联盟规划保留全部备战军的进攻命令，不抽回集结或另派守备"
+		)
+	_check(runtime_sim.ai_last_command_commit_failures == 0 and runtime_sim._pending_declaration_launches.is_empty(), "宣战同日完成进攻交接与命令提交")
+	runtime_sim.free()
 	_test_preparation_uses_remaining_unplanned_army()
 	_finish()
 
