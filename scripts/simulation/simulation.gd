@@ -10925,6 +10925,11 @@ func _manage_administrative_campaign(
 		var force:=SimpleCampaign.ready_force(self,plan,center_city_id,plan.camp_city_id,ActionCandidate.Kind.ATTACK)
 		var need:=state.campaign_minimum_launch_requirement(nation_id,center_city_id)
 		if int(force.manpower)>=need and not force.armies.is_empty():return _launch_campaign_center_assault(plan,force)
+		# 大营可能是州内孤立属府，到州治的路仍被敌府挡住。已回营兵力
+		# 达到出击门槛时继续攻可达属府打通道路，不能把路线缺口当作缺兵。
+		var rallied:=SimpleCampaign.ready_force(self,plan,plan.camp_city_id,plan.camp_city_id,ActionCandidate.Kind.ATTACK)
+		if int(rallied.manpower)>=need and not rallied.armies.is_empty():
+			return _manage_campaign_fu_raids(nation_id,plan,attacker_bloc,alive_by_id,false)
 		return _order_campaign_force(nation_id,plan,alive_by_id,plan.camp_city_id,ActionCandidate.Kind.REINFORCE)
 	var entry_city := plan.entry_city_id
 	if (
