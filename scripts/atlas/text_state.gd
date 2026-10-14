@@ -13,6 +13,7 @@ var origin := Vector2.ZERO
 var zoom := 1.0
 var canvas_size := Vector2(2048,1024)
 var show_names := true
+var show_geography := false
 var show_city_names := false
 var static_geography := false
 var show_cities := true
@@ -123,7 +124,7 @@ func prepare() -> void:
 		for mark in city_marks:
 			if mark.kind==4: mark.job = active_job; marks.append(mark); add_box(mark.box,mark.index)
 	var jobs: Array = []
-	if show_names:
+	if show_names and show_geography:
 		for p in data.get("places",[]):
 			if not static_geography and zoom<[1.,1.8,3.][clampi(p.rank-1,0,2)]: continue
 			var kind: String = "ocean" if p.kind=="sea" and p.name.ends_with("洋") else "bay" if p.kind=="sea" and p.name.ends_with("湾") else p.kind
@@ -244,6 +245,7 @@ class Pool extends RefCounted:
 			state.data = snapshot.data; state.raster = snapshot.raster; state.labels = snapshot.labels; state.owners = snapshot.owners
 			state.show_names = snapshot.names; state.show_cities = snapshot.cities; state.show_polities = snapshot.polities
 			state.show_city_names = snapshot.get("city_names",false)
+			state.show_geography = snapshot.get("geography",false)
 			state.static_geography = snapshot.get("static_geography",false)
 			state.zoom = detail; state.origin = Vector2.ZERO; state.canvas_size = Vector2(2048,1024)*detail
 			state.prepare(); states[key] = state

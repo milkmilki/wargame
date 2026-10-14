@@ -10,7 +10,7 @@ func wait_ready(layer):
 func run():
 	var service := preload("res://scripts/atlas/render_scheduler.gd").new(); root.add_child(service)
 	var layer := preload("res://scripts/atlas/map_text.gd").new(); root.add_child(layer)
-	layer.high_performance=true; layer.static_world=true; layer.scheduler=service
+	layer.high_performance=true; layer.static_world=true; layer.scheduler=service; layer.show_geography=true
 	var water := PackedByteArray(); water.resize(2048*1024); water.fill(1)
 	layer.raster={"water":water}; layer.owners.resize(water.size()); layer.owners.fill(0)
 	layer.data={"cities":[{"region":0,"cell":0,"major":false,"name":"甲城"}],"ownership":[0],"nations":[{"seat":0,"color":[100,80,60]}],"mesh":{"x":[100.],"y":[100.]},"places":[{"kind":"sea","rank":1,"name":"海","size":100.,"path":[500.,200.,550.,200.]}]}

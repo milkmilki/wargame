@@ -57,6 +57,7 @@ var origin := Vector2.ZERO
 var zoom := 1.0
 var canvas_size := Vector2(2048,1024)
 var show_names := true
+var show_geography := false
 var show_city_names := false
 var show_cities := true
 var show_polities := true
@@ -163,7 +164,7 @@ func rebuild() -> void:
 		for mark in city_marks:
 			if mark.kind==4: marks.append(mark); add_box(mark.box,mark.index)
 	var jobs: Array = []
-	if show_names:
+	if show_names and show_geography:
 		for p in data.get("places",[]):
 			if zoom<[1.,1.8,3.][clampi(p.rank-1,0,2)]: continue
 			var kind: String = "ocean" if p.kind=="sea" and p.name.ends_with("洋") else "bay" if p.kind=="sea" and p.name.ends_with("湾") else p.kind
@@ -287,6 +288,7 @@ func invalidate_layout() -> void:
 	# Numerical worker snapshots contain no Node, Font, texture, or mutable game object.
 	snapshot = {"data":{"cities":data.cities.duplicate(true),"nations":data.nations.duplicate(true),"ownership":PackedInt32Array(data.ownership),"mesh":{"x":data.mesh.x,"y":data.mesh.y},"places":data.get("places",[]).duplicate(true)},"raster":{"water":raster.water},"owners":owners,"labels":labels.duplicate(true),"names":show_names,"cities":show_cities,"polities":show_polities}
 	snapshot.city_names = show_city_names
+	snapshot.geography = show_geography
 	if static_world:
 		prepare_static_labels()
 		# Only opt-in settlement names use the viewport-dependent layout.
@@ -320,7 +322,7 @@ func _process(_delta: float) -> void:
 	var detail: float = Scheduler.LODS[lod_index]; var target := lod_index; var version := layout_version
 	var worker_pool := pool; var input := snapshot
 	task_serial += 1; var serial := task_serial; request_serial = serial; busy = true
-	var key := "%d:%d:%d:%d:%d:%d"%[hash(content_key),target,int(show_names),int(show_cities),int(show_polities),int(show_city_names)]
+	var key := "%d:%d:%d:%d:%d:%d:%d"%[hash(content_key),target,int(show_names),int(show_cities),int(show_polities),int(show_city_names),int(show_geography)]
 	scheduler.submit("labels",func(): return worker_pool.calculate(key,input,rect,detail),func(result):
 		if request_serial==serial: busy = false
 		if target!=lod_index or version!=layout_version: return
@@ -341,7 +343,7 @@ func place_static_labels() -> void:
 	if not static_world: return
 	for node in [static_geography,static_countries]:
 		if is_instance_valid(node): node.scale=Vector2.ONE*draw_detail()/STATIC_DETAIL
-	if is_instance_valid(static_geography): static_geography.visible=show_names
+	if is_instance_valid(static_geography): static_geography.visible=show_names and show_geography
 	if is_instance_valid(static_countries): static_countries.visible=show_names and show_polities
 
 func prepare_static_labels() -> void:
@@ -363,19 +365,21 @@ func prepare_static_labels() -> void:
 	place_static_labels()
 	var geo_key := hash([data.get("places",[]),geography_version]) if geography_version>=0 else hash([data.get("places",[]),raster.water])
 	var country_key := hash([labels,data.nations,ownership_version]) if ownership_version>=0 else hash([labels,data.nations,owners])
-	if geo_key==static_geo_key and country_key==static_country_key: return
+	var rebuild_geo := show_names and show_geography and geo_key!=static_geo_key
+	if not rebuild_geo and country_key==static_country_key: return
 	scheduler.invalidate("labels-static"); static_busy=true
 	var full := Rect2(0,0,2048,1024)
-	var geo_input := {"data":{"cities":[],"nations":[],"ownership":[],"mesh":snapshot.data.mesh,"places":snapshot.data.places},"raster":snapshot.raster,"owners":PackedInt32Array(),"labels":[],"names":true,"cities":false,"polities":false,"static_geography":true}
+	var geo_input := {"data":{"cities":[],"nations":[],"ownership":[],"mesh":snapshot.data.mesh,"places":snapshot.data.places},"raster":snapshot.raster,"owners":PackedInt32Array(),"labels":[],"names":true,"geography":true,"cities":false,"polities":false,"static_geography":true}
 	var country_input := {"data":{"cities":[],"nations":snapshot.data.nations,"ownership":snapshot.data.ownership,"mesh":snapshot.data.mesh,"places":[]},"raster":snapshot.raster,"owners":snapshot.owners,"labels":snapshot.labels,"names":true,"cities":false,"polities":true}
-	var cached_rows := static_geo_rows; var rebuild_geo := geo_key!=static_geo_key
+	var cached_rows := static_geo_rows
 	scheduler.submit("labels-static",func():
 		var numerical := State.Pool.new()
 		var geo_rows: Array=numerical.calculate("geo",geo_input,full,STATIC_DETAIL).rows if rebuild_geo else cached_rows
 		var countries: Dictionary=numerical.calculate("countries",country_input,full,STATIC_DETAIL)
 		return {"geo":geo_rows,"countries":countries.rows},func(result):
-		static_busy=false; static_geo_key=geo_key; static_country_key=country_key; static_build_count+=1
+		static_busy=false; static_country_key=country_key; static_build_count+=1
 		if rebuild_geo:
+			static_geo_key=geo_key
 			static_geo_rows=result.geo; static_geography.rows=result.geo; static_geography.queue_redraw()
 		static_countries.rows=result.countries; static_countries.queue_redraw()
 		var bytes := 0
@@ -387,7 +391,7 @@ func warm_neighbors() -> void:
 	var worker_pool := pool; var input := snapshot; var rect := requested_rect.grow(96./Scheduler.LODS[lod_index])
 	for neighbor in [lod_index-1,lod_index+1]:
 		if neighbor<0 or neighbor>=Scheduler.LODS.size(): continue
-		var key := "%d:%d:%d:%d:%d:%d"%[hash(content_key),neighbor,int(show_names),int(show_cities),int(show_polities),int(show_city_names)]
+		var key := "%d:%d:%d:%d:%d:%d:%d"%[hash(content_key),neighbor,int(show_names),int(show_cities),int(show_polities),int(show_city_names),int(show_geography)]
 		var stamp := "%s:%d:%d"%[key,floori(rect.position.x/128),floori(rect.position.y/128)]
 		if warmed.has(stamp): continue
 		warmed[stamp] = true; var detail: float = Scheduler.LODS[neighbor]

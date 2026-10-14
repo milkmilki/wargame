@@ -221,6 +221,8 @@ func make_ui() -> void:
 				for copy in copies: copy.ink.set(property,value); copy.ink.queue_redraw())
 	var words := CheckButton.new(); words.text = "文字"; words.button_pressed = true; layers.add_child(words)
 	words.toggled.connect(func(value): text_layer.show_names = value; text_layer.rebuild())
+	var geography := CheckButton.new(); geography.text="地理名称"; geography.button_pressed=text_layer.show_geography; layers.add_child(geography)
+	geography.toggled.connect(func(value): text_layer.show_geography=value; text_layer.rebuild())
 	var city_words := CheckButton.new(); city_words.text = "城市名称"; city_words.button_pressed = text_layer.show_city_names; layers.add_child(city_words)
 	city_words.toggled.connect(func(value): text_layer.show_city_names = value; text_layer.rebuild())
 	button(layers,"全图",fit_map); button(layers,"保存快照",save_snapshot); button(layers,"加载快照",load_snapshot)

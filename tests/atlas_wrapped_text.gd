@@ -4,7 +4,7 @@ var failures := 0
 func check(ok: bool,message: String):
 	if not ok: failures += 1; printerr("ATLAS_WRAPPED_TEXT_FAIL ",message)
 func _initialize():
-	var state := preload("res://scripts/atlas/text_state.gd").new()
+	var state := preload("res://scripts/atlas/text_state.gd").new(); state.show_geography=true
 	state.canvas_size = Vector2(2048,1024); state.owners.resize(2048*1024)
 	var water := PackedByteArray(); water.resize(2048*1024); water.fill(1)
 	state.raster = {"water":water}; state.show_cities = false; state.show_polities = false
