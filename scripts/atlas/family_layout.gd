@@ -1,8 +1,18 @@
 extends RefCounted
 ## Adapted from civ-atlas 103afd3 lineageInfo.ts (AGPL-3.0-only).
 ## Iterative contour compaction; parent aligns to latest reigning descendant.
-const STEP := Vector2(172,122)
-const BOX := Vector2(144,78)
+const STEP := Vector2(140,224)
+const BOX := Vector2(112,164)
+const GENERATION_GAP := 56.0
+
+static func step_height(step: Dictionary) -> float:
+	return maxf(str(step.get("title","")).length()*18.0,str(step.get("label","")).length()*13.0)+28.0
+
+static func node_size(member: Dictionary) -> Vector2:
+	var height := 42.0
+	for step in member.get("title_steps",[]): height += step_height(step)
+	var name_height := str(member.get("tree_name",member.get("name","？"))).length()*24.0+104.0
+	return Vector2(BOX.x,maxf(BOX.y,maxf(height,name_height)))
 static func build(model: Dictionary) -> Dictionary:
 	var members: Dictionary = model.members
 	var ids: Array = members.keys(); ids.sort()
@@ -41,7 +51,19 @@ static func build(model: Dictionary) -> Dictionary:
 		for d in range(left.size()): lc.append(left[d]-mid); rc.append(right[d]-mid)
 		contours[id]={"left":lc,"right":rc}; last[id]=best
 		for i in range(children.size()): offsets[children[i]]=shifts[i]-mid
-	var positions := {}; var bounds := Rect2(); var initial := true; var cursor := 0.; var distant := {}
+	# The tallest trajectory in each generation determines the next row's top.
+	var depths := {}; var heights: Array[float] = []
+	stack = roots.duplicate()
+	while not stack.is_empty():
+		var id: int = stack.pop_back()
+		var depth: int = int(depths.get(parents[id],-1))+1
+		depths[id] = depth
+		if heights.size() <= depth: heights.append(0.0)
+		heights[depth] = maxf(heights[depth],node_size(members[id]).y)
+		stack.append_array(kids[id])
+	var row_tops: Array[float] = [0.0]
+	for height in heights: row_tops.append(row_tops.back()+height+GENERATION_GAP)
+	var positions := {}; var rects := {}; var bounds := Rect2(); var initial := true; var cursor := 0.; var distant := {}
 	roots.sort_custom(func(a,b): return a==model.root if a==model.root or b==model.root else a<b)
 	for root in roots:
 		var contour: Dictionary=contours[root]; var min_x := 0.; var max_x := 0.
@@ -50,10 +72,10 @@ static func build(model: Dictionary) -> Dictionary:
 		stack=[[root,cursor-min_x,0]]
 		while not stack.is_empty():
 			var entry: Array=stack.pop_back(); var id: int=entry[0]
-			var point := Vector2(entry[1],entry[2])*STEP
+			var point := Vector2(float(entry[1])*STEP.x,row_tops[int(entry[2])])
 			positions[id]=point; distant[id]=root!=model.root
-			var rect := Rect2(point,BOX)
+			var rect := Rect2(point,node_size(members[id])); rects[id] = rect
 			bounds=rect if initial else bounds.merge(rect); initial=false
 			for child in kids[id]: stack.append([child,float(entry[1])+float(offsets[child]),int(entry[2])+1])
 		cursor+=max_x-min_x+2.
-	return {"positions":positions,"parents":parents,"children":kids,"bounds":bounds,"distant":distant}
+	return {"positions":positions,"rects":rects,"parents":parents,"children":kids,"bounds":bounds,"distant":distant}

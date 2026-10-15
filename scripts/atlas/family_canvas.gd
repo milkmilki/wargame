@@ -1,8 +1,14 @@
 extends Control
-## Native visible-only tree drawing, based on PeopleLineage.tsx / overview.css.
+## Vertical genealogy: right-hand names, ordered title columns, cinnabar emperors.
 signal selected(id: int)
 const Layout = preload("res://scripts/atlas/family_layout.gd")
-const Style = preload("res://scripts/atlas/information_theme.gd")
+const PAPER := Color("f4efdf")
+const INK := Color("302b24")
+const MUTED := Color("726959")
+const SEAL := Color("a23b30")
+const SELECTED := Color("996525")
+const NAME_X := 82.0
+var genealogy_font: Font = preload("res://assets/atlas/lxgw-wenkai-gb-500.ttf")
 var model := {}; var layout := {}; var focus_id := -1
 var scale_value := 1.; var offset := Vector2(40,40)
 var dragging := false; var dragged := false; var drag_origin := Vector2.ZERO
@@ -16,14 +22,19 @@ func update_model(value: Dictionary) -> void:
 		signature=next; layout=Layout.build(model); layout_count+=1; spatial.clear(); links.clear()
 		for id in layout.positions:
 			var point: Vector2=layout.positions[id]
-			var key:=Vector2i(floori(point.x/256.),floori(point.y/256.))
-			if not spatial.has(key): spatial[key]=[]
-			spatial[key].append(id)
+			var rect: Rect2=layout.rects[id]
+			# Index the entire tall history, including its bottom outside the name cell.
+			for y in range(floori(rect.position.y/256.),floori(rect.end.y/256.)+1):
+				for x in range(floori(rect.position.x/256.),floori(rect.end.x/256.)+1):
+					var key:=Vector2i(x,y)
+					if not spatial.has(key): spatial[key]=[]
+					spatial[key].append(id)
 			var parent: int=layout.parents[id]
 			if parent>=0:
-				var a: Vector2=layout.positions[parent]+Vector2(Layout.BOX.x*.5,Layout.BOX.y)
-				var b: Vector2=point+Vector2(Layout.BOX.x*.5,0)
-				var mid: float=(a.y+b.y)*.5
+				var a:=Vector2(layout.rects[parent].position.x+NAME_X,layout.rects[parent].end.y)
+				var b:=point+Vector2(NAME_X,0)
+				# All siblings meet on the same generation bar, even with short parents.
+				var mid: float=b.y-Layout.GENERATION_GAP*.5
 				links.append({"path":PackedVector2Array([a,Vector2(a.x,mid),Vector2(b.x,mid),b]),"bounds":Rect2(a,Vector2.ZERO).expand(b).grow(2)})
 	queue_redraw()
 func fit_all() -> void:
@@ -33,48 +44,95 @@ func fit_all() -> void:
 	offset=(size-bounds.size*scale_value)*.5-bounds.position*scale_value; queue_redraw()
 func locate(id: int) -> void:
 	if not layout.get("positions",{}).has(id): return
-	focus_id=id; scale_value=maxf(scale_value,.75); offset=size*.5-(layout.positions[id]+Layout.BOX*.5)*scale_value; queue_redraw(); selected.emit(id)
+	focus_id=id
+	var rect: Rect2=layout.rects[id]
+	scale_value=clampf(minf(1.,(size.y-48.)/rect.size.y),.32,1.)
+	offset=size*.5-rect.get_center()*scale_value; queue_redraw(); selected.emit(id)
 func visible_ids() -> Array:
-	var result: Array=[]
-	var rect := Rect2(-offset/scale_value,size/scale_value).grow(180)
+	var candidates := {}
+	var rect := Rect2(-offset/scale_value,size/scale_value).grow(4)
 	if (rect.size.x/256.+2)*(rect.size.y/256.+2)>spatial.size()*2:
 		for key in spatial:
-			if Rect2(Vector2(key)*256.,Vector2.ONE*256.).intersects(rect): result.append_array(spatial[key])
-		return result
-	for y in range(floori(rect.position.y/256.),floori(rect.end.y/256.)+1):
-		for x in range(floori(rect.position.x/256.),floori(rect.end.x/256.)+1): result.append_array(spatial.get(Vector2i(x,y),[]))
+			if Rect2(Vector2(key)*256.,Vector2.ONE*256.).intersects(rect):
+				for id in spatial[key]: candidates[id]=true
+	else:
+		for y in range(floori(rect.position.y/256.),floori(rect.end.y/256.)+1):
+			for x in range(floori(rect.position.x/256.),floori(rect.end.x/256.)+1):
+				for id in spatial.get(Vector2i(x,y),[]): candidates[id]=true
+	var result: Array=[]
+	for id in candidates:
+		if layout.rects[id].intersects(rect): result.append(id)
 	return result
 func _draw() -> void:
 	draw_count+=1
-	draw_rect(Rect2(Vector2.ZERO,size),Color("f8f8fa"))
+	draw_rect(Rect2(Vector2.ZERO,size),PAPER)
 	if model.is_empty(): return
-	var font := get_theme_default_font()
-	var ids := visible_ids()
+	draw_set_transform(offset,0,Vector2.ONE*scale_value)
 	# A connector can cross the viewport while both endpoint boxes are outside.
 	var visible_world:=Rect2(-offset/scale_value,size/scale_value)
 	for link in links:
 		if not link.bounds.intersects(visible_world): continue
-		var path:=PackedVector2Array()
-		for point in link.path: path.append(point*scale_value+offset)
-		draw_polyline(path,Color("b8b8c0"),1.2,true)
-	for id in ids:
-		var member: Dictionary=model.members[id]
-		var rect := Rect2(layout.positions[id]*scale_value+offset,Layout.BOX*scale_value)
-		var ink := Style.ACCENT if id==focus_id else Color("9d9da8")
-		draw_rect(rect,Color.WHITE if member.was_ruler else Color("f8f8fa"))
-		if member.was_ruler: draw_rect(rect,ink,false,1.5)
-		else:
-			var corners := [rect.position,Vector2(rect.end.x,rect.position.y),rect.end,Vector2(rect.position.x,rect.end.y)]
-			for i in range(4): draw_dashed_line(corners[i],corners[(i+1)%4],ink,1.,4.,true)
-		if scale_value<.32: continue
-		var font_size:=maxi(8,roundi(14*scale_value))
-		var name_text:=str(member.get("name","未记录"))
-		draw_string(font,rect.position+Vector2(9,25)*scale_value,name_text,HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-12,font_size,Style.INK)
-		draw_string(font,rect.position+Vector2(9,48)*scale_value,str(member.display_title),HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-12,maxi(8,roundi(11*scale_value)),Style.MUTED)
-		var marker := "当前" if id==model.current else ("太子" if member.get("crown",false) else ("已故" if not member.get("alive",true) else ("曾任君主" if member.was_ruler else ("远支" if layout.distant[id] else "宗室"))))
-		if member.get("taizu",false): marker+=" · 太祖"
-		elif member.was_emperor and id!=model.current: marker+=" · 曾为帝"
-		draw_string(font,rect.position+Vector2(9,67)*scale_value,marker,HORIZONTAL_ALIGNMENT_LEFT,rect.size.x-12,maxi(8,roundi(10*scale_value)),Style.ACCENT if id==model.current else Style.MUTED)
+		draw_polyline(link.path,Color("9b917e"),maxf(.8,.8/scale_value),true)
+	for id in visible_ids(): draw_person(id)
+	draw_set_transform(Vector2.ZERO)
+
+func vertical_text(text_value: String, point: Vector2, font_size: int, advance: float, color: Color) -> void:
+	for i in range(text_value.length()):
+		var glyph := text_value.substr(i,1)
+		var width := genealogy_font.get_string_size(glyph,HORIZONTAL_ALIGNMENT_LEFT,-1,font_size).x
+		draw_string(genealogy_font,point+Vector2(-width*.5,i*advance+font_size),glyph,HORIZONTAL_ALIGNMENT_LEFT,-1,font_size,color)
+
+func draw_person(id: int) -> void:
+	var member: Dictionary=model.members[id]
+	var rect: Rect2=layout.rects[id]
+	var point:=rect.position
+	var emperor:=bool(member.get("was_emperor",false))
+	if id==focus_id:
+		draw_rect(rect,Color("ece1c5"))
+		draw_rect(rect,SELECTED,false,maxf(1.,1./scale_value))
+	if scale_value<.32:
+		draw_rect(Rect2(point+Vector2(70,6),Vector2(24,40)),SEAL if emperor else INK)
+		return
+	var name_text:=str(member.get("tree_name",member.get("name","？")))
+	var name_box:=Rect2(point+Vector2(65,32),Vector2(35,name_text.length()*24+16))
+	if emperor:
+		draw_rect(name_box,SEAL,false,1.6)
+		draw_rect(name_box.grow(-4),SEAL,false,.8)
+		draw_rect(Rect2(point+Vector2(73,4),Vector2(22,22)),SEAL)
+		draw_string(genealogy_font,point+Vector2(76,21),"帝",HORIZONTAL_ALIGNMENT_LEFT,-1,16,PAPER)
+	elif member.get("was_ruler",false): draw_rect(name_box,Color("a39780"),false,.8)
+	vertical_text(name_text,point+Vector2(NAME_X,40),20,24,SEAL if emperor else INK)
+	var marker := person_marker(id,member)
+	if id==model.get("root",-1): marker="先祖"
+	draw_string(genealogy_font,point+Vector2(9,21),marker,HORIZONTAL_ALIGNMENT_LEFT,-1,12,SELECTED if id==model.get("current",-1) else MUTED)
+	if member.get("taizu",false): vertical_text("太祖",Vector2(point.x+NAME_X,name_box.end.y+10),12,15,SEAL)
+	var steps: Array=member.get("title_steps",[{"title":member.get("display_title","无爵"),"label":""}])
+	var top:=40.0
+	for index in range(steps.size()):
+		var step: Dictionary=steps[index]
+		var height:=Layout.step_height(step)-28.
+		var color:=INK if index==steps.size()-1 else MUTED
+		vertical_text(str(step.get("title","")),point+Vector2(40,top),16,18,color)
+		vertical_text(str(step.get("label","")),point+Vector2(17,top+2),11,13,color)
+		# Brackets distinguish the designation from the adjacent name column.
+		draw_polyline(PackedVector2Array([point+Vector2(32,top-3),point+Vector2(29,top-3),point+Vector2(29,top+height+2),point+Vector2(32,top+height+2)]),color,.8,true)
+		draw_polyline(PackedVector2Array([point+Vector2(48,top-3),point+Vector2(51,top-3),point+Vector2(51,top+height+2),point+Vector2(48,top+height+2)]),color,.8,true)
+		if index<steps.size()-1:
+			var a:=point+Vector2(40,top+height+7); var b:=a+Vector2(0,12)
+			draw_line(a,b,MUTED,1.,true)
+			draw_polyline(PackedVector2Array([b+Vector2(-3,-4),b,b+Vector2(3,-4)]),MUTED,1.,true)
+		top+=Layout.step_height(step)
+	if member.get("history_partial",false):
+		draw_string(genealogy_font,point+Vector2(8,rect.size.y-7),"履历未全",HORIZONTAL_ALIGNMENT_LEFT,-1,10,MUTED)
+
+func person_marker(id: int, member: Dictionary) -> String:
+	if id==model.get("current",-1): return "现任"
+	if member.get("active_ruler",false): return "在位"
+	if not member.get("alive",true): return "已故"
+	if member.get("crown",false): return "太子"
+	if member.get("was_ruler",false): return "前君"
+	return "远支" if layout.distant[id] else "宗室"
+
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index in [MOUSE_BUTTON_WHEEL_UP,MOUSE_BUTTON_WHEEL_DOWN] and event.pressed:
@@ -88,7 +146,7 @@ func _gui_input(event: InputEvent) -> void:
 				if not dragged and event.button_index==MOUSE_BUTTON_LEFT:
 					var point: Vector2=(event.position-offset)/scale_value
 					for id in visible_ids():
-						if Rect2(layout.positions[id],Layout.BOX).has_point(point): focus_id=id; selected.emit(id); queue_redraw(); break
+						if layout.rects[id].has_point(point): focus_id=id; selected.emit(id); queue_redraw(); break
 	elif event is InputEventMouseMotion and dragging:
 		if event.position.distance_to(drag_origin)>4: dragged=true
 		offset+=event.relative; queue_redraw()

@@ -24,6 +24,9 @@ func _init() -> void:
 	button(tools,"查找",search_next); button(tools,"全谱",canvas.fit_all)
 	button(tools,"当前",func(): canvas.locate(model.get("current",-1)))
 	button(tools,"人物",func(): inspector.visible=not inspector.visible; canvas.visible=not inspector.visible if compact else true)
+	var legend := Label.new(); legend.text="世代自上而下 · 名字竖排 · 爵号依箭头先后 · 朱色双框「帝」为历任皇帝"
+	legend.add_theme_color_override("font_color",Color("726959")); legend.add_theme_font_size_override("font_size",12)
+	legend.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART; body.add_child(legend)
 	body.add_child(selector); selector.item_selected.connect(func(index): open(selector.get_item_id(index)))
 	body.add_child(layout_row); layout_row.size_flags_vertical=Control.SIZE_EXPAND_FILL
 	layout_row.add_child(side); side.custom_minimum_size.x=160
@@ -55,7 +58,12 @@ func initial_focus(person_id: int) -> void:
 	await get_tree().process_frame
 	if not visible or model.is_empty(): return
 	canvas.fit_all(); canvas.focus_id=person_id if person_id>=0 else model.last_ruler
-	canvas.selected.emit(canvas.focus_id); canvas.queue_redraw()
+	if canvas.scale_value<.65 or person_id>=0: canvas.locate(canvas.focus_id)
+	else: canvas.selected.emit(canvas.focus_id)
+	# Opening the genealogy starts with the tree on compact windows; explicit
+	# person links still open that person's details directly.
+	if compact and person_id<0: inspector.hide(); canvas.show()
+	canvas.queue_redraw()
 func close() -> void:
 	hide(); model.clear(); revision.clear(); inspector.hide(); canvas.model.clear(); canvas.layout.clear(); canvas.spatial.clear(); canvas.links.clear(); canvas.signature=-1
 func _process(_delta: float) -> void:
@@ -71,7 +79,7 @@ func refresh_model() -> void:
 	var next:=Model.capture(source,nation_id)
 	if next.is_empty(): close(); return
 	revision=key; model=next; canvas.update_model(model)
-	title.text="%s · 家族树 · %s%s"%[model.name,Calendar.date(model.day)," · 历史只读" if host.historical_view else ""]
+	title.text="%s氏家谱 · %s · %s%s"%[model.surname,model.name,Calendar.date(model.day)," · 历史只读" if host.historical_view else ""]
 	selector.clear()
 	for child in side.get_children(): side.remove_child(child); child.queue_free()
 	for country in model.countries:

@@ -190,6 +190,8 @@ static func royal_validation_error(nations: Dictionary, trees: Dictionary) -> St
 				current = int(members[current].get("parent_id", -1))
 			ancestry_checked.merge(ancestry)
 		for member in members.values():
+			var identity_error := _identity_history_error(member, count)
+			if not identity_error.is_empty(): return identity_error
 			for flag in ["children_initialized", "synthetic_ancestor", "remote_branch"]:
 				if member.has(flag) and not member[flag] is bool: return "Invalid family lifecycle flag"
 			if bool(member.get("synthetic_ancestor", false)) and (bool(member.get("alive", true)) or int(member.get("office_nation_id", -1)) >= 0 or int(member.get("title_rank", 0)) > 0):
@@ -245,6 +247,26 @@ static func royal_validation_error(nations: Dictionary, trees: Dictionary) -> St
 			for child in member.get("child_ids", []):
 				if not members.has(int(child)) or int(members[int(child)].parent_id) != int(member.id):
 					return "Invalid family child reference"
+	return ""
+
+
+## Additive presentation ledger: old snapshots may omit it; new records are checked.
+static func _identity_history_error(member: Dictionary, nation_count: int) -> String:
+	var history = member.get("identity_history", [])
+	if not history is Array: return "Invalid identity history"
+	var previous_end := 0
+	for record in history:
+		if not record is Dictionary: return "Invalid identity history record"
+		var kind := str(record.get("kind",""))
+		var rank := int(record.get("rank",0))
+		var nation := int(record.get("nation_id",-1))
+		if kind not in ["noble","vassal","ruler","emperor"] or str(record.get("title","")).is_empty() or nation < 0 or nation >= nation_count:
+			return "Invalid identity history source"
+		if (kind == "noble" and rank not in [1,2,3]) or (kind != "noble" and rank != 0): return "Invalid identity history rank"
+		var start := int(record.get("start_day",-1)); var end := int(record.get("end_day",-1))
+		if start < 0 or previous_end < 0 or start < previous_end or (end >= 0 and (end < start or str(record.get("end_reason","")).is_empty())):
+			return "Invalid identity history lifetime"
+		previous_end = end
 	return ""
 
 

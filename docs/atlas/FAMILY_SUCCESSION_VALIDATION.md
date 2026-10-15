@@ -1,5 +1,17 @@
 # 家谱与虚拟夺嫡验收记录
 
+## 2026-10-15 竖排谱牒
+
+在 `55b5106` 基线上改用纸色文楷竖排、父子谱线、具体封号／身份变更箭头，以及历任皇帝朱色双框与“帝”印。新增身份履历是可选的只读展示档案；Native30、地图模板9、扩展API7保持不变。旧谱缺失的早期身份不推造。真实归附后当日命名只更新同一段职务，撤并清理不产生临时独立登基记录。
+
+最终代码22项独立回归通过：`project_compile`、`atlas_family_genealogy`、`atlas_family_interaction`、`atlas_family_model`、`atlas_family_person_types`、`atlas_family_close_input`、`atlas_family_runtime`、`royal_foreign_recall`、`royal_title_origin`、`royal_title_generations`、`royal_title_lifecycle`、`royal_birth_eligibility`、`enfeoff_shared_lineage`、`succession_lifecycle`、`succession_counterattack`、`chronicle_smoke`、`political_history_test`、`political_history_rulers`、`family_tree_smoke`、`empire_recognition`、`succession_chain`、`test_suite`。综合测试505断言通过，真实25代爵位测试164检查通过；正反向兼并沿用真实战争与领土清理入口。
+
+新增竖排专项68检查通过，验证真实“亲王→藩王→亲王”、相同封号重复记录、各阶段实际日期、旧快照不借未来、缺失履历提示、帝位死亡与继承标记、快照错误引用拒绝，以及12段长履历的代际间距、跨空间网格裁剪、点击和缓存失效。1280×720及900×600实机绘制通过，使用RX7600、OpenGL Compatibility，截图在本地忽略目录 `.dbg/genealogy/`，最终日志为 `.dbg/genealogy-final-visual.log`。
+
+合成5000人物／25代／200根支真实GPU检查通过：首次构建109.293ms，120次平移中布局次数保持1，定位并真实鼠标点击人物2400成功。平移帧P95 33.132ms、峰值34.317ms，运行中另有游戏窗口及headless检查，不作地图帧率或独立优化对照。记录在 `.dbg/family-stress-gpu.json`，该压力场景只验证谱图。
+
+以下保留此前内部夺嫡和家谱验收记录。
+
 实现基线为 `352b4e734b6de87d9a3b809b23bedba0e20b6b00`，分支 `feature/civ-atlas-godot`。Native快照28、Combat规则6；Godot 4.7.1 official a13da4feb，真实图形检查使用RX 7600 / D3D12 Forward+。所有长跑使用真实地球、40个初始国家、北纬20°～55°／西经15°～东经145°遮罩，贸易和君主开启。
 
 ## 本轮修复

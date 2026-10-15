@@ -8,6 +8,7 @@ static func capture(state: GameState, nation_id: int) -> Dictionary:
 	var tree := FamilyTree.tree_for_nation(state, nation_id)
 	if tree.is_empty(): return {}
 	var members: Dictionary = tree.members.duplicate(true)
+	var surname := FamilyTree.surname_for_tree(tree, nation.ruler_name)
 	var countries: Array = []
 	for n in state.nations:
 		if n.family_tree_id != nation.family_tree_id: continue
@@ -16,6 +17,7 @@ static func capture(state: GameState, nation_id: int) -> Dictionary:
 		# family profiles only in this source's detached presentation copy.
 		if n.alive and members.has(n.ruler_person_id):
 			var member: Dictionary=members[n.ruler_person_id]
+			member["active_ruler"] = true
 			member["archetype"]=n.ruler_archetype
 			member["traits"]=n.ruler_traits.duplicate()
 	var reigns := {}; var reign_ends := {}
@@ -33,10 +35,14 @@ static func capture(state: GameState, nation_id: int) -> Dictionary:
 		m["was_emperor"] = FamilyTree.was_emperor(m)
 		m["last_reign"] = int(reigns.get(id,-1))
 		m["reign_end"] = int(reign_ends.get(id,-1))
+		var full_name := str(m.get("name","未载名"))
+		m["tree_name"] = full_name.trim_prefix(surname) if full_name.begins_with(surname) and full_name.length() > surname.length() else full_name
+		m["history_partial"] = not m.has("identity_history") or bool(m.get("identity_history_partial",false))
+		m["title_steps"] = title_steps(m)
 	var events: Array = []
 	for e in state.chronicle_events:
 		if e.get("kind","") == "succession" and (members.has(e.get("person_ids",[-1])[0])): events.append(e.duplicate(true))
-	return {"source":state.get_instance_id(),"day":state.day,"tree_id":nation.family_tree_id,
+	return {"source":state.get_instance_id(),"day":state.day,"tree_id":nation.family_tree_id,"surname":surname,
 		"nation_id":nation_id,"name":WorldNaming.nation_display_name(state,nation_id),"current":nation.ruler_person_id if nation.alive else -1,"last_ruler":nation.ruler_person_id,
 		"heir":nation.crown_prince_person_id,"members":members,"countries":countries,"events":events,
 		"root":int(tree.get("root_person_id",-1))}
@@ -66,8 +72,29 @@ static func structural_key(model: Dictionary) -> int:
 	var ids: Array = model.members.keys(); ids.sort()
 	for id in ids:
 		var m: Dictionary=model.members[id]
-		shape.append([id,m.get("parent_id",-1),m.get("birth_order",0)])
-	return hash(shape)
+		var text_lengths: Array = []
+		for step in m.get("title_steps",[]): text_lengths.append([str(step.title).length(),str(step.label).length()])
+		shape.append([id,m.get("parent_id",-1),m.get("birth_order",0),m.get("last_reign",-1),str(m.get("tree_name",m.get("name",""))).length(),text_lengths])
+	return hash([model.get("root",-1),shape])
+
+static func identity_label(record: Dictionary) -> String:
+	if record.get("kind","") == "noble": return RoyalTitles.NAMES[clampi(int(record.get("rank",0)),0,3)]
+	return {"emperor":"皇帝","vassal":"藩王","ruler":"国君"}.get(str(record.get("kind","")),"")
+
+static func title_steps(member: Dictionary) -> Array:
+	var result: Array = []
+	for record in member.get("identity_history",[]):
+		var entry: Dictionary = record.duplicate(true)
+		entry["label"] = identity_label(record)
+		result.append(entry)
+	# Legacy titles[] is an unordered set; it cannot reconstruct repeated offices.
+	# Preserve the current/death designation without inventing earlier transitions.
+	var title := str(member.get("display_title","无爵"))
+	if result.is_empty() or (bool(member.get("alive",true)) and str(result.back().title) != title):
+		var rank := int(member.get("title_rank",0))
+		var label: String = RoyalTitles.NAMES[rank] if rank in [1,2,3] and bool(member.get("alive",true)) else ""
+		result.append({"title":title,"label":label, "start_day":-1,"end_day":-1})
+	return result
 
 static func person_document(model: Dictionary,id: int) -> Dictionary:
 	if model.is_empty() or not model.members.has(id): return {}
@@ -101,6 +128,10 @@ static func person_document(model: Dictionary,id: int) -> Dictionary:
 	for n in model.countries:
 		if n.ruler == id: rows.append(Info.row("现任国家" if n.alive else "曾任国家",n.name,"nation",n.id))
 	var title_rows: Array = []
+	for record in m.get("identity_history",[]):
+		var ending := "至今" if int(record.end_day) < 0 else Calendar.date(int(record.end_day))
+		title_rows.append(Info.row(identity_label(record)+" · "+str(record.title),Calendar.date(int(record.start_day))+" — "+ending))
+	if m.get("history_partial",false): title_rows.append(Info.row("履历完整度","早期身份变更未完整记录；不推测变更次序。"))
 	for line in m.title_lines: title_rows.append(Info.row("爵号履历",line))
 	if title_rows.is_empty(): title_rows.append(Info.row("爵号履历","未记录"))
 	var events: Array = []

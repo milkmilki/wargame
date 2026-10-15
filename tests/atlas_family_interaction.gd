@@ -36,6 +36,7 @@ func run():
 	panel.open(0); await settle()
 	check(not host.simulation.paused,"opening preserves running state")
 	check(panel.model.countries.size()==2 and panel.model.members.size()==members.size(),"shared family shown once across countries")
+	check(panel.model.members[second.ruler_person_id].active_ruler and panel.canvas.person_marker(second.ruler_person_id,panel.model.members[second.ruler_person_id])=="在位","another living same-family ruler is marked in office instead of former ruler")
 	var layouts := panel.canvas.layout_count
 	panel.open(1); await settle()
 	check(panel.model.current==second.ruler_person_id and panel.canvas.layout_count==layouts,"same family country switch changes highlight without layout")

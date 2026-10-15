@@ -92,7 +92,7 @@ static func _create_person(state: GameState, nation_id: int, parent_id: int, ord
 		"archetype": RulerProfile.archetype_for(state.world_seed, nation_id, salt),
 		"traits": RulerProfile.traits_for(state.world_seed, nation_id, salt),
 		"birth_order": order, "alive": true, "enfeoffed_nation_id": -1,
-		"title_payer_id": nation_id, "title_origin_nation_id": -1, "title_history": [],
+		"title_payer_id": nation_id, "title_origin_nation_id": -1, "title_history": [], "identity_history": [],
 		"title_managed": true, "title_adult": false,
 		"title_branch_id": int(members.get(parent_id, {}).get("title_branch_id", id))}
 	state.family_revision += 1

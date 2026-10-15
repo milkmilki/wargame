@@ -140,6 +140,11 @@ static func record_current_title(state: GameState, nation_id: int) -> void:
 	if title.is_empty():
 		return
 	var member: Dictionary = members[nation.ruler_person_id]
+	var kind := "vassal" if state.is_vassal(nation_id) else ("emperor" if nation.state_level == EmpireStatus.EMPIRE else "ruler")
+	# Annex cleanup can ensure the defeated lineage after removing its realm.
+	# That transient state is not a new sovereign reign.
+	if nation.alive and bool(member.get("alive",true)) and not nation.succession_identity:
+		record_identity(state, member, title, kind, nation_id)
 	RoyalTitles.set_member(state, member, "current_title", title)
 	RoyalTitles.set_member(state, member, "office_nation_id", nation_id)
 	RoyalTitles.set_member(state, member, "title_payer_id", nation_id)
@@ -150,6 +155,38 @@ static func record_current_title(state: GameState, nation_id: int) -> void:
 	var nation_ids: Array = member["nation_ids"]
 	if not nation_ids.has(nation_id):
 		nation_ids.append(nation_id)
+
+
+## Ordered, repeated identities are evidence of transitions; titles[] remains a set.
+## Optional on legacy people: do not manufacture their missing earlier offices.
+static func record_identity(state: GameState, member: Dictionary, title: String, kind: String, nation_id: int, rank: int = 0) -> void:
+	var history: Array = member.get("identity_history", [])
+	if not member.has("identity_history"):
+		member["identity_history_partial"] = true
+	if not history.is_empty():
+		var last: Dictionary = history.back()
+		if int(last.end_day) < 0 and last.kind == kind and int(last.nation_id) == nation_id and int(last.rank) == rank:
+			if last.title == title: return
+			# Submission commits the realm before finalizing its new designation.
+			# Within that day the same office gets its final name, not a second reign.
+			if int(last.start_day) == state.day:
+				last["title"] = title
+				state.family_revision += 1
+				return
+		end_identity(state, member, "changed")
+	history.append({"title": title, "kind": kind, "rank": rank, "nation_id": nation_id,
+		"start_day": state.day, "end_day": -1, "end_reason": ""})
+	member["identity_history"] = history
+	state.family_revision += 1
+
+static func end_identity(state: GameState, member: Dictionary, reason: String, only_kind: String = "") -> void:
+	var history: Array = member.get("identity_history", [])
+	if history.is_empty(): return
+	var last: Dictionary = history.back()
+	if int(last.end_day) >= 0 or (not only_kind.is_empty() and last.kind != only_kind): return
+	last["end_day"] = state.day
+	last["end_reason"] = reason
+	state.family_revision += 1
 
 
 static func tree_for_nation(state: GameState, nation_id: int) -> Dictionary:
@@ -255,6 +292,7 @@ static func display_title(member: Dictionary, person_id: int, root_person_id: in
 static func record_death_title(state: GameState, member: Dictionary) -> void:
 	if not member.has("death_title"):
 		RoyalTitles.set_member(state, member, "death_title", display_title(member, int(member.id), -1, state))
+	end_identity(state, member, "death")
 
 static func affiliation_label(state: GameState, member: Dictionary, selected_nation: int) -> String:
 	var owner := int(member.get("title_payer_id", -1))
@@ -290,6 +328,7 @@ static func _member(
 		"title_payer_id": nation_id,
 		"title_origin_nation_id": -1,
 		"title_history": [],
+		"identity_history": [],
 	}
 
 

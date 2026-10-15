@@ -266,10 +266,13 @@ func test_foreign_submission() -> void:
 	check(nation.family_tree_id == tree_id and nation.ruler_person_id == ruler_id and nation.prince_person_ids == princes, "submission/foreign_lineage_retained")
 	# Submission legitimately records a new royal title in the same person.
 	var submitted_ruler := PrincePolitics.person(state, 1, ruler_id).duplicate(true)
+	check(submitted_ruler.identity_history.size() == own_ruler.identity_history.size()+1 and submitted_ruler.identity_history.back().kind == "vassal", "submission/ordered_office_history_records_actual_submission: "+JSON.stringify(submitted_ruler.identity_history))
 	submitted_ruler.erase("titles")
 	submitted_ruler.erase("current_title")
+	submitted_ruler.erase("identity_history")
 	own_ruler.erase("titles")
 	own_ruler.erase("current_title")
+	own_ruler.erase("identity_history")
 	check(submitted_ruler == own_ruler, "submission/foreign_ruler_retained")
 	var subject := state.enfeoff(1, [6, 7] as Array[int])
 	check(subject >= 0, "submission/foreign_vassal_real_enfeoff")

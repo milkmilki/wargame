@@ -57,6 +57,7 @@ static func set_member(state: GameState, member: Dictionary, key: String, value:
 
 ## 关闭当前爵号档案，不改变人物的生死、政治资格或血缘。
 static func end_title(state: GameState, member: Dictionary, reason: String) -> void:
+	FamilyTree.end_identity(state, member, reason, "noble")
 	var history: Array = member.get("title_history", [])
 	if not history.is_empty() and int(history.back().get("end_day", -1)) < 0:
 		history.back()["end_day"] = state.day
@@ -68,6 +69,7 @@ static func end_title(state: GameState, member: Dictionary, reason: String) -> v
 	set_member(state, member, "current_title", NAMES[COMMON])
 
 static func _start_title(state: GameState, member: Dictionary, rank: int, origin: int, title: String) -> void:
+	FamilyTree.record_identity(state, member, title, "noble", origin, rank)
 	var history: Array = member.get("title_history", [])
 	history.append({"origin_nation_id": origin, "origin_nation_name": WorldNaming.nation_display_name(state, origin),
 		"title": title, "rank": rank, "start_day": state.day, "end_day": -1, "end_reason": ""})
@@ -126,6 +128,9 @@ static func reconcile(state: GameState) -> void:
 		var members: Dictionary = tree.members
 		for id in members.keys():
 			var member: Dictionary = members[id]
+			var office := int(member.get("office_nation_id",-1))
+			if office >= 0 and office < state.nations.size() and not state.nations[office].alive:
+				FamilyTree.end_identity(state, member, "institution_extinct")
 			# Territorial extinction need not run annex(): several conquerors can
 			# divide a country. Close its institution without moving its people.
 			var origin := int(member.get("title_origin_nation_id", -1))
@@ -385,6 +390,7 @@ static func annex(state: GameState, absorber: int, absorbed_ids: Dictionary) -> 
 				set_member(state,member,"archetype",former.ruler_archetype)
 				set_member(state,member,"traits",former.ruler_traits.duplicate())
 			if int(member.get("office_nation_id", -1)) == int(absorbed):
+				FamilyTree.end_identity(state, member, "annexation")
 				set_member(state, member, "title_adult", true)
 				set_member(state, member, "office_nation_id", -1)
 				set_member(state, member, "enfeoffed_nation_id", -1)
