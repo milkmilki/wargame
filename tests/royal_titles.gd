@@ -10,7 +10,7 @@ func _init() -> void:
 		quit(1)
 		return
 	var state := preload("res://tests/support/grid_world.gd").new()
-	state.generate_grid_world(73002)
+	state.generate_grid_world(73002, false)
 	var nation := state.nations[0]
 	service.reconcile(state)
 	check(service.report(state, 0).basis_points == 0, "country has no virtual stipend")

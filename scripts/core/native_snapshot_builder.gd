@@ -3,7 +3,7 @@ extends RefCounted
 ## 将脚本对象图一次性冻结为 NativeSimulationCore 的版本化 SoA 快照。
 ## 该桥只允许在日提交边界调用；native tick 接管后，展示层将改读反向只读快照。
 
-const SCHEMA_VERSION: int = 30
+const SCHEMA_VERSION: int = 31
 const ROYAL_NATION_FIELDS := ["state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]
 
 
@@ -208,9 +208,14 @@ static func royal_validation_error(nations: Dictionary, trees: Dictionary) -> St
 			var origin := int(member.get("title_origin_nation_id", -1))
 			if origin < -1 or origin >= count:
 				return "Invalid title origin"
-			if rank > 0 and (origin != payer or payer < 0 or not bool(nations.alive[payer]) or not bool(nations.royal_titles_initialized[payer])):
-				return "Virtual title origin and payer must agree in a living title institution"
-			if rank > RoyalTitles.COMMANDERY and int(nations.family_tree_ids[payer]) != int(tree_id):
+			var authority := int(nations.overlord[payer]) if payer >= 0 and int(nations.overlord[payer]) >= 0 else payer
+			var funding := int(member.get("title_funding_nation_id", authority))
+			var generation := int(member.get("title_generation_nation_id", payer))
+			if funding < -1 or funding >= count or generation < -1 or generation >= count:
+				return "Invalid royal funding or generation reference"
+			if rank > 0 and (origin not in [payer, authority] or funding != authority or generation != payer or payer < 0 or not bool(nations.alive[payer]) or not bool(nations.alive[origin]) or not bool(nations.royal_titles_initialized[origin])):
+				return "Title authority, funding and generation disagree with the living court"
+			if rank > RoyalTitles.COMMANDERY and int(nations.family_tree_ids[authority]) != int(tree_id):
 				return "Foreign household title cannot exceed commandery rank"
 			var title_history = member.get("title_history", [])
 			if not title_history is Array: return "Invalid title history"
@@ -232,18 +237,22 @@ static func royal_validation_error(nations: Dictionary, trees: Dictionary) -> St
 			if bool(member.get("title_managed", false)):
 				if payer < 0 or payer >= count:
 					return "Invalid royal payer reference"
+				if bool(member.get("alive", true)) and bool(nations.alive[payer]) and (generation != payer or funding != authority):
+					return "Family lifecycle domains differ from the actual court"
 				if not members.has(int(member.get("title_branch_id", -1))):
 					return "Invalid royal branch reference"
 			var fief := int(member.get("enfeoffed_nation_id", -1))
-			if fief >= count or (fief >= 0 and rank > 0 and bool(member.get("alive", true))):
-				return "Actual fief and virtual title cannot coexist"
+			if fief < -1 or fief >= count:
+				return "Invalid actual fief reference"
 			var office := int(member.get("office_nation_id", -1))
 			if office >= count or (office >= 0 and int(nations.family_tree_ids[office]) != int(tree_id)):
 				return "Invalid royal office reference"
 			if office >= 0 and bool(member.get("alive", true)) and bool(nations.alive[office]) and int(nations.ruler_person_ids[office]) != int(member.id):
 				return "Invalid incumbent person reference"
-			if office >= 0 and bool(member.get("alive", true)) and bool(nations.alive[office]) and rank > 0:
-				return "Incumbent cannot receive a virtual stipend"
+			if office >= 0 and bool(member.get("alive", true)) and bool(nations.alive[office]) and rank > 0 and (fief != office or payer != office or int(nations.overlord[office]) < 0):
+				return "Only an actual vassal office can coexist with peerage"
+			if fief >= 0 and bool(member.get("alive", true)) and bool(nations.alive[fief]) and (office != fief or int(nations.ruler_person_ids[fief]) != int(member.id)):
+				return "Fief holder differs from the actual incumbent"
 			for child in member.get("child_ids", []):
 				if not members.has(int(child)) or int(members[int(child)].parent_id) != int(member.id):
 					return "Invalid family child reference"
@@ -260,6 +269,8 @@ static func _identity_history_error(member: Dictionary, nation_count: int) -> St
 		var kind := str(record.get("kind",""))
 		var rank := int(record.get("rank",0))
 		var nation := int(record.get("nation_id",-1))
+		var fief := int(record.get("fief_nation_id", -1))
+		if fief < -1 or fief >= nation_count or (fief >= 0 and kind != "noble"): return "Invalid identity fief reference"
 		if kind not in ["noble","vassal","ruler","emperor"] or str(record.get("title","")).is_empty() or nation < 0 or nation >= nation_count:
 			return "Invalid identity history source"
 		if (kind == "noble" and rank not in [1,2,3]) or (kind != "noble" and rank != 0): return "Invalid identity history rank"

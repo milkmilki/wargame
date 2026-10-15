@@ -4805,7 +4805,7 @@ func finalize_annexation_after_territory_commit(
 		_finalize_annexations(absorber, {absorbed: true})
 
 
-func _finalize_annexations(absorber: int, absorbed_ids: Dictionary) -> void:
+func _finalize_annexations(absorber: int, absorbed_ids: Dictionary, preserved_people: Dictionary = {}) -> void:
 	var old_bindings := {}
 	for army in armies:
 		if absorbed_ids.has(army.owner_nation) and army.campaign_war_id >= 0:
@@ -4843,7 +4843,7 @@ func _finalize_annexations(absorber: int, absorbed_ids: Dictionary) -> void:
 			army.ruler_morale_multiplier = RulerProfile.morale_multiplier(nations[absorber])
 			army.funding_multiplier = Army.funding_from_payment(nations[absorber].military_payment_ratio)
 	_reconcile_battles_after_annexation()
-	RoyalTitles.annex(self, absorber, absorbed_ids)
+	RoyalTitles.annex(self, absorber, absorbed_ids, preserved_people)
 	EmpireStatus.reconcile(self)
 	VassalConflict.reconcile(self)
 
@@ -4854,17 +4854,20 @@ func annex_nation(
 	absorber: int,
 	absorbed: int,
 	expected_ownership_revision: int = -1,
-	stock_policy_overrides: Dictionary = {}
+	stock_policy_overrides: Dictionary = {},
+	preserved_people: Dictionary = {}
 ) -> bool:
-	return annex_nations(absorber, [absorbed], expected_ownership_revision, stock_policy_overrides)
+	return annex_nations(absorber, [absorbed], expected_ownership_revision, stock_policy_overrides, preserved_people)
 
 
-func annex_nations(absorber: int, absorbed_nations: Array, expected_ownership_revision: int = -1, stock_policy_overrides: Dictionary = {}) -> bool:
+func annex_nations(absorber: int, absorbed_nations: Array, expected_ownership_revision: int = -1, stock_policy_overrides: Dictionary = {}, preserved_people: Dictionary = {}) -> bool:
 	if absorber < 0 or absorber >= nations.size() or absorbed_nations.is_empty() or is_succession_identity(absorber):
 		return false
 	var absorbed_ids := {}
 	for nation_id in absorbed_nations:
 		if typeof(nation_id) != TYPE_INT or nation_id < 0 or nation_id >= nations.size() or nation_id == absorber or absorbed_ids.has(nation_id) or is_succession_identity(nation_id):
+			return false
+		if nations[nation_id].absorbed_into_nation_id >= 0:
 			return false
 		absorbed_ids[nation_id] = true
 	for city_id in stock_policy_overrides:
@@ -4899,7 +4902,7 @@ func annex_nations(absorber: int, absorbed_nations: Array, expected_ownership_re
 		return false
 	for nation_id in absorbed_ids:
 		FamilyTree.ensure_nation_lineage(self, nation_id)
-	_finalize_annexations(absorber, absorbed_ids)
+	_finalize_annexations(absorber, absorbed_ids, preserved_people)
 	return true
 
 
@@ -5021,7 +5024,7 @@ func revoke_vassal(subject_id: int) -> bool:
 			if int(member.get("title_payer_id",-1))==subject_id or int(member.id)==nations[subject_id].ruler_person_id:
 				returning_people[int(member.id)]=true
 	# 兼并原语会原子移除 subject 并把其直接藩王改投宗主。
-	if not annex_nation(overlord_id, subject_id):
+	if not annex_nation(overlord_id, subject_id, -1, {}, returning_people):
 		return false
 	RoyalTitles.recall_vassal(self,overlord_id,subject_id,returning_people)
 	prune_dead_suzerainty()

@@ -10,7 +10,9 @@ static func capture(state: GameState, nation_id: int) -> Dictionary:
 	var members: Dictionary = tree.members.duplicate(true)
 	var surname := FamilyTree.surname_for_tree(tree, nation.ruler_name)
 	var countries: Array = []
+	var court_names := {}
 	for n in state.nations:
+		court_names[n.id] = WorldNaming.nation_display_name(state,n.id)
 		if n.family_tree_id != nation.family_tree_id: continue
 		countries.append({"id":n.id,"name":WorldNaming.nation_display_name(state,n.id),"ruler":n.ruler_person_id,"alive":n.alive,"started":n.ruler_started_day})
 		# Nation is authoritative for an active ruler. Resolve missing/stale
@@ -44,7 +46,7 @@ static func capture(state: GameState, nation_id: int) -> Dictionary:
 		if e.get("kind","") == "succession" and (members.has(e.get("person_ids",[-1])[0])): events.append(e.duplicate(true))
 	return {"source":state.get_instance_id(),"day":state.day,"tree_id":nation.family_tree_id,"surname":surname,
 		"nation_id":nation_id,"name":WorldNaming.nation_display_name(state,nation_id),"current":nation.ruler_person_id if nation.alive else -1,"last_ruler":nation.ruler_person_id,
-		"heir":nation.crown_prince_person_id,"members":members,"countries":countries,"events":events,
+		"heir":nation.crown_prince_person_id,"members":members,"countries":countries,"court_names":court_names,"events":events,
 		"root":int(tree.get("root_person_id",-1))}
 
 ## Supply and noble rank can connect courts without merging any bloodlines.
@@ -77,15 +79,18 @@ static func structural_key(model: Dictionary) -> int:
 		shape.append([id,m.get("parent_id",-1),m.get("birth_order",0),m.get("last_reign",-1),str(m.get("tree_name",m.get("name",""))).length(),text_lengths])
 	return hash([model.get("root",-1),shape])
 
-static func identity_label(record: Dictionary) -> String:
-	if record.get("kind","") == "noble": return RoyalTitles.NAMES[clampi(int(record.get("rank",0)),0,3)]
+static func identity_label(record: Dictionary, previous_fief: int = -1) -> String:
+	if record.get("kind","") == "noble":
+		return RoyalTitles.NAMES[clampi(int(record.get("rank",0)),0,3)] + ("·实封" if int(record.get("fief_nation_id",-1)) >= 0 else ("·收回封地" if previous_fief >= 0 else "·无封"))
 	return {"emperor":"皇帝","vassal":"藩王","ruler":"国君"}.get(str(record.get("kind","")),"")
 
 static func title_steps(member: Dictionary) -> Array:
 	var result: Array = []
+	var previous_fief := -1
 	for record in member.get("identity_history",[]):
 		var entry: Dictionary = record.duplicate(true)
-		entry["label"] = identity_label(record)
+		entry["label"] = identity_label(record, previous_fief)
+		previous_fief = int(record.get("fief_nation_id", -1))
 		result.append(entry)
 	# Legacy titles[] is an unordered set; it cannot reconstruct repeated offices.
 	# Preserve the current/death designation without inventing earlier transitions.
@@ -118,6 +123,12 @@ static func person_document(model: Dictionary,id: int) -> Dictionary:
 	var fief:=int(m.get("enfeoffed_nation_id",-1))
 	for n in model.countries:
 		if n.id==fief: rows.append(Info.row("实封",n.name,"nation",fief))
+	for field in [["title_payer_id","所属朝廷"],["title_funding_nation_id","俸禄供养"],["title_generation_nation_id","换代归属"]]:
+		if field[0] == "title_funding_nation_id" and int(m.get("title_rank",0)) == 0:
+			rows.append(Info.row(field[1],"无爵位俸禄"))
+			continue
+		var court := int(m.get(field[0],-1))
+		if model.get("court_names",{}).has(court): rows.append(Info.row(field[1],model.court_names[court],"nation",court))
 	var parent := int(m.get("parent_id",-1))
 	rows.append(Info.row("父亲",model.members.get(parent,{}).get("name","未记录"),"person",parent if model.members.has(parent) else -1))
 	var children: Array = []
@@ -128,9 +139,11 @@ static func person_document(model: Dictionary,id: int) -> Dictionary:
 	for n in model.countries:
 		if n.ruler == id: rows.append(Info.row("现任国家" if n.alive else "曾任国家",n.name,"nation",n.id))
 	var title_rows: Array = []
+	var previous_fief := -1
 	for record in m.get("identity_history",[]):
 		var ending := "至今" if int(record.end_day) < 0 else Calendar.date(int(record.end_day))
-		title_rows.append(Info.row(identity_label(record)+" · "+str(record.title),Calendar.date(int(record.start_day))+" — "+ending))
+		title_rows.append(Info.row(identity_label(record, previous_fief)+" · "+str(record.title),Calendar.date(int(record.start_day))+" — "+ending))
+		previous_fief = int(record.get("fief_nation_id", -1))
 	if m.get("history_partial",false): title_rows.append(Info.row("履历完整度","早期身份变更未完整记录；不推测变更次序。"))
 	for line in m.title_lines: title_rows.append(Info.row("爵号履历",line))
 	if title_rows.is_empty(): title_rows.append(Info.row("爵号履历","未记录"))

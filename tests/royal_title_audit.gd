@@ -20,13 +20,16 @@ static func inspect(state: GameState) -> Array[String]:
 			if not bool(member.get("alive", true)) or bool(member.get("title_disabled", false)) or not state.nations[payer].alive: continue
 			var office := int(member.get("office_nation_id", -1))
 			var in_office: bool = office >= 0 and state.nations[office].alive
-			if int(member.get("enfeoffed_nation_id", -1)) >= 0 or in_office:
-				if rank > 0: errors.append("double title person=%d" % int(member.id))
-				continue
+			var issuer := state.overlord_of(payer) if state.is_vassal(payer) else payer
+			var funding := int(member.get("title_funding_nation_id", issuer))
+			if in_office and rank > 0 and (not state.is_vassal(office) or office != payer or int(member.get("enfeoffed_nation_id", -1)) != office):
+				errors.append("invalid landed peerage person=%d" % int(member.id))
 			if rank > 0:
-				if int(member.get("title_origin_nation_id", -1)) != payer or not state.nations[payer].royal_titles_initialized:
-					errors.append("foreign title person=%d" % int(member.id))
-				expected[payer][rank] += 1
+				var origin:=int(member.get("title_origin_nation_id", -1))
+				if origin < 0 or origin >= state.nations.size() or origin not in [payer,issuer] or funding != issuer or int(member.get("title_generation_nation_id", payer)) != payer or not state.nations[origin].royal_titles_initialized:
+					errors.append("invalid title domains person=%d" % int(member.id))
+				if rank == 3 and int(tree.id) != state.nations[issuer].family_tree_id: errors.append("foreign prince person=%d" % int(member.id))
+				if funding == payer or (not state.is_in_civil_war(payer) and state.war_id_between(payer,funding) < 0): expected[funding][rank] += 1
 			if not bool(member.get("title_adult", false)) and not RoyalTitles.children(tree.members, int(member.id)).is_empty():
 				errors.append("waiting family reproduced person=%d" % int(member.id))
 	for nation in state.nations:

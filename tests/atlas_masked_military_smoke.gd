@@ -1,5 +1,6 @@
 extends SceneTree
 const Mask = preload("res://scripts/atlas/settlement_mask.gd")
+const TitlesAudit = preload("res://tests/royal_title_audit.gd")
 var failures := 0
 func check(ok: bool,message: String) -> void:
 	if not ok: failures+=1; printerr("ATLAS_MASKED_SMOKE_FAIL ",message)
@@ -17,6 +18,12 @@ func run():
 		var started := Time.get_ticks_usec(); sim._advance_day(); timings.append((Time.get_ticks_usec()-started)/1000.)
 		check(state.territory_structure_valid(),"territory day %d"%state.day)
 		check(state._battle_group_structure_valid(),"battle groups day %d"%state.day)
+		check(TitlesAudit.inspect(state).is_empty(),"royal court, generation and stipend domains day %d"%state.day)
+		if state.day%30==0:
+			var snapshot:=NativeSnapshotBuilder.build(state)
+			var error:=NativeSnapshotBuilder.succession_validation_error(snapshot)
+			check(error.is_empty(),"monthly full snapshot day %d: %s"%[state.day,error])
+			if not error.is_empty(): FileAccess.open("res://.dbg/atlas-masked-invalid-snapshot.bin",FileAccess.WRITE).store_var(snapshot,false)
 		var occupancy := {}
 		for army in state.armies:
 			if army.size<=0: continue

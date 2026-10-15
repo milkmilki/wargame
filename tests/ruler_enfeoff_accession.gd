@@ -8,8 +8,8 @@ var failures: Array[String] = []
 var checks := 0
 
 class StaleAnnexState extends GridFixture:
-	func annex_nation(absorber: int, absorbed: int, expected_ownership_revision: int = -1, stock_policy_overrides: Dictionary = {}) -> bool:
-		return super.annex_nation(absorber, absorbed, expected_ownership_revision + 1, stock_policy_overrides)
+	func annex_nation(absorber: int, absorbed: int, expected_ownership_revision: int = -1, stock_policy_overrides: Dictionary = {}, preserved_people: Dictionary = {}) -> bool:
+		return super.annex_nation(absorber, absorbed, expected_ownership_revision + 1, stock_policy_overrides, preserved_people)
 
 func _init() -> void:
 	_test_landed_accession(false)

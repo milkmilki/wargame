@@ -92,7 +92,7 @@ static func _create_person(state: GameState, nation_id: int, parent_id: int, ord
 		"archetype": RulerProfile.archetype_for(state.world_seed, nation_id, salt),
 		"traits": RulerProfile.traits_for(state.world_seed, nation_id, salt),
 		"birth_order": order, "alive": true, "enfeoffed_nation_id": -1,
-		"title_payer_id": nation_id, "title_origin_nation_id": -1, "title_history": [], "identity_history": [],
+		"title_payer_id": nation_id, "title_funding_nation_id": RoyalTitles.authority(state, nation_id), "title_generation_nation_id": nation_id, "title_origin_nation_id": -1, "title_history": [], "identity_history": [],
 		"title_managed": true, "title_adult": false,
 		"title_branch_id": int(members.get(parent_id, {}).get("title_branch_id", id))}
 	state.family_revision += 1
@@ -250,6 +250,7 @@ static func accede(state: GameState, nation_id: int) -> bool:
 	var source := str(choice.source)
 	var old_id := nation.ruler_person_id
 	var was_fief := int(previous.get("enfeoffed_nation_id", -1)) == nation_id
+	var inherited_title := RoyalTitles.designation(state, previous, int(previous.get("title_rank", 0))) if was_fief else ""
 	var subject := int(choice.annex_nation_id)
 	# 兼并的领土事务先提交；中途不晋帝、授爵或生育。
 	state.set_meta("ruler_accession_in_progress", true)
@@ -268,6 +269,7 @@ static func accede(state: GameState, nation_id: int) -> bool:
 	centralize_ids.append(old_id)
 	centralize(state, nation_id, centralize_ids)
 	FamilyTree.record_death_title(state, previous)
+	RoyalTitles.end_title(state, previous, "death")
 	previous["alive"] = false
 	previous["office_nation_id"] = -1
 	set_heir(state, nation_id, -1)
@@ -290,6 +292,7 @@ static func accede(state: GameState, nation_id: int) -> bool:
 	nation.ruler_revision += 1
 	nation.ruler_started_day = state.day
 	nation.trade_policy = RulerProfile.trade_policy_for(nation)
+	if was_fief: RoyalTitles.ensure_landed_ruler(state, nation_id, inherited_title)
 	FamilyTree.record_current_title(state, nation_id)
 	RoyalTitles.advance_generation(state, nation_id, incoming, protected)
 	nation.prince_person_ids.clear()

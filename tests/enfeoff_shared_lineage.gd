@@ -119,7 +119,7 @@ func test_shared_princes(independent: bool = false) -> void:
 	var expected := vassal.prince_person_ids[1]
 	var protected_ids: Array[int] = []
 	for person_id in sovereign.prince_person_ids:
-		if PrincePolitics.eligible(PrincePolitics.person(state, 0, person_id)):
+		if PrincePolitics.eligible_for_nation(PrincePolitics.person(state, 0, person_id), 0):
 			protected_ids.append(person_id)
 	var protected_members := {}
 	for person_id in protected_ids:
@@ -266,14 +266,15 @@ func test_foreign_submission() -> void:
 	check(nation.family_tree_id == tree_id and nation.ruler_person_id == ruler_id and nation.prince_person_ids == princes, "submission/foreign_lineage_retained")
 	# Submission legitimately records a new royal title in the same person.
 	var submitted_ruler := PrincePolitics.person(state, 1, ruler_id).duplicate(true)
-	check(submitted_ruler.identity_history.size() == own_ruler.identity_history.size()+1 and submitted_ruler.identity_history.back().kind == "vassal", "submission/ordered_office_history_records_actual_submission: "+JSON.stringify(submitted_ruler.identity_history))
+	check(submitted_ruler.identity_history.size() == own_ruler.identity_history.size()+1 and submitted_ruler.identity_history.back().kind == "noble" and submitted_ruler.identity_history.back().fief_nation_id == 1, "submission/ordered_office_history_records_actual_submission: "+JSON.stringify(submitted_ruler.identity_history))
 	submitted_ruler.erase("titles")
 	submitted_ruler.erase("current_title")
 	submitted_ruler.erase("identity_history")
 	own_ruler.erase("titles")
 	own_ruler.erase("current_title")
 	own_ruler.erase("identity_history")
-	check(submitted_ruler == own_ruler, "submission/foreign_ruler_retained")
+	for key in ["id","name","parent_id","child_ids","children_initialized","archetype","traits","alive"]:
+		check(submitted_ruler.get(key) == own_ruler.get(key), "submission/foreign_ruler_retained_"+key)
 	var subject := state.enfeoff(1, [6, 7] as Array[int])
 	check(subject >= 0, "submission/foreign_vassal_real_enfeoff")
 	if subject >= 0:

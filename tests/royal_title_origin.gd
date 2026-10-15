@@ -9,6 +9,7 @@ func _init() -> void:
 	_test_heir_identity_and_accession()
 	_test_enfeoffment_and_return()
 	_test_recalled_branch_boundaries()
+	_test_nested_recall()
 	_test_migrated_household_lifetime()
 	_test_twice_annexed_archive_household()
 	_test_refounded_domestic_grandchildren()
@@ -141,13 +142,13 @@ func _test_enfeoffment_and_return() -> void:
 	if subject < 0: return
 	check(not state.nations[subject].royal_titles_initialized and state.nations[subject].state_level == 0, "new country does not inherit mother country's institution")
 	check(RoyalTitles.children(members, candidate) == original_children, "becoming a real ruler preserves existing children and zero-child results")
-	check(int(RoyalTitles.report(state, 0).counts[3]) == princes_before - 1, "mother country does not replace emigrant's ended princely grant")
-	check_ended_title(members[candidate], 0, title, "enfeoffment")
+	check(int(RoyalTitles.report(state, 0).counts[3]) == princes_before, "mother country continues funding the landed prince once")
+	check(members[candidate].title_history.back().title == title and members[candidate].title_history.back().end_day == -1, "enfeoffment retains the open grant")
 	var migrated: Array[int] = []
 	for id in members:
 		if int(members[id].get("title_payer_id", -1)) == subject and bool(members[id].get("alive", true)):
 			migrated.append(int(id))
-			check(int(members[id].get("title_rank", 0)) == 0 and int(members[id].get("title_origin_nation_id", -1)) == -1, "migrated household loses foreign virtual grants")
+			check(RoyalTitles.effective_rank(state, members[id]) == (3 if id == candidate else 2) and int(members[id].get("title_origin_nation_id", -1)) == 0, "landed household retains rank and its overlord's grant")
 	check(RoyalTitles.report(state, subject).basis_points == 0, "non-empire new country pays zero royal stipend")
 	check(history_count(members) >= original_history, "termination preserves title records")
 	var history_after := history_count(members)
@@ -157,7 +158,7 @@ func _test_enfeoffment_and_return() -> void:
 	for id in migrated:
 		check(int(members[id].get("title_payer_id", -1)) == 0, "return updates affiliation to receiving country")
 		check(RoyalTitles.effective_rank(state,members[id])==(RoyalTitles.PRINCE if id==candidate else RoyalTitles.COMMANDERY), "peaceful recall grants a new domestic prince branch instead of restoring a foreign title")
-	check_ended_title(members[candidate], 0, title, "enfeoffment")
+	check(members[candidate].title_history.back().title == title and members[candidate].title_history.back().end_day == -1, "recall retains the same open grant")
 	check(int(RoyalTitles.report(state, 0).counts[3]) == princes_before, "the new recalled prince is counted once in the receiving country's census")
 
 func _test_recalled_branch_boundaries() -> void:
@@ -190,7 +191,12 @@ func _test_recalled_branch_boundaries() -> void:
 	check(RoyalTitles.effective_rank(state,members[king])==RoyalTitles.PRINCE,"actual returning king receives the new grant")
 	check(state.overlord_of(grand_fief)==0 and state.nations[grand_fief].alive,"lower fief reparents without losing its ruler")
 	for id in protected_people:
-		check(members[id]==protected_people[id],"recall preserves each non-returning person's office, branch and title history")
+		if int(protected_people[id].get("title_payer_id", -1)) == grand_fief:
+			for key in ["id","parent_id","title_payer_id","title_generation_nation_id","office_nation_id","enfeoffed_nation_id","title_branch_id","virtual_title_name"]:
+				check(members[id].get(key)==protected_people[id].get(key),"reparented lower fief preserves its people and designation: "+key)
+			check(int(members[id].get("title_funding_nation_id",-1))==0,"lower fief's new overlord assumes stipends")
+		else:
+			check(members[id]==protected_people[id],"recall preserves unrelated court and sibling fief: "+str(id))
 	check(NativeSnapshotBuilder.succession_validation_error(NativeSnapshotBuilder.build(state)).is_empty(),"mixed domestic and foreign branches remain snapshot-valid")
 
 func _test_shared_tree_boundaries_and_new_founder() -> void:
@@ -221,7 +227,7 @@ func _test_shared_tree_boundaries_and_new_founder() -> void:
 	for id in a_members:
 		check(members[id] == a_members[id], "annexation does not change other country's household %d" % id)
 	check(PrincePolitics.enfeoff_candidate(state, a) != c_king, "foreign household cannot become original country's enfeoffment candidate")
-	check(not state.nations[d].royal_titles_initialized and RoyalTitles.report(state, d).basis_points == 0, "same-tree annex does not transfer title institution")
+	check(RoyalTitles.report(state, d).basis_points == 0, "same-tree hostile annex does not restore defeated grants")
 	FamilyFixture.ensure_candidates(state, d, 2)
 	state.set_diplomatic_relation(0, d, GameState.DiplomaticRelation.WAR)
 	check(state.annex_nation(d, 0), "real defending vassal counter-conquest removes former overlord")
@@ -234,8 +240,35 @@ func _test_shared_tree_boundaries_and_new_founder() -> void:
 				domestic_history = true
 		check(domestic_history, "newly valid grant has an open history entry from actual new empire")
 	for id in a_members:
-		check(members[id] == a_members[id], "new empire promotion does not regrant another nation's household %d" % id)
+		check(int(members[id].title_payer_id)==a and int(members[id].title_generation_nation_id)==a and members[id].parent_id==a_members[id].parent_id, "new empire keeps reparented fief's political and generation boundaries %d" % id)
 	check(NativeSnapshotBuilder.succession_validation_error(NativeSnapshotBuilder.build(state)).is_empty(), "native retains ended historical sources even after source nation is extinct")
+
+func _test_nested_recall() -> void:
+	var state:=fixture()
+	var home:=state.enfeoff(0,[2,3,4] as Array[int])
+	check(home>=0,"nested recall has a real intermediate court")
+	if home<0: return
+	FamilyFixture.ensure_candidates(state,home,3)
+	var subject:=state.enfeoff(home,[3] as Array[int])
+	check(subject>=0,"nested recall has a real lower fief")
+	if subject<0: return
+	var member:=PrincePolitics.person(state,subject,state.nations[subject].ruler_person_id)
+	FamilyFixture.ensure_candidates(state,subject,2)
+	var members: Dictionary=FamilyTree.tree_for_nation(state,subject).members
+	var children:=RoyalTitles.children(members,int(member.id))
+	for id in children:
+		if int(members[id].get("title_rank",0))==0: RoyalTitles._grant(state,members[id],2,subject,int(member.title_branch_id),false)
+	var before: Array=member.title_history.duplicate(true)
+	state.day=30
+	check(state.revoke_vassal(subject),"a subordinate overlord can peacefully recall its own lower fief")
+	check(member.title_history==before,"nested recall also preserves the open grant issued by the receiving court")
+	check(int(member.title_payer_id)==home and int(member.title_generation_nation_id)==home and int(member.title_funding_nation_id)==0,"nested recall separates issuer, political court and stipend payer")
+	check(NativeSnapshotBuilder.succession_validation_error(NativeSnapshotBuilder.build(state)).is_empty(),"nested recall preserves valid snapshot references")
+	var title:=str(member.current_title)
+	RoyalTitles.set_member(state,member,"alive",false)
+	RoyalTitles.settle_death(state,home,int(member.id))
+	check(RoyalTitles.effective_rank(state,members[children[0]])==3 and int(members[children[0]].title_origin_nation_id)==home and members[children[0]].current_title==title,"nested recalled title inherits its original issuer and exact designation")
+	check(NativeSnapshotBuilder.succession_validation_error(NativeSnapshotBuilder.build(state)).is_empty(),"nested title inheritance remains snapshot-valid")
 
 func _test_migrated_household_lifetime() -> void:
 	var state := fixture()
@@ -254,11 +287,11 @@ func _test_migrated_household_lifetime() -> void:
 	check(bool(members[waiting].get("alive", false)) and bool(members[waiting].get("title_adult", false)), "migrated untitled waiting family advances to adult cohort")
 	var birth_result := RoyalTitles.children(members, waiting)
 	RoyalTitles.reconcile(state)
-	check(RoyalTitles.children(members, waiting) == birth_result and birth_result.is_empty(), "foreign ended rank does not trigger adult reproduction")
+	check(RoyalTitles.children(members, waiting) == birth_result and bool(members[waiting].children_initialized), "the landed noble's adult birth result is generated once")
 	FamilyFixture.ensure_candidates(state, subject, 2)
 	check(PrincePolitics.accede(state, subject), "second ordinary-country real succession succeeds")
 	check(not bool(members[waiting].get("alive", true)), "no-institution migrated adult dies with next real ruler")
-	check(str(members[waiting].get("death_title", "")) == "无爵" and FamilyTree.display_title(members[waiting], waiting, -1, state) == "无爵", "death freezes untitled status rather than restoring pre-migration title")
+	check(str(members[waiting].get("death_title", "")) == str(members[waiting].title_history.back().title) and FamilyTree.display_title(members[waiting], waiting, -1, state) == str(members[waiting].death_title), "death freezes the actual noble designation")
 	check(not state.nations[subject].royal_titles_initialized and RoyalTitles.report(state, subject).basis_points == 0, "life advancement never reenables old institution or expense")
 
 func _test_native_source_validation() -> void:
@@ -340,7 +373,7 @@ func _test_refounded_domestic_grandchildren() -> void:
 	check(subject >= 0, "initialized grandchild household migrates through real enfeoffment")
 	if subject < 0: return
 	for id in [son, childless_son] + grandchildren:
-		check(int(members[id].get("title_rank", 0)) == 0 and int(members[id].get("title_origin_nation_id", -1)) == -1, "all migrating generations lose foreign source grants")
+		check(int(members[id].get("title_rank", 0)) == (2 if id in [son,childless_son] else 1) and int(members[id].get("title_origin_nation_id", -1)) == 0, "all migrating generations retain descending grants before independence")
 	state.set_diplomatic_relation(0, subject, GameState.DiplomaticRelation.WAR)
 	check(state.annex_nation(subject, 0), "real vassal counter-conquest establishes a new independent empire")
 	check(state.nations[subject].empire_founder_person_id == candidate, "new nation's actual ruler becomes its own Taizu")

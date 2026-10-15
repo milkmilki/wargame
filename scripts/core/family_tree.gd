@@ -141,13 +141,21 @@ static func record_current_title(state: GameState, nation_id: int) -> void:
 		return
 	var member: Dictionary = members[nation.ruler_person_id]
 	var kind := "vassal" if state.is_vassal(nation_id) else ("emperor" if nation.state_level == EmpireStatus.EMPIRE else "ruler")
+	if nation.alive and kind != "vassal" and int(member.get("enfeoffed_nation_id", -1)) == nation_id:
+		RoyalTitles.set_member(state, member, "enfeoffed_nation_id", -1)
+	if nation.alive and bool(member.get("alive", true)) and kind == "vassal":
+		RoyalTitles.ensure_landed_ruler(state, nation_id)
+		title = RoyalTitles.designation(state, member, int(member.title_rank))
+		kind = "noble"
 	# Annex cleanup can ensure the defeated lineage after removing its realm.
 	# That transient state is not a new sovereign reign.
-	if nation.alive and bool(member.get("alive",true)) and not nation.succession_identity:
+	if nation.alive and bool(member.get("alive",true)) and not nation.succession_identity and kind != "noble":
 		record_identity(state, member, title, kind, nation_id)
 	RoyalTitles.set_member(state, member, "current_title", title)
 	RoyalTitles.set_member(state, member, "office_nation_id", nation_id)
 	RoyalTitles.set_member(state, member, "title_payer_id", nation_id)
+	RoyalTitles.set_member(state, member, "title_funding_nation_id", RoyalTitles.authority(state, nation_id))
+	RoyalTitles.set_member(state, member, "title_generation_nation_id", nation_id)
 	var titles: Array = member["titles"]
 	if not titles.has(title):
 		titles.append(title)
@@ -159,13 +167,13 @@ static func record_current_title(state: GameState, nation_id: int) -> void:
 
 ## Ordered, repeated identities are evidence of transitions; titles[] remains a set.
 ## Optional on legacy people: do not manufacture their missing earlier offices.
-static func record_identity(state: GameState, member: Dictionary, title: String, kind: String, nation_id: int, rank: int = 0) -> void:
+static func record_identity(state: GameState, member: Dictionary, title: String, kind: String, nation_id: int, rank: int = 0, fief_nation_id: int = -1) -> void:
 	var history: Array = member.get("identity_history", [])
 	if not member.has("identity_history"):
 		member["identity_history_partial"] = true
 	if not history.is_empty():
 		var last: Dictionary = history.back()
-		if int(last.end_day) < 0 and last.kind == kind and int(last.nation_id) == nation_id and int(last.rank) == rank:
+		if int(last.end_day) < 0 and last.kind == kind and int(last.nation_id) == nation_id and int(last.rank) == rank and int(last.get("fief_nation_id", -1)) == fief_nation_id:
 			if last.title == title: return
 			# Submission commits the realm before finalizing its new designation.
 			# Within that day the same office gets its final name, not a second reign.
@@ -174,7 +182,7 @@ static func record_identity(state: GameState, member: Dictionary, title: String,
 				state.family_revision += 1
 				return
 		end_identity(state, member, "changed")
-	history.append({"title": title, "kind": kind, "rank": rank, "nation_id": nation_id,
+	history.append({"title": title, "kind": kind, "rank": rank, "nation_id": nation_id, "fief_nation_id": fief_nation_id,
 		"start_day": state.day, "end_day": -1, "end_reason": ""})
 	member["identity_history"] = history
 	state.family_revision += 1
@@ -273,6 +281,8 @@ static func display_title(member: Dictionary, person_id: int, root_person_id: in
 	if state != null and bool(member.get("alive", true)):
 		var office := int(member.get("office_nation_id", -1))
 		if office >= 0 and office < state.nations.size() and state.nations[office].alive and state.nations[office].ruler_person_id == person_id:
+			if state.is_vassal(office) and RoyalTitles.effective_rank(state, member) > 0:
+				return RoyalTitles.designation(state, member, int(member.title_rank))
 			return title_for_nation(state, office)
 		if RoyalTitles.effective_rank(state, member) <= 0:
 			return "无爵"
@@ -326,6 +336,8 @@ static func _member(
 		"titles": [] as Array[String],
 		"nation_ids": nation_ids,
 		"title_payer_id": nation_id,
+		"title_funding_nation_id": nation_id,
+		"title_generation_nation_id": nation_id,
 		"title_origin_nation_id": -1,
 		"title_history": [],
 		"identity_history": [],

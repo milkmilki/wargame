@@ -45,13 +45,17 @@ func test_foreign_household() -> void:
 	check(state.revoke_vassal(1),"foreign overlord relationship is peacefully revoked through the real territory transaction")
 	check(foreign.family_tree_id==tree_id and state.nations[0].family_tree_id!=tree_id,"foreign genealogy stays independent after recall")
 	check(state.nations[0].treasury_gold==gold and foreign.treasury_gold==0,"treasury transfers exactly once")
-	check(state.nations[2].alive and state.overlord_of(2)==0 and state.family_trees[state.nations[2].family_tree_id]==lower_before,"lower foreign fief reparents without a title or genealogy rewrite")
+	check(state.nations[2].alive and state.overlord_of(2)==0,"lower foreign fief reparents and remains alive")
+	for id in lower_before.members:
+		var actual: Dictionary=state.family_trees[state.nations[2].family_tree_id].members[id]
+		for key in ["id","parent_id","name","title_payer_id","title_generation_nation_id"]:
+			check(actual.get(key)==lower_before.members[id].get(key),"lower fief retains bloodline and generation: "+key)
 	for id in original_blood: check(members[id].parent_id==original_blood[id],"original foreign ancestry is preserved")
 	check(RoyalTitles.effective_rank(state,members[king])==RoyalTitles.COMMANDERY,"foreign recalled king receives an active commandery title")
 	if RoyalTitles.effective_rank(state,members[king])!=RoyalTitles.COMMANDERY: return
 	for child in children:
 		check(RoyalTitles.effective_rank(state,members[child])==RoyalTitles.DUKE and int(members[child].title_branch_id)==king,"foreign children join their own descending-rank branch")
-	check(RoyalTitles.report(state,0).counts[2]==1 and RoyalTitles.report(state,1).basis_points==0,"only the receiving state pays the foreign commandery ruler's stipend")
+	check(RoyalTitles.report(state,0).counts[2]==2 and RoyalTitles.report(state,1).basis_points==0 and RoyalTitles.report(state,2).basis_points==0,"the receiving overlord pays both recalled and reparented commandery households once")
 	check(TitleAudit.inspect(state).is_empty(),"foreign title census and domestic branch references are consistent")
 	var after := state.family_trees.duplicate(true)
 	check(not state.revoke_vassal(1) and state.family_trees==after,"a repeated recall cannot duplicate foreign grants or descendants")
@@ -67,7 +71,7 @@ func test_foreign_household() -> void:
 		check(not NativeSnapshotBuilder.succession_validation_error(invalid).is_empty(),"snapshot still rejects foreign title corruption: "+field)
 	history.maybe_capture(state)
 	var past := history.build_view_state(state,0)
-	check(past.nations[1].alive and int(past.family_trees[tree_id].members[king].get("title_rank",0))==0,"pre-recall history remains a landed foreign king")
+	check(past.nations[1].alive and int(past.family_trees[tree_id].members[king].get("title_rank",0))==2 and int(past.family_trees[tree_id].members[king].enfeoffed_nation_id)==1,"pre-recall history retains landed commandery rank")
 	var current := history.build_view_state(state,1)
 	check(current.family_trees[tree_id].members[king].title_rank==RoyalTitles.COMMANDERY,"post-recall history retains the new foreign grant")
 	var model := FamilyModel.capture(state,1)

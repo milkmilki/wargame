@@ -96,11 +96,11 @@ func test_titles():
 	var historical := history.build_view_state(state,0)
 	check(historical.nations[0].environment_kind=="nomad" and historical.nation_display_name(0)=="秦部","history preserves environment and pre-upgrade title")
 	var snapshot := NativeSnapshotBuilder.build(state)
-	check(snapshot.schema_version==30 and snapshot.nations.environment_kind[0]=="nomad","v30 persists environment")
+	check(snapshot.schema_version==31 and snapshot.nations.environment_kind[0]=="nomad","v31 retains environment")
 	check(NativeSnapshotBuilder.succession_validation_error(snapshot).is_empty(),"new runtime snapshot validates")
 	snapshot.schema_version=29
 	check(not NativeSnapshotBuilder.succession_validation_error(snapshot).is_empty(),"v29 runtime snapshot is explicitly rejected")
-	snapshot.schema_version=30; snapshot.nations.environment_kind[0]="invalid"
+	snapshot.schema_version=31; snapshot.nations.environment_kind[0]="invalid"
 	check(not NativeSnapshotBuilder.succession_validation_error(snapshot).is_empty(),"invalid environment is rejected")
 	state.region_ids.fill(-1); EmpireStatus.reconcile(state)
 	check(nation.state_level==1,"territory loss cannot downgrade")

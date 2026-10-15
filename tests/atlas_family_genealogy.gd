@@ -45,7 +45,7 @@ func run() -> void:
 		var entries: Array = members[candidate].get("identity_history",[])
 		check(entries.size() == 3,"prince to vassal to prince preserves all three stages: "+JSON.stringify(entries))
 		if entries.size() == 3:
-			check(entries[0].kind == "noble" and entries[0].rank == 3 and entries[1].kind == "vassal" and entries[2].rank == 3,"actual office and virtual rank remain distinct")
+			check(entries.all(func(e): return e.kind == "noble" and e.rank == 3) and entries[1].fief_nation_id == subject and entries[0].fief_nation_id == -1 and entries[2].fief_nation_id == -1,"the same peerage records landless, landed and recalled stages")
 			check(entries[0].end_day == 30 and entries[1].start_day == 30 and entries[1].end_day == 60 and entries[2].start_day == 60,"transition dates reflect the successful transactions")
 		var captured := Model.capture(state,0)
 		check(captured.members[candidate].get("title_steps",[]).size() == 3,"tree exposes the repeated title instead of deduplicating it")

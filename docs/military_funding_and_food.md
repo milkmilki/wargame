@@ -144,7 +144,7 @@ so warehouse self-supply refreshes after stock exhaustion or restocking and
 real field formations never inherit a virtual guard's local-only source result.
 Daily queries reuse the prepared siege set rather than scanning battles per
 formation. No snapshot/API change is needed
-(runtime schema30, extension API7).
+(runtime schema31, extension API7).
 
 The user's `run-2026-10-15T03-49-31-29600-64515512` log identified baseline
 `5b0b1fc`, seed1, 40 countries and the Eurasia mask (20–55 north, -15–145 east).

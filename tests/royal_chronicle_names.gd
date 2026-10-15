@@ -13,6 +13,7 @@ func check(ok: bool, label: String) -> void:
 
 func rebellion(titles: bool, restored: bool = false) -> Dictionary:
 	var state: GameState = Chain.fixture()
+	if not titles: state.region_ids.fill(-1)
 	var nation := state.nations[0]
 	if titles:
 		nation.state_level = EmpireStatus.EMPIRE
@@ -59,7 +60,8 @@ func run() -> void:
 	check(submitted.accept_submission(0, 1), "actual submission transaction")
 	check(subject.name == "长王" and WorldNaming.nation_display_name(submitted, 1) == "长王", "archived name collision never adds numbers to submission title")
 	check(subject.ruler_person_id == ruler_id and subject.ruler_name == ruler_name, "submission preserves ruler identity")
-	check(PrincePolitics.person(submitted, 1, ruler_id).current_title == "长王", "family tree records the unnumbered real title")
+	var submitted_member:=PrincePolitics.person(submitted, 1, ruler_id)
+	check(submitted_member.current_title == RoyalTitles.designation(submitted, submitted_member, RoyalTitles.COMMANDERY) and submitted_member.enfeoffed_nation_id == 1, "family tree records the personal commandery grant and actual fief independently of the country name")
 	check(WorldNaming.assign_submitted_vassal_name(submitted, 1) == "长王", "repeated naming is stable")
 	check(submitted.rng.state == random_before, "naming and submission do not consume simulation randomness")
 	for restored in [false, true]:

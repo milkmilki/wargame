@@ -96,18 +96,18 @@ func _test_enfeoff_revoke() -> void:
 		if int(tree.id) != state.nations[0].family_tree_id: continue
 		for member in tree.members:
 			if int(member.id) == king:
-				check((member.title_history as Array).any(func(record): return record.title == original_title and record.end_reason == "enfeoffment"), "native snapshot retains the terminated designation")
+				check((member.title_history as Array).any(func(record): return record.title == original_title and record.end_day == -1), "native snapshot retains the same open designation")
 	FamilyFixture.ensure_candidates(state, subject, 2)
 	check(ids.has(king), "enfeoffment reuses original person")
-	check(int(members[king].get("title_origin_nation_id", -1)) == -1 and RoyalTitles.effective_rank(state, members[king]) == 0, "new fief terminates old title")
+	check(int(members[king].get("title_origin_nation_id", -1)) == 0 and RoyalTitles.effective_rank(state, members[king]) == 3, "new fief retains its overlord-issued prince grant")
 	var existing := RoyalTitles.children(members, king)
 	for id in state.nations[subject].prince_person_ids:
 		check(existing.has(id) and int(members[id].parent_id) == king, "fief candidates reuse actual children")
 		if id != state.nations[subject].crown_prince_person_id:
-			check(int(members[id].get("title_rank", 0)) == 0, "non-empire fief children receive no foreign grants")
+			check(RoyalTitles.effective_rank(state,members[id]) == 2, "landed prince's children retain commandery grants")
 	var old_crown := state.nations[subject].crown_prince_person_id
 	check(PrincePolitics.accede(state, subject), "actual fief succession")
-	check(state.nations[subject].ruler_person_id == old_crown and int(members[old_crown].get("title_rank", 0)) == 0, "fief successor inherits actual office without old virtual title")
+	check(state.nations[subject].ruler_person_id == old_crown and RoyalTitles.effective_rank(state,members[old_crown]) == 3 and members[old_crown].current_title == original_title, "fief successor inherits land and the exact prince designation")
 	FamilyFixture.ensure_candidates(state, subject, 2)
 	var returning_children := RoyalTitles.children(members,old_crown)
 	state.day=30
@@ -116,9 +116,9 @@ func _test_enfeoff_revoke() -> void:
 		blood[id] = int(members[id].parent_id)
 	check(state.revoke_vassal(subject), "real revoke transaction succeeds")
 	check(RoyalTitles.effective_rank(state,members[old_crown])==RoyalTitles.PRINCE,"peaceful revocation grants the actual living former ruler a princely title")
-	check(int(members[old_crown].title_branch_id)==old_crown and members[old_crown].title_history.back().start_day==30,"the recalled ruler starts a new domestic title branch at the actual return date")
+	check(int(members[old_crown].title_branch_id)==king and members[old_crown].title_history.back().start_day==0,"the recalled ruler preserves the inherited branch and original grant date")
 	for child in returning_children:
-		check(RoyalTitles.effective_rank(state,members[child])==RoyalTitles.COMMANDERY and int(members[child].title_branch_id)==old_crown,"recalled prince's existing children join the ordinary declining-rank branch")
+		check(RoyalTitles.effective_rank(state,members[child])==RoyalTitles.COMMANDERY and int(members[child].title_branch_id)==king,"recalled prince's existing children retain the same declining-rank branch")
 	check(state.nations[subject].absorbed_into_nation_id == 0, "annex archive records actual destination")
 	check(TitleAudit.inspect(state).is_empty(), "revoke preserves cohorts of already reproducing families")
 	for id in blood:
@@ -194,14 +194,14 @@ func _test_late_recognition() -> void:
 			state.region_ids[city.id] = 10 if city.owner_nation == 0 else 20
 	EmpireStatus.reconcile(state)
 	var member := PrincePolitics.person(state, subject, state.nations[subject].ruler_person_id)
-	check(int(member.get("title_origin_nation_id", -1)) == -1, "Taizu cannot retroactively grant a foreign landed son")
-	check(int(member.get("title_rank", 0)) == 0, "foreign landed son has no virtual grant")
+	check(int(member.get("title_origin_nation_id", -1)) == 0, "late recognition preserves the existing landed grant issuer")
+	check(int(member.get("title_rank", 0)) == 3, "landed son keeps prince rank established during enfeoffment")
 	check(not state.nations[subject].royal_titles_initialized, "country fief does not carry foreign institution")
 	check(state.nations[subject].empire_founder_person_id == -1 and state.nations[subject].state_level == 0, "inherited institution creates no second Taizu")
 	for id in state.nations[subject].prince_person_ids:
-		check(int(PrincePolitics.person(state, subject, id).get("title_rank", 0)) == 0, "foreign children have no retroactive grant")
+		check(int(PrincePolitics.person(state, subject, id).get("title_rank", 0)) == 2, "landed prince's children keep commandery rank")
 	check(PrincePolitics.accede(state, subject), "late-qualified fief succeeds")
-	check(int(PrincePolitics.person(state, subject, state.nations[subject].ruler_person_id).get("title_rank", 0)) == 0, "country succession does not reactivate old branch")
+	check(int(PrincePolitics.person(state, subject, state.nations[subject].ruler_person_id).get("title_rank", 0)) == 3, "actual fief succession inherits prince rank")
 
 func _test_foreign_annex(reverse: bool) -> void:
 	var state := fixture()
