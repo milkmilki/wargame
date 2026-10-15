@@ -6,7 +6,7 @@ const DUKE := 1
 const COMMANDERY := 2
 const PRINCE := 3
 const CHILD_COUNTS := [0, 2, 3, 4, 5]
-const NAMES := ["无爵", "国公", "郡王", "一字王"]
+const NAMES := ["无爵", "国公", "郡王", "亲王"]
 const PRINCELY_STATES := ["晋", "秦", "齐", "楚", "吴", "越", "宋"]
 
 ## 封号只依赖世界种子、人物和等级，不推进模拟随机源，也不检查重名。
@@ -423,4 +423,4 @@ static func recall_vassal(state: GameState, overlord: int, subject: int, returni
 
 static func summary(state: GameState, nation_id: int) -> String:
 	var entry := report(state, nation_id)
-	return "宗室：一字王 %d · 郡王 %d · 国公 %d    额外宫廷支出 %.1f%%" % [entry.counts[3], entry.counts[2], entry.counts[1], float(entry.basis_points) / 100.0]
+	return "宗室：亲王 %d · 郡王 %d · 国公 %d    额外宫廷支出 %.1f%%" % [entry.counts[3], entry.counts[2], entry.counts[1], float(entry.basis_points) / 100.0]
