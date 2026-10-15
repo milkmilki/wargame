@@ -158,6 +158,29 @@ static func append_environment(doc: Dictionary,state: GameState,id: int) -> void
 	if environment.has("aridity_index"): rows.append(row("干燥指数","%.2f"%environment.aridity_index[cell]))
 	if environment.has("growing_months"): rows.append(row("适宜季节折算","%.2f 月"%environment.growing_months[cell]))
 	doc.sections.append(section("地理与气候",rows))
+static func recorded_ruler_rows(state: GameState,id: int) -> Array:
+	var n := state.nations[id]
+	var rows := [row("君主",n.ruler_name if not n.ruler_name.is_empty() else "未记录","person",n.ruler_person_id)]
+	if n.ruler_name.is_empty() and n.ruler_person_id<0:
+		rows.append(row("君主类型","未记录")); return rows
+	rows.append(row("君主类型",RulerProfile.archetype_name(n.ruler_archetype)))
+	rows.append(row("类型说明",RulerProfile.archetype_description(n.ruler_archetype)))
+	var traits: Array[String]=[]
+	for trait_id in n.ruler_traits: traits.append(RulerProfile.trait_name(trait_id))
+	rows.append(row("君主特质","、".join(traits) if not traits.is_empty() else "无附加特质"))
+	for trait_id in n.ruler_traits:
+		rows.append(row("特质 · "+RulerProfile.trait_name(trait_id),RulerProfile.trait_description(trait_id)))
+	rows.append(row("就任日期","第%d天"%n.ruler_started_day))
+	if n.alive:
+		var tenure := maxi(0,state.day-n.ruler_started_day)
+		rows.append(row("已在位","%d天（%.1f年）"%[tenure,float(tenure)/RulerProfile.DAYS_PER_YEAR]))
+	var person := PrincePolitics.person(state,id,n.ruler_person_id)
+	rows.append(row("继承来源",{"crown":"太子","direct":"直系","collateral":"旁系宗室","remote":"远支"}.get(str(person.get("accession_source","")),"未记录")))
+	var heir := PrincePolitics.person(state,id,n.crown_prince_person_id)
+	rows.append(row("继承人",heir.get("name","未记录"),"person",n.crown_prince_person_id))
+	rows.append(row("贸易政策",RulerProfile.trade_policy_name(n.trade_policy)))
+	return rows
+
 static func nation(state: GameState,id: int) -> Dictionary:
 	if id<0 or id>=state.nations.size(): return {}
 	var n := state.nations[id]; var centers := 0; var seats := 0; var troops := 0; var army_rows: Array = []
@@ -175,6 +198,7 @@ static func nation(state: GameState,id: int) -> Dictionary:
 	var point := state.cities[capital].map_position*Vector2(2048,1024) if capital>=0 and capital<state.cities.size() else Vector2(1024,512)
 	var doc := {"title":nation_name(state,id),"subtitle":"%s · 第%d天"%["帝国" if n.state_level>0 else "国家",state.day],"color":n.color,"point":point,"actions":[action("city","查看首都","city",capital),action("focus","设为中心","center"),action("player","操控此国","flag",id),action("declare","对其宣战","war",id),action("family","家族树","flag",id)],"sections":[]}
 	doc["politics_recorded"] = state.has_meta("historical_prince_reports")
+	if doc.politics_recorded: doc.sections.append(section("君主信息",recorded_ruler_rows(state,id)))
 	var traits: Array[String] = []
 	for trait_id in n.ruler_traits: traits.append(RulerProfile.trait_name(trait_id))
 	doc.sections.append(section("概况",[row("状态","存续" if n.alive else "已灭亡"),row("首都",city_name(state,capital),"city",capital),row("控制治所",seats),row("控制州治",centers),row("控制府",seats-centers),row("君主",n.ruler_name if not n.ruler_name.is_empty() else "未记录","person",n.ruler_person_id),row("君主特质","、".join(traits) if not traits.is_empty() else "无附加特质"),row("平均忠诚度","%.1f"%n.average_loyalty)]))
@@ -258,7 +282,7 @@ static func historical(document: Dictionary,kind: String) -> Dictionary:
 	# PoliticalHistory freezes ownership, rulers, diplomacy and layout. Its view
 	# state carries some copied live fields, not a complete economic/army save.
 	var allowed := ["概况","地理与气候","选中道路"] if kind=="city" else ["概况","外交关系"] if kind=="nation" else ["道路"]
-	if kind=="nation" and document.get("politics_recorded",false): allowed.append("继承与王爵")
+	if kind=="nation" and document.get("politics_recorded",false): allowed.append_array(["君主信息","继承与王爵"])
 	document.sections=document.sections.filter(func(s): return s.title in allowed)
 	for group in document.sections:
 		group.rows=group.rows.filter(func(r): return r.label not in ["平均忠诚度","当前通行军队","危险系数","行军时间倍率","补给损耗倍率"])

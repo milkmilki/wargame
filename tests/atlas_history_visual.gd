@@ -71,6 +71,9 @@ func run() -> void:
 	check(view.historical_view and view.overlay.state.day==0,"first stop displays the initial world")
 	check(not view.attack_arrows.visible and view.overlay.state.armies.is_empty(),"history contains no live military overlays")
 	view.show_information("nation",0)
+	var historical_ruler: Dictionary=view.info_panel.document.sections[0]
+	check(historical_ruler.title=="君主信息" and not historical_ruler.has("ruler"),"historical ruler details appear first as read-only text")
+	check(historical_ruler.rows.any(func(entry): return entry.label=="君主类型" and entry.value==RulerProfile.archetype_name(view.overlay.state.nations[0].ruler_archetype)),"visible ruler type belongs to the selected snapshot")
 	await capture("history-1280")
 	view.history_control.grab_focus(); await press_key(KEY_RIGHT)
 	check(view.historical_view and view.overlay.state.day==30,"focused timeline accepts native keyboard stepping")

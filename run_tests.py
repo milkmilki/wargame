@@ -23,7 +23,7 @@ CORE = [
     "army_precontact_hold", "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements", "supply_combat_attributes", "field_battle_supply", "morale_rout_only", "field_shared_morale", "military_funding", "battle_opening_dice",
     "campaign_simple_retreat", "campaign_single_wave", "campaign_defense_regroup", "campaign_defense_center_activity", "campaign_mobilization_costs",
     "campaign_action_readiness", "campaign_staging_legality", "coalition_dispatch_lifecycle", "coalition_siege_participation",
-    "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test",
+    "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test", "political_history_rulers",
     "regional_strategy", "regional_access_recovery", "family_tree_smoke",
     "royal_title_origin", "royal_title_generations", "royal_title_lifecycle",
     "succession_virtual", "succession_virtual_lifecycle", "succession_preparation", "succession_conflict", "succession_chain", "succession_lifecycle", "atlas_family_model", "atlas_family_runtime", "atlas_family_interaction", "atlas_family_close_input", "ruler_succession_extremes", "succession_counterattack", "diplomatic_battle_lifecycle",

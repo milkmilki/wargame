@@ -23,6 +23,12 @@ relations without rewinding the simulation.
   readers cannot initialize a lineage, grant titles, promote or create children.
 - Store city controller, recognized owner, nation alive state, bilateral
   relations, truces, war objectives, suzerainty, and rebellion metadata.
+- Historical country details begin with a read-only “君主信息” section: ruler
+  name and person link, archetype and description, traits and descriptions,
+  accession date, elapsed reign at that snapshot (for extant countries),
+  accession source, heir and trade policy. Ruler profiles and trade policy are
+  frozen independently at each point; later edits and succession do not rewrite
+  earlier cards. Countries not yet founded cannot expose their future rulers.
 - Store the last settled court expense rate, amount due, and amount paid at
   each history point. Historical details display those records without
   recomputing them from the current ruler or running a resource forecast.
@@ -46,13 +52,16 @@ relations without rewinding the simulation.
 
 - History is memory-only and is not written to map-definition files.
 - A historical point cannot become a new simulation branch.
-- Nation identity and color use the current identity record; political state
-  and territorial state come from the selected snapshot.
+- Nation IDs and colors retain their stable identity; recorded names, ruler
+  profiles, political state and territory come from the selected snapshot.
 
 ## Verification
 
 - Unit tests cover capture cadence, snapshot detachment, historical relations,
   and the absence of military state.
+- `political_history_rulers.gd` covers historical profile edits, real ruler
+  death/accession, trade policy isolation, reign duration, person links,
+  future-country isolation and live-state/RNG immutability.
 - Scene smoke tests verify that the timeline is present and switches between a
   historical view and the live view.
 - `atlas_history_timeline.gd` covers commit-boundary capture, slider selection,
