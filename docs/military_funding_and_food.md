@@ -125,17 +125,25 @@ skipped reachable rear supply and repeatedly reset the defender's supply to
 zero. The resulting zero fire/defense and starvation were real simulation
 effects, not just an incorrect detail label.
 
-Resident field defenders now use the ordinary accessible rear warehouse
-network. If no rear source is reachable, they may consume the actual remaining
-food in their friendly battle city; absent both sources, normal field shortage
-still applies. The daily supply settlement charges the full establishment
-once. The fixed city food clock continues separately for virtual defense and
-cannot charge real field rations again or overwrite their supply result.
-Ordinary besieged residents outside the battle retain their isolation rule.
+All real field formations now use the ordinary accessible warehouse network,
+including troops stationed at the city before battle entry, resident defenders
+and relief formations. National food remains collected at the capital
+warehouse; vassals share their existing food pool. Ordinary cities have no
+independent field-food reserve: even residual `food_storage` cannot feed field
+troops. The initially retained local fallback was removed following the user's
+clarification. Only a registered warehouse can supply a field formation.
+Troops stationed at their capital warehouse may draw its real stock at zero
+distance, including while that warehouse is excluded from rear exports by the
+existing siege rule. Empty or unreachable legal warehouses produce genuine
+shortage or partial supply. The daily supply settlement charges the full
+establishment once. The fixed city food clock continues separately for virtual
+defense and cannot charge real field rations again or overwrite their supply result.
 The global siege flag, hostile attack corridors and warehouse distance fields
-are unchanged. Source caches and worker aliases include the field battle
-context, preventing ordinary residents' empty sources from suppressing a
-newly participating field formation's supply. No snapshot/API change is needed
+are unchanged. Source caches and worker aliases account for the besieged city,
+so warehouse self-supply refreshes after stock exhaustion or restocking and
+real field formations never inherit a virtual guard's local-only source result.
+Daily queries reuse the prepared siege set rather than scanning battles per
+formation. No snapshot/API change is needed
 (runtime schema30, extension API7).
 
 The user's `run-2026-10-15T03-49-31-29600-64515512` log identified baseline
@@ -150,15 +158,16 @@ additional actual ration; local stock remains zero and the random stream is
 unchanged. This comparison isolates the faulty rule; it does not claim future
 war outcomes remain unchanged.
 
-`city_field_defender_supply` passes 209 checks, covering same-country/allied
-resident field troops, rear/local stock, real road cuts, empty warehouses,
+`city_field_defender_supply` passes 226 checks, covering same-country/allied
+resident field troops, ordinary city stock rejection, real road cuts, empty
+warehouses, warehouse registration, capital stock exhaustion/restocking,
 virtual guards, self-supply, role/cache transitions, displayed supply and
 combat attributes, no duplicate food charges, random-stream preservation and
 sync/frame byte equivalence. `field_battle_supply` now passes 175 checks with
 resident, arrived and approaching defenders; its isolated fixture explicitly
 cuts the real rear route. `field_establishment_costs` retains all 34 checks
 using complete supply withdrawals rather than discarded supply plans.
-Selected supply/access/war regressions include native/GDScript equivalence,
+All 23 selected supply/access/war regressions pass, including native/GDScript equivalence,
 365-day sync/frame equivalence, positive field victory and the real original
 defender counterattacking and annexing the declarer. The shared suite also
 passes 504 checks. Headless timings are correctness evidence, not GUI or

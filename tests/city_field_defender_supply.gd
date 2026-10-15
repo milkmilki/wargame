@@ -213,34 +213,42 @@ func test_virtual_guard(local_food: int, sliced: bool) -> PackedByteArray:
 	return result
 
 
-func test_local_fallback(warehouse: bool, sliced: bool) -> PackedByteArray:
+func test_city_stock(warehouse: bool, sliced: bool) -> PackedByteArray:
 	var data := fixture(false, 100, true)
 	var state: GameState = data.state
 	var sim: Simulation = data.sim
 	var army: Army = data.army
 	var city: City = data.battle.city
 	if warehouse:
+		state.cities[0].has_warehouse = false
+		state.nations[0].capital_city_id = city.id
 		city.has_warehouse = true
-		state.nations[0].warehouse_city_ids.append(city.id)
-	var label := "inside local fallback warehouse=%s sliced=%s" % [warehouse, sliced]
+		state.nations[0].warehouse_city_ids = [city.id] as Array[int]
+	var label := "inside capital warehouse=%s sliced=%s" % [warehouse, sliced]
 	var rng_before := state.rng.state
 	var stock_before := rear_stock(state)
 	var sources := Pathfinding.supply_sources(state, army)
-	check(sources.size() == 1 and int(sources[0].city_id) == city.id,
-		label + " disconnected rear leaves actual city stock as the sole source")
+	if warehouse:
+		check(sources.size() == 1 and int(sources[0].city_id) == city.id,
+			label + " the registered capital warehouse is a real zero-distance source")
+	else:
+		check(sources.is_empty(), label + " ordinary city stock is never a field food source")
 	await resolve_supply(sim, sliced)
-	check(army.supply_ratio == 1.0 and not army.starving, label + " local food really feeds field troops")
-	check(city.food_storage == 99 and rear_stock(state) == stock_before,
-		label + " one establishment ration comes from the real local stock")
+	var expected_supply := 1.0 if warehouse else 0.0
+	var expected_stock := 99 if warehouse else 100
+	check(army.supply_ratio == expected_supply and army.starving == not warehouse,
+		label + " field supply requires an actual registered warehouse")
+	check(city.food_storage == expected_stock and rear_stock(state) == stock_before,
+		label + " only the capital warehouse can pay the field establishment ration")
 	var debt_after := army.supply_food_debt
 	sim._drain_siege_food()
-	check(city.food_storage == 99 - Simulation.SIEGE_CITY_FOOD_PER_DAY,
+	check(city.food_storage == expected_stock - Simulation.SIEGE_CITY_FOOD_PER_DAY,
 		label + " only fixed city clock follows, with no second field ration")
 	check(army.supply_food_debt == debt_after and rear_stock(state) == stock_before,
 		label + " siege clock preserves field food debt and unreachable warehouses")
-	check(army.supply_ratio == 1.0 and BattleInformation.snapshot(state, data.battle).b.supply == 1.0,
-		label + " actual local self-supply appears in battle details")
-	check(state.rng.state == rng_before, label + " local fallback preserves random stream")
+	check(army.supply_ratio == expected_supply and BattleInformation.snapshot(state, data.battle).b.supply == expected_supply,
+		label + " battle details follow the actual warehouse result")
+	check(state.rng.state == rng_before, label + " warehouse supply preserves random stream")
 	var result := fingerprint(data)
 	sim.free()
 	return result
@@ -254,14 +262,14 @@ func test_role_cache_transition(sliced: bool) -> PackedByteArray:
 	var battle: Battle = data.battle
 	var label := "resident enters field combat sliced=%s" % sliced
 	var rng_before := state.rng.state
-	check(not battle.has_army(army) and Pathfinding.supply_sources(state, army).is_empty(),
-		label + " ordinary isolated resident begins with empty city sources")
+	check(not battle.has_army(army) and not Pathfinding.supply_sources(state, army).is_empty(),
+		label + " ordinary field resident uses normal rear sources before battle entry")
 	var stock_before := rear_stock(state)
 	await resolve_supply(sim, sliced)
-	check(army.supply_ratio == 0.0 and army.starving and rear_stock(state) == stock_before,
-		label + " actual first settlement primes an empty resident source result")
+	check(army.supply_ratio == 1.0 and not army.starving and rear_stock(state) < stock_before,
+		label + " actual first settlement supplies the uncommitted resident")
 	# Another ordinary resident is processed at the same node before the newly
-	# participating army. A city-only cache or parallel alias must not mix roles.
+	# participating army. Both real field formations use normal warehouse supply.
 	var resident := Army.new()
 	resident.id = 43
 	resident.owner_nation = army.owner_nation
@@ -277,9 +285,9 @@ func test_role_cache_transition(sliced: bool) -> PackedByteArray:
 	check(not Pathfinding.supply_sources(state, army).is_empty(), label + " participating army immediately sees its rear sources")
 	await resolve_supply(sim, sliced)
 	check(army.supply_ratio == 1.0 and not army.starving and rear_stock(state) < stock_before,
-		label + " prior empty resident cache cannot suppress real rear withdrawal and full field supply")
-	check(resident.supply_ratio == 0.0 and resident.starving and not battle.has_army(resident),
-		label + " uncommitted same-city resident does not inherit field supply")
+		label + " battle entry preserves real rear withdrawal and full field supply")
+	check(resident.supply_ratio == 1.0 and not resident.starving and not battle.has_army(resident),
+		label + " uncommitted same-city field resident also uses normal supply")
 	var debt_after := army.supply_food_debt
 	sim._drain_siege_food()
 	check(army.supply_ratio == 1.0 and army.supply_food_debt == debt_after,
@@ -287,6 +295,53 @@ func test_role_cache_transition(sliced: bool) -> PackedByteArray:
 	check(BattleInformation.snapshot(state, battle).b.supply == 1.0,
 		label + " battle display reflects the new participating role")
 	check(state.rng.state == rng_before, label + " role transition and cache reuse preserve random stream")
+	var result := fingerprint(data)
+	sim.free()
+	return result
+
+
+func test_registered_capital_cache(sliced: bool) -> PackedByteArray:
+	var data := fixture(false, 100, true)
+	var state: GameState = data.state
+	var sim: Simulation = data.sim
+	var army: Army = data.army
+	var city: City = data.battle.city
+	var label := "capital stock refresh sliced=%s" % sliced
+	var rng_before := state.rng.state
+	var stock_before := rear_stock(state)
+	city.has_warehouse = true
+	check(Pathfinding.supply_sources(state, army).is_empty(),
+		label + " a warehouse flag without national registration cannot supply field troops")
+	await resolve_supply(sim, sliced)
+	check(army.supply_ratio == 0.0 and city.food_storage == 100,
+		label + " unregistered city stock is not consumed even when the rear is cut")
+	# Register this city as the real capital warehouse. Its only ration must be
+	# charged normally, then an empty/restocked source must refresh each day.
+	state.cities[0].has_warehouse = false
+	state.nations[0].capital_city_id = city.id
+	state.nations[0].warehouse_city_ids = [city.id] as Array[int]
+	state.change_city_food_storage(city.id, 1 - city.food_storage)
+	state.day += 1
+	await resolve_supply(sim, sliced)
+	# The preceding shortage leaves fractional demand, so today's two-ration
+	# demand can receive only half supply from the last single ration.
+	check(army.supply_ratio == 0.5 and city.food_storage == 0,
+		label + " capital's last ration yields real partial supply rather than a free full ration")
+	var debt_after := army.supply_food_debt
+	sim._drain_siege_food()
+	check(army.supply_ratio == 0.5 and army.supply_food_debt == debt_after,
+		label + " guard clock does not overwrite this day's real warehouse withdrawal")
+	state.day += 1
+	await resolve_supply(sim, sliced)
+	check(army.supply_ratio == 0.0 and army.starving and city.food_storage == 0,
+		label + " cached capital source cannot invent food after exhaustion")
+	state.change_city_food_storage(city.id, 100)
+	state.day += 1
+	await resolve_supply(sim, sliced)
+	check(army.supply_ratio == 1.0 and not army.starving and city.food_storage < 100,
+		label + " restocked capital resumes normal supply without lifting siege")
+	check(rear_stock(state) == stock_before, label + " cut-off rear warehouses remain untouched")
+	check(state.rng.state == rng_before, label + " warehouse registration and cache refresh preserve random stream")
 	var result := fingerprint(data)
 	sim.free()
 	return result
@@ -307,12 +362,15 @@ func run() -> void:
 		var sliced := await test_virtual_guard(local_food, true)
 		check(sync == sliced, "virtual city guard local=%d is sync/sliced byte-equivalent" % local_food)
 	for warehouse in [false, true]:
-		var sync := await test_local_fallback(warehouse, false)
-		var sliced := await test_local_fallback(warehouse, true)
-		check(sync == sliced, "resident local fallback warehouse=%s is sync/sliced byte-equivalent" % warehouse)
+		var sync := await test_city_stock(warehouse, false)
+		var sliced := await test_city_stock(warehouse, true)
+		check(sync == sliced, "resident capital warehouse=%s is sync/sliced byte-equivalent" % warehouse)
 	var transition_sync := await test_role_cache_transition(false)
 	var transition_sliced := await test_role_cache_transition(true)
 	check(transition_sync == transition_sliced, "resident-to-field role transition is sync/sliced byte-equivalent")
+	var capital_sync := await test_registered_capital_cache(false)
+	var capital_sliced := await test_registered_capital_cache(true)
+	check(capital_sync == capital_sliced, "registered capital exhaustion and restocking are sync/sliced byte-equivalent")
 	for failure in failures:
 		printerr("CITY_FIELD_DEFENDER_SUPPLY_FAIL ", failure)
 	print("CITY_FIELD_DEFENDER_SUPPLY_RESULT checks=%d failures=%d" % [checks, failures.size()])

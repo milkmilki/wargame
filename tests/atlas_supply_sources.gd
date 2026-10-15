@@ -78,10 +78,14 @@ func run():
 	state.edge_lookup.clear(); compare(state, army, network(state, true), "missing edge")
 	army.on_edge = false
 	var siege := state.new_battle(Battle.Kind.SIEGE); siege.city = state.cities[0]
+	# The legacy isolation oracle applies only to virtual guards. Real field
+	# formations now query the normal warehouse graph even at a besieged city.
+	army.is_city_garrison = true
 	state.cities[0].food_storage = 1000
 	compare(state, army, network(state, true), "isolated besieged warehouse")
 	state.cities[0].food_storage = 0
 	compare(state, army, network(state, true), "empty besieged warehouse")
+	army.is_city_garrison = false
 	# A new capital and mirrored coordinates must immediately change tie order.
 	siege.finished = true; state.nations[0].capital_city_id = 15
 	for city in state.cities: city.map_position.x = 1. - city.map_position.x

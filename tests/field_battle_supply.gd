@@ -1,6 +1,6 @@
 extends SceneTree
 ## A city's defenders may still use an accessible rear supply anchor. Actual
-## formations cut off inside the city fall back to actual local food.
+## formations require normal warehouse supply, including when inside the city.
 var checks := 0
 var failures: Array[String] = []
 
@@ -159,12 +159,12 @@ func test_isolated(local_food: int, sliced: bool) -> PackedByteArray:
 	var rng_before := state.rng.state
 	await resolve_supply(sim, sliced)
 	check(state.cities[0].food_storage == 10000, label + " stationed besieged formation cannot draw national stock")
-	check(army.supply_ratio == (1.0 if local_food > 0 else 0.0), label + " stationed food status comes from local stock")
+	check(army.supply_ratio == 0.0 and army.starving, label + " non-warehouse city stock cannot replace an unreachable capital")
 	sim._drain_siege_food()
 	check(state.cities[0].food_storage == 10000, label + " siege ration remains isolated even with wealthy capital")
-	check(state.cities[1].food_storage == (98 if local_food > 0 else 0),
-		label + " local formation pays its establishment ration plus fixed siege clock exactly once")
-	check(army.supply_ratio == (1.0 if local_food > 0 else 0.0), label + " siege clock preserves local food rule")
+	check(state.cities[1].food_storage == maxi(0, local_food - Simulation.SIEGE_CITY_FOOD_PER_DAY),
+		label + " ordinary city stock pays only the virtual city clock")
+	check(army.supply_ratio == 0.0 and army.starving, label + " siege clock cannot give field troops ordinary city stock")
 	check(state.rng.state == rng_before, label + " local supply preserves random stream")
 	var result := fingerprint(data)
 	sim.free()

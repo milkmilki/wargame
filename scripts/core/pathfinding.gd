@@ -859,9 +859,10 @@ static func supply_sources(state: GameState, army: Army) -> Array[Dictionary]:
 	if start < 0 or start >= state.cities.size():
 		return []
 	var start_city := state.cities[start]
-	# 被围城是补给孤岛：只能使用本城仍有库存且对该军开放的粮仓。
+	# 虚拟城防仍使用本地围城规则；真实野战军统一查询正常粮仓网络。
 	if (
 		not army.on_edge
+		and army.is_city_garrison
 		and state.city_under_siege(start)
 		and state.has_military_access(army.owner_nation, start_city.owner_nation)
 	):
@@ -981,11 +982,9 @@ static func supply_sources_from_network(
 	if start < 0 or start >= state.cities.size():
 		return []
 	var start_city := state.cities[start]
-	var field_defender := city_field_supply_city(state, army) >= 0
+	var local_siege := not army.on_edge and state.city_under_siege(start) and not state.succession_supply_city(start)
 	if (
-		not army.on_edge
-		and state.city_under_siege(start) and not state.succession_supply_city(start)
-		and not field_defender
+		army.is_city_garrison and local_siege
 		and state.has_logistics_access(
 			army.owner_nation,
 			start_city.owner_nation
@@ -1061,9 +1060,15 @@ static func supply_sources_from_network(
 			"owner_nation": source["owner_nation"],
 			"loss": loss,
 		})
-	# Real field defenders first draw through the ordinary physical rear graph.
-	# If cut off, they may still spend actual food remaining in their own city.
-	if result.is_empty() and field_defender and start_city.food_storage > 0:
+	# A blockaded warehouse cannot export into the rear network, but its real
+	# stock can still supply troops stationed at that very warehouse. Ordinary
+	# city stock is never a source for field formations.
+	if (
+		local_siege and not army.is_city_garrison
+		and start_city.has_warehouse and start_city.food_storage > 0
+		and state.has_logistics_access(army.owner_nation, start_city.owner_nation)
+		and state.nations[start_city.owner_nation].warehouse_city_ids.has(start)
+	):
 		result.append({"city_id":start,"owner_nation":start_city.owner_nation,"loss":0.0})
 	# Equal-loss selection uses the same quantized mirror keys as global city
 	# ranks, but only ranks the candidate warehouses and only on an actual tie.
@@ -1084,22 +1089,18 @@ static func supply_sources_from_network(
 	return result
 
 
-## Source caches must distinguish a city-field defender from an isolated city
-## resident at the same physical node. Neither case changes the shared rear field.
-static func supply_context_target(state: GameState, army: Army) -> int:
+## Besieged warehouse self-supply depends on actual stock even while the
+## warehouse is absent from the persistent export network. All field troops
+## use the same sources, irrespective of whether they have entered a battle.
+static func supply_context_target(state: GameState, army: Army, besieged: Variant = null) -> int:
 	var target := attack_supply_target(state, army)
-	return target if target >= 0 else city_field_supply_city(state, army)
-
-
-static func city_field_supply_city(state: GameState, army: Army) -> int:
-	if army.is_city_garrison or army.size <= 0 or army.on_edge or army.state != Army.State.FIGHTING:
+	if target >= 0:
+		return target
+	var city_id := army.location_city
+	if army.is_city_garrison or army.on_edge or city_id < 0 or city_id >= state.cities.size():
 		return -1
-	var battle := state.battle_by_id(army.battle_id)
-	if battle == null or battle.finished or battle.kind != Battle.Kind.SIEGE or battle.city == null:
-		return -1
-	if not battle.side_b_defends_city or not battle.side_b.has(army) or army.location_city != battle.city.id:
-		return -1
-	return battle.city.id if state.has_logistics_access(army.owner_nation,battle.city.owner_nation) else -1
+	var under_siege: bool = besieged.has(city_id) if besieged is Dictionary else state.city_under_siege(city_id)
+	return city_id if under_siege else -1
 
 
 ## Only the actual terminal hostile target may extend an attack corridor.

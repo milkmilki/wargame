@@ -2735,7 +2735,7 @@ func _precompute_supply_sources_over_frames() -> Dictionary:
 		if siege_garrison != null and _succession_battle_context(siege_garrison) == null and (siege_garrison.city.food_storage > 0 or not army.is_city_garrison):
 			continue
 		if not (army.on_edge and army.move_to != -1):
-			var attack_target := Pathfinding.supply_context_target(state,army)
+			var attack_target := Pathfinding.supply_context_target(state, army, _supply_source_besieged_cities)
 			var city_cache: Dictionary = _stable_supply_city_source_cache.get(army.owner_nation, {})
 			if attack_target < 0 and city_cache.has(army.location_city):
 				result[army.get_instance_id()] = city_cache[army.location_city]
@@ -2777,9 +2777,9 @@ func _precompute_supply_sources_over_frames() -> Dictionary:
 		for army: Army in payload["armies"]:
 			if army.on_edge and army.move_to != -1:
 				continue
-			# Attack corridors and city-field/local fallback sources have daily
+			# Attack corridors and besieged warehouse self-supply have daily
 			# dependencies absent from the persistent friendly rear field.
-			if Pathfinding.supply_context_target(state,army) >= 0: continue
+			if Pathfinding.supply_context_target(state, army, _supply_source_besieged_cities) >= 0: continue
 			if not _stable_supply_city_source_cache.has(army.owner_nation):
 				_stable_supply_city_source_cache[army.owner_nation] = {}
 			(_stable_supply_city_source_cache[army.owner_nation] as Dictionary)[army.location_city] = result[army.get_instance_id()]
@@ -3034,7 +3034,7 @@ func _build_supply_network_at(
 	)
 
 
-## 围城只改变驻扎在该城市的“补给孤岛”判定，不必清空其他城市或整张补给网络。
+## 围城改变本城虚拟守军隔离与粮仓自供上下文，不必清空其他城市的来源缓存。
 func _invalidate_supply_city_sources_for_siege_changes(
 	besieged: Dictionary
 ) -> void:
@@ -3073,13 +3073,14 @@ func _build_supply_plan_for_army(
 		return {}
 	var siege_garrison := _siege_garrison_battle_of(army)
 	if siege_garrison != null and _succession_battle_context(siege_garrison) == null and (siege_garrison.city.food_storage > 0 or not army.is_city_garrison):
-		# 被围守军的粮食消耗真源是每日围城时钟。
+		# 虚拟城防的粮食消耗真源是每日围城时钟。
 		var has_local_food := siege_garrison.city.food_storage > 0
 		army.starving = not has_local_food
 		army.supply_ratio = 1.0 if has_local_food else 0.0
 		if army.is_city_garrison:
 			army.supply_food_debt = 0.0
 		return {}
+	var supply_context := Pathfinding.supply_context_target(state, army, _supply_source_besieged_cities)
 	var sources: Array[Dictionary] = (
 		precomputed_sources[army.get_instance_id()]
 		if precomputed_sources.has(army.get_instance_id())
@@ -3088,7 +3089,8 @@ func _build_supply_plan_for_army(
 			_daily_supply_source_cache,
 			_daily_supply_network_cache,
 			_stable_supply_city_source_cache,
-			_supply_shared_field_caches_by_nation.get(army.owner_nation)
+			_supply_shared_field_caches_by_nation.get(army.owner_nation),
+			supply_context
 		)
 	)
 	# No warehouse withdrawal occurs during plan construction. Stationed armies
@@ -3097,7 +3099,7 @@ func _build_supply_plan_for_army(
 	# this cache is discarded before withdrawals or morale recovery can change food.
 	var route_loss: float
 	if not army.on_edge and stationary_loss_cache is Dictionary:
-		var loss_key := Vector3i(army.owner_nation, army.location_city, Pathfinding.supply_context_target(state,army))
+		var loss_key := Vector3i(army.owner_nation, army.location_city, supply_context)
 		if not stationary_loss_cache.has(loss_key):
 			stationary_loss_cache[loss_key] = _weighted_supply_loss(sources)
 		route_loss = float(stationary_loss_cache[loss_key])
@@ -3403,11 +3405,12 @@ func _cached_supply_sources(
 	cache: Dictionary,
 	network_cache: Dictionary,
 	stable_city_cache: Variant = null,
-	shared_field_cache: Variant = null
+	shared_field_cache: Variant = null,
+	supply_context: int = -2
 ) -> Array[Dictionary]:
 	var on_edge := army.on_edge and army.move_to != -1
 	var position_key := _supply_position_key(army)
-	var attack_target := Pathfinding.supply_context_target(state,army)
+	var attack_target := Pathfinding.supply_context_target(state, army) if supply_context == -2 else supply_context
 	var source_cache := cache
 	var key: Variant = "%d:%s" % [army.owner_nation, position_key]
 	if attack_target >= 0: key = "%s:A%d" % [key,attack_target]
@@ -3475,23 +3478,9 @@ func _drain_siege_food() -> void:
 			continue
 		state.change_city_food_storage(city.id, -SIEGE_CITY_FOOD_PER_DAY)
 		if battle.side_b_defends_city:
-			for defender in battle.side_b:
-				if (
-					defender.size <= 0 or defender.is_city_garrison
-					or not _siege_defender_uses_local_food(defender, battle)
-				):
-					continue
-				# Isolated field troops draw their establishment ration locally.
-				# Virtual city defense keeps the existing fixed siege clock above.
-				var monthly := int(ceil(ceil(defender.maintenance_manpower() * FOOD_PER_CAPITA) * _daily_food_consumption_multiplier(defender.owner_nation)))
-				state.nations[state.financial_nation_of(defender.owner_nation)].last_food_demand += monthly
-				defender.supply_food_debt += float(monthly) / DAYS_PER_MONTH
-				var ration := int(floor(defender.supply_food_debt + 0.000001))
-				defender.supply_food_debt -= ration
-				state.change_city_food_storage(city.id, -ration)
 			var has_food := city.food_storage > 0
 			for defender in battle.side_b:
-				if defender.size <= 0 or not _siege_defender_uses_local_food(defender, battle):
+				if defender.size <= 0 or not defender.is_city_garrison:
 					continue
 				defender.starving = not has_food
 				defender.supply_ratio = 1.0 if has_food else 0.0
@@ -3686,16 +3675,8 @@ func _local_battle_reinforcement_target(
 	return battle.edge.city_b
 
 
-func _siege_defender_uses_local_food(army: Army, battle: Battle) -> bool:
-	# A siege shell also hosts real city-field combat. Those formations draw
-	# normal warehouse supply (or actual local fallback), never the guard clock.
-	return army.is_city_garrison or (
-		not battle.uses_field_combat_rules() and not army.on_edge and army.location_city == battle.city.id
-	)
-
-
 func _siege_garrison_battle_of(army: Army) -> Battle:
-	if army.state != Army.State.FIGHTING or army.battle_id == -1:
+	if not army.is_city_garrison or army.state != Army.State.FIGHTING or army.battle_id == -1:
 		return null
 	var battle: Battle = _battle_lookup_cache.get(army.battle_id)
 	if battle == null:
@@ -3705,7 +3686,7 @@ func _siege_garrison_battle_of(army: Army) -> Battle:
 		return null
 	if not battle.side_b_defends_city or not battle.side_b.has(army):
 		return null
-	return battle if _siege_defender_uses_local_food(army, battle) else null
+	return battle
 
 
 ## 每日推进战役中 HOLDING 军队的地形适应。

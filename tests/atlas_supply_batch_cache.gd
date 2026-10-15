@@ -59,7 +59,7 @@ func run():
 	var siege := state.new_battle(Battle.Kind.SIEGE); siege.city=state.cities[1]
 	var isolated := await query(sim)
 	check(state.siege_queries==1,"non-warehouse siege refreshes only affected stationed city")
-	check(isolated[state.armies[3].get_instance_id()].is_empty(),"besieged city loses external supply immediately")
+	check(not isolated[state.armies[3].get_instance_id()].is_empty(),"stationed field troops keep reachable warehouse supply during a city battle")
 	compare(sim,isolated,"siege")
 	siege.finished=true; var released := await query(sim)
 	check(state.siege_queries==1,"lifting siege refreshes only affected city")
