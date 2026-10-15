@@ -9,6 +9,7 @@ func run():
 	var model=load("res://scripts/atlas/battle_information.gd")
 	var state:=preload("res://tests/support/grid_world.gd").new(); state.generate_grid_world(94002)
 	state.armies.clear(); state.battles.clear()
+	state.day=12684
 	var a:=Army.new(); a.id=71; a.owner_nation=0; a.size=21000; a.morale=.7
 	a.supply_ratio=.6; a.funding_multiplier=.8; a.ruler_attack_multiplier=1.3
 	var b:=Army.new(); b.id=83; b.owner_nation=1; b.size=16000; b.morale=1.2
@@ -26,6 +27,7 @@ func run():
 	check(snapshot.a.size==26000 and snapshot.a.engaged<=snapshot.a.frontage,"actual manpower is separate from frontage and reserves")
 	check(is_equal_approx(snapshot.b.holding_attack,.5) and is_equal_approx(snapshot.b.holding_defense,1.5),"holding side has actual attack and defense modifiers")
 	var doc: Dictionary=model.document(state,17)
+	check(doc.subtitle.ends_with(" · 36年85天"),"battle date uses the common calendar")
 	check(not doc.is_empty() and model.document(state,0).is_empty(),"battle lookup uses stable ID, not list position")
 	check(state.rng.state==rng_before and battle.field_dice==dice_before and battle.side_a==original_order and a.size==21000 and a.morale==.7,"inspection does not consume RNG, reorder sides or change troops")
 	Combat.battle_log_enabled=true; Combat.clear_battle_log(); Combat.resolve_round(battle,state.day)

@@ -1,4 +1,5 @@
 extends PanelContainer
+const Calendar = preload("res://scripts/core/game_calendar.gd")
 const Model = preload("res://scripts/atlas/family_model.gd")
 const Canvas = preload("res://scripts/atlas/family_canvas.gd")
 const Inspector = preload("res://scripts/atlas/information_panel.gd")
@@ -70,7 +71,7 @@ func refresh_model() -> void:
 	var next:=Model.capture(source,nation_id)
 	if next.is_empty(): close(); return
 	revision=key; model=next; canvas.update_model(model)
-	title.text="%s · 家族树 · 第%d天%s"%[model.name,model.day," · 历史只读" if host.historical_view else ""]
+	title.text="%s · 家族树 · %s%s"%[model.name,Calendar.date(model.day)," · 历史只读" if host.historical_view else ""]
 	selector.clear()
 	for child in side.get_children(): side.remove_child(child); child.queue_free()
 	for country in model.countries:

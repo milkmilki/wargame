@@ -1,4 +1,5 @@
 extends RefCounted
+const Calendar = preload("res://scripts/core/game_calendar.gd")
 ## Read-only family presentation. No ensure/reconcile/accession calls here.
 const Info = preload("res://scripts/atlas/information_model.gd")
 static func capture(state: GameState, nation_id: int) -> Dictionary:
@@ -63,8 +64,8 @@ static func person_document(model: Dictionary,id: int) -> Dictionary:
 		rows.append(Info.row("特质 · "+RulerProfile.trait_name(str(trait_id)),RulerProfile.trait_description(str(trait_id))))
 	rows.append(Info.row("太子","是" if m.get("crown",false) else "否"))
 	rows.append(Info.row("生卒 / 年龄","未记录"))
-	rows.append(Info.row("即位起日","第%d天"%int(m.last_reign) if int(m.last_reign)>=0 else "未记录"))
-	rows.append(Info.row("即位止日","第%d天"%int(m.reign_end) if int(m.reign_end)>=0 else "未记录"))
+	rows.append(Info.row("即位起日",Calendar.date(int(m.last_reign))))
+	rows.append(Info.row("即位止日",Calendar.date(int(m.reign_end))))
 	rows.append(Info.row("太祖","是" if m.get("taizu",false) else "否"))
 	rows.append(Info.row("帝号记录","曾有帝号" if m.was_emperor else "无"))
 	var fief:=int(m.get("enfeoffed_nation_id",-1))
@@ -84,7 +85,7 @@ static func person_document(model: Dictionary,id: int) -> Dictionary:
 	if title_rows.is_empty(): title_rows.append(Info.row("爵号履历","未记录"))
 	var events: Array = []
 	for e in model.events:
-		if e.get("person_ids",[]).has(id): events.append(Info.row("第%d天"%int(e.day),e.text))
-	return {"title":m.get("name","未记录"),"subtitle":"人物 %d · 第%d天"%[id,model.day],"color":Color("007aff"),"point":Vector2.ZERO,
+		if e.get("person_ids",[]).has(id): events.append(Info.row(Calendar.date(int(e.day)),Calendar.event_text(e)))
+	return {"title":m.get("name","未记录"),"subtitle":"人物 %d · %s"%[id,Calendar.date(model.day)],"color":Color("007aff"),"point":Vector2.ZERO,
 		"notice":"家谱仅供查看；未记录的年龄与生卒不推测。","actions":[],
 		"sections":[Info.section("人物",rows),Info.section("爵号历史",title_rows),Info.section("夺嫡记录",events if not events.is_empty() else [Info.row("记录","暂无")])]}

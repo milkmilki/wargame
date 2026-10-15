@@ -1,4 +1,5 @@
 extends "res://scripts/atlas/preview.gd"
+const Calendar = preload("res://scripts/core/game_calendar.gd")
 const MilitaryMap = preload("res://scripts/atlas/military_map.gd")
 const Overlay = preload("res://scripts/atlas/military_overlay.gd")
 const WarFronts = preload("res://scripts/atlas/war_fronts.gd")
@@ -456,7 +457,7 @@ func _process(_delta: float) -> void:
 		shipping_layer.set_zoom(zoom); shipping_layer.set_view(Rect2(-map_root.position/zoom,size/zoom))
 	overlay.selection = selected_army
 	refresh_attack_arrows()
-	military_status.text = "历史：第%d天 · 只读政治快照"%overlay.state.day if historical_view else "第%d天 · 军队%d · 战斗%d · %s"%[state.day,state.armies.size(),state.battles.size(),"暂停" if simulation.paused else "运行军事AI"]
+	military_status.text = "历史：%s · 只读政治快照"%Calendar.date(overlay.state.day) if historical_view else "%s · 军队%d · 战斗%d · %s"%[Calendar.date(state.day),state.armies.size(),state.battles.size(),"暂停" if simulation.paused else "运行军事AI"]
 	if not historical_view:
 		var owners_changed := last_owner_revision != state.ownership_revision
 		var names_changed := false
@@ -641,7 +642,7 @@ func select_history(index: int) -> void:
 	if view==null: return_to_current(); return
 	historical_view=true
 	present_history_source(view)
-	details.text="历史：第%d天"%view.day
+	details.text="历史："+Calendar.date(view.day)
 
 func present_history_source(source: GameState) -> void:
 	overlay.state=source

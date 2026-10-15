@@ -1,5 +1,6 @@
 extends RefCounted
 const Diplomacy = preload("res://scripts/atlas/diplomacy_view.gd")
+const Calendar = preload("res://scripts/core/game_calendar.gd")
 ## Read-only presentation of our simulation. No forecasting, RNG or rule changes.
 static func row(label: String,value: Variant,kind: String = "",id: int = -1) -> Dictionary:
 	return {"label":label,"value":str(value),"kind":kind,"id":id}
@@ -116,7 +117,7 @@ static func execution_front_rows(state: GameState,front: CoalitionCampaignFront,
 			row("战线总兵力","%d支 · %d人"%[count[2],count[3]]),
 			row("集结地",city_name(state,front.staging_city_id),"city",settlement_id(state,front.staging_city_id)),
 			row("驻营地",city_name(state,front.camp_city_id),"city",settlement_id(state,front.camp_city_id)),
-			row("重试等待","至第%d天"%front.failed_until_day if front.failed_until_day>state.day else "无"),
+			row("重试等待","至"+Calendar.date(front.failed_until_day) if front.failed_until_day>state.day else "无"),
 	]
 	if front.mode==CoalitionCampaignFront.Mode.OFFENSE:
 		var counts: Array[int]=[0,0,0,0]
@@ -131,7 +132,7 @@ static func city(state: GameState,id: int) -> Dictionary:
 	if id<0 or id>=state.cities.size() or not state.cities[id].is_settlement(): return {}
 	var c := state.cities[id]; var owner := c.owner_nation; var center := state.administrative_center_of(id)
 	var color := state.nations[owner].color if owner>=0 and owner<state.nations.size() else Color.GRAY
-	var doc := {"title":c.name,"subtitle":"%s · 第%d天"%["州治" if center==id else "府",state.day],"color":color,"point":c.map_position*Vector2(2048,1024),"actions":[action("nation","所属国家","flag",owner),action("focus","设为中心","center"),action("order","行军至此","route",id),action("copy","复制信息","copy")],"sections":[]}
+	var doc := {"title":c.name,"subtitle":"%s · %s"%["州治" if center==id else "府",Calendar.date(state.day)],"color":color,"point":c.map_position*Vector2(2048,1024),"actions":[action("nation","所属国家","flag",owner),action("focus","设为中心","center"),action("order","行军至此","route",id),action("copy","复制信息","copy")],"sections":[]}
 	var capital := owner>=0 and owner<state.nations.size() and state.nations[owner].capital_city_id==id
 	doc.sections.append(section("概况",[row("实控国家",nation_name(state,owner),"nation",owner),row("法理国家",nation_name(state,state.recognized_owner_of(id)),"nation",state.recognized_owner_of(id)),row("隶属州治",city_name(state,center),"city",center),row("行政身份","州治" if center==id else "府"),row("首都","是" if capital else "否")]))
 	if center==id: doc.sections[0].rows.append(row("简称",c.short_name if not c.short_name.is_empty() else "未记录"))
@@ -139,7 +140,7 @@ static func city(state: GameState,id: int) -> Dictionary:
 	if c.has_warehouse: production.append(row("本城粮仓",c.food_storage))
 	doc.sections.append(section("资源与产出",production))
 	doc.sections.append(section("统治与秩序",[row("忠诚度","%.1f / 100"%c.loyalty),row("认同国家",nation_name(state,c.loyalty_target_nation),"nation",c.loyalty_target_nation),row("忠诚趋势","%+.2f"%c.loyalty_trend),row("动荡度","%.1f"%c.unrest),row("叛乱累积月数",c.rebellion_progress),row("忠诚变化原因",c.last_loyalty_reason if not c.last_loyalty_reason.is_empty() else "无"),row("占领责任方",nation_name(state,c.occupation_sponsor_nation),"nation",c.occupation_sponsor_nation)]))
-	var military := [row("守军人数",c.garrison_manpower),row("守军容量",state.city_garrison_capacity(id)),row("守军供给率","%.0f%%"%(c.garrison_supply_ratio*100)),row("战时状态","战时" if c.at_war else "和平"),row("战争减产截止","第%d天"%c.war_disruption_until_day if c.war_disruption_until_day>state.day else "无")]
+	var military := [row("守军人数",c.garrison_manpower),row("守军容量",state.city_garrison_capacity(id)),row("守军供给率","%.0f%%"%(c.garrison_supply_ratio*100)),row("战时状态","战时" if c.at_war else "和平"),row("战争减产截止",Calendar.date(c.war_disruption_until_day) if c.war_disruption_until_day>state.day else "无")]
 	for unit in state.armies:
 		if unit.size>0 and not unit.on_edge and unit.location_city==id: military.append(row("军队%d"%unit.id,"%d人"%unit.size,"army",unit.id))
 	doc.sections.append(section("军事",military))
@@ -170,10 +171,10 @@ static func recorded_ruler_rows(state: GameState,id: int) -> Array:
 	rows.append(row("君主特质","、".join(traits) if not traits.is_empty() else "无附加特质"))
 	for trait_id in n.ruler_traits:
 		rows.append(row("特质 · "+RulerProfile.trait_name(trait_id),RulerProfile.trait_description(trait_id)))
-	rows.append(row("就任日期","第%d天"%n.ruler_started_day))
+	rows.append(row("就任日期",Calendar.date(n.ruler_started_day)))
 	if n.alive:
 		var tenure := maxi(0,state.day-n.ruler_started_day)
-		rows.append(row("已在位","%d天（%.1f年）"%[tenure,float(tenure)/RulerProfile.DAYS_PER_YEAR]))
+		rows.append(row("已在位",Calendar.duration(tenure)))
 	var person := PrincePolitics.person(state,id,n.ruler_person_id)
 	rows.append(row("继承来源",{"crown":"太子","direct":"直系","collateral":"旁系宗室","remote":"远支"}.get(str(person.get("accession_source","")),"未记录")))
 	var heir := PrincePolitics.person(state,id,n.crown_prince_person_id)
@@ -196,7 +197,7 @@ static func nation(state: GameState,id: int) -> Dictionary:
 		if c>=0 and c<state.cities.size() and state.cities[c].owner_nation==id: stock += state.cities[c].food_storage
 	var capital := n.capital_city_id
 	var point := state.cities[capital].map_position*Vector2(2048,1024) if capital>=0 and capital<state.cities.size() else Vector2(1024,512)
-	var doc := {"title":nation_name(state,id),"subtitle":"%s · 第%d天"%["帝国" if n.state_level>0 else "国家",state.day],"color":n.color,"point":point,"actions":[action("city","查看首都","city",capital),action("focus","设为中心","center"),action("player","操控此国","flag",id),action("declare","对其宣战","war",id),action("family","家族树","flag",id)],"sections":[]}
+	var doc := {"title":nation_name(state,id),"subtitle":"%s · %s"%["帝国" if n.state_level>0 else "国家",Calendar.date(state.day)],"color":n.color,"point":point,"actions":[action("city","查看首都","city",capital),action("focus","设为中心","center"),action("player","操控此国","flag",id),action("declare","对其宣战","war",id),action("family","家族树","flag",id)],"sections":[]}
 	doc["politics_recorded"] = state.has_meta("historical_prince_reports")
 	if doc.politics_recorded: doc.sections.append(section("君主信息",recorded_ruler_rows(state,id)))
 	var traits: Array[String] = []
@@ -208,7 +209,7 @@ static func nation(state: GameState,id: int) -> Dictionary:
 	var crown := PrincePolitics.person(state,id,n.crown_prince_person_id)
 	var politics := [row("继承人",crown.get("name","未记录"),"person",n.crown_prince_person_id),
 		row("竞争状态",prince_report(state,id).get("status","未记录")),
-		row("帝国晋升",("第%d天"%n.empire_recognized_day) if n.empire_recognized_day>=0 else "尚未晋升"),
+		row("帝国晋升",Calendar.date(n.empire_recognized_day) if n.empire_recognized_day>=0 else "尚未晋升"),
 		row("晋升条件","和平宗藩体系完成一个贸易区域的法理与实控整合"),
 		row("月结爵位人数","一字王%d · 郡王%d · 国公%d · 无爵%d"%[n.last_royal_title_counts[3],n.last_royal_title_counts[2],n.last_royal_title_counts[1],n.last_royal_title_counts[0]]),row("俸禄占税收","%.2f%%"%(n.last_royal_expense_basis_points/100.)),
 		row("本君主继承来源",{"crown":"太子","direct":"直系","collateral":"旁系宗室","remote":"远支"}.get(str(PrincePolitics.person(state,id,n.ruler_person_id).get("accession_source","")),"未记录"))]
@@ -224,14 +225,14 @@ static func nation(state: GameState,id: int) -> Dictionary:
 	for index in range(state.chronicle_events.size()-1,-1,-1):
 		var event: Dictionary=state.chronicle_events[index]
 		if event.get("kind","")=="succession" and event.get("actor_ids",[]).has(id):
-			politics.append(row("最近夺嫡结果",event.text)); break
+			politics.append(row("最近夺嫡结果",Calendar.event_text(event))); break
 	doc.sections.append(section("继承与王爵",politics))
 	doc.sections.append(section("州战役",campaign_rows(state,id)))
 	var target := RegionalStrategy.target_region(state,id)
 	var integration := RegionalStrategy.integration_report(state,id,target)
 	var ruler_section := section("君主与经营区域",[
 		row("君主类型",RulerProfile.archetype_name(n.ruler_archetype)),row("特质","、".join(traits) if not traits.is_empty() else "无"),
-		row("贸易政策",RulerProfile.trade_policy_name(n.trade_policy)),row("就任日期","第%d天"%n.ruler_started_day),
+		row("贸易政策",RulerProfile.trade_policy_name(n.trade_policy)),row("就任日期",Calendar.date(n.ruler_started_day)),
 		row("经营区域",str(target+1) if target>=0 else "无"),row("区域锚点",city_name(state,n.strategic_region_anchor_city_id),"city",n.strategic_region_anchor_city_id),
 		row("区域整合","%d / %d 治所"%[integration.integrated,integration.total]),
 		row("主动扩张", "允许在经营区域内选择目标" if RulerProfile.offensive_allowed(n) else "仅允许收复或内战目标")])
@@ -271,14 +272,14 @@ static func army(state: GameState,id: int) -> Dictionary:
 			row("战线",binding_name(unit.campaign_front_id,"未绑定")),
 			row("战斗",binding_name(unit.battle_id,"未交战"),"battle",unit.battle_id),
 			row("命令原因",unit.ai_order_reason if not unit.ai_order_reason.is_empty() else "无")]
-		return {"title":"军队%d"%id,"subtitle":"%s · 第%d天"%[nation_name(state,owner),state.day],"color":color,"point":point,
+		return {"title":"军队%d"%id,"subtitle":"%s · %s"%[nation_name(state,owner),Calendar.date(state.day)],"color":color,"point":point,
 			"actions":[action("nation","所属国家","flag",owner),action("focus","设为中心","center"),action("select_army","选中军队","war",id),action("copy","复制信息","copy")],
 			"sections":[section("兵力与补给",strength),section("部署与行动",deployment)]}
 	return {}
 static func road(state: GameState,id: int) -> Dictionary:
 	if id<0 or id>=state.edges.size(): return {}
 	var e := state.edges[id]; var a := state.cities[e.city_a].map_position; var b := state.cities[e.city_b].map_position
-	return {"title":"%s — %s"%[city_name(state,e.city_a),city_name(state,e.city_b)],"subtitle":"道路 · 第%d天"%state.day,"color":Color(.43,.32,.21),"point":e.map_position_at(.5,a,b,2.)*Vector2(2048,1024),"actions":[action("focus","设为中心","center"),action("copy","复制信息","copy")],"sections":[section("道路",[row("端点A",city_name(state,e.city_a),"city",e.city_a if not state.cities[e.city_a].is_traffic else -1),row("端点B",city_name(state,e.city_b),"city",e.city_b if not state.cities[e.city_b].is_traffic else -1),row("控制辖区",city_name(state,e.control_city_id),"city",e.control_city_id),row("长度","%.1f 公里"%(e.distance_units()*250)),row("道路容量",e.max_manpower),row("当前通行军队",e.passing_count),row("危险系数","%.2f"%e.danger),row("行军时间倍率","%.2f"%e.travel_time_multiplier),row("补给损耗倍率","%.2f"%e.supply_loss_multiplier)])]}
+	return {"title":"%s — %s"%[city_name(state,e.city_a),city_name(state,e.city_b)],"subtitle":"道路 · "+Calendar.date(state.day),"color":Color(.43,.32,.21),"point":e.map_position_at(.5,a,b,2.)*Vector2(2048,1024),"actions":[action("focus","设为中心","center"),action("copy","复制信息","copy")],"sections":[section("道路",[row("端点A",city_name(state,e.city_a),"city",e.city_a if not state.cities[e.city_a].is_traffic else -1),row("端点B",city_name(state,e.city_b),"city",e.city_b if not state.cities[e.city_b].is_traffic else -1),row("控制辖区",city_name(state,e.control_city_id),"city",e.control_city_id),row("长度","%.1f 公里"%(e.distance_units()*250)),row("道路容量",e.max_manpower),row("当前通行军队",e.passing_count),row("危险系数","%.2f"%e.danger),row("行军时间倍率","%.2f"%e.travel_time_multiplier),row("补给损耗倍率","%.2f"%e.supply_loss_multiplier)])]}
 
 static func historical(document: Dictionary,kind: String) -> Dictionary:
 	# PoliticalHistory freezes ownership, rulers, diplomacy and layout. Its view

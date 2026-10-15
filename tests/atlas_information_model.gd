@@ -18,6 +18,7 @@ func _initialize():
 		printerr("ATLAS_INFO_FAIL structured city/nation information is absent"); quit(1); return
 	var model = load("res://scripts/atlas/information_model.gd")
 	var state := GameState.new()
+	state.day=12684
 	for i in range(2):
 		var nation := Nation.new(); nation.id=i; nation.name="国%d"%i; nation.capital_city_id=i*2; nation.warehouse_city_ids=[i*2]; state.nations.append(nation)
 	for i in range(4):
@@ -30,10 +31,12 @@ func _initialize():
 	var army := Army.new(); army.id=9; army.owner_nation=0; army.location_city=1; army.size=321; state.armies.append(army)
 	var random_state: int = state.rng.state
 	var city: Dictionary = model.city(state,1)
+	check(city.subtitle=="府 · 36年85天","city card shows a calendar date")
 	check(city.title=="城1" and value(city,"月人口产出")=="123","city reports actual production, not fictitious population")
 	check(value(city,"隶属州治")=="城0","fixed administrative center is linked")
 	check(model.city(state,3).is_empty(),"traffic nodes are not presented as cities")
 	var nation: Dictionary = model.nation(state,0)
+	check(nation.subtitle=="国家 · 36年85天" and value(nation,"就任日期")=="1年1天","country and accession dates use the same calendar")
 	check(value(nation,"控制治所")=="2","country counts exclude traffic nodes")
 	check(value(nation,"粮仓库存")=="456","food comes from warehouse truth, not stale derived cache")
 	check(value(nation,"野战兵力")=="321","live troops use the actual army records")

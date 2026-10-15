@@ -1,5 +1,6 @@
 class_name DiplomacyAI
 extends RefCounted
+const Calendar = preload("res://scripts/core/game_calendar.gd")
 ## 无训练外交 Utility AI。只生成双边候选，不直接修改 GameState。
 
 enum Action {
@@ -1906,7 +1907,7 @@ static func war_desire(
 		elif state.is_allied(nation_id, target_id):
 			reason = "当前为盟国"
 		elif state.day < state.truce_until(nation_id, target_id):
-			reason = "停战至第%d日" % state.truce_until(nation_id, target_id)
+			reason = "停战至%s" % Calendar.date(state.truce_until(nation_id, target_id))
 		return _reject_war_desire(evaluation_cache, cache_key, reason)
 	if _cached_war_count(state, nation_id, evaluation_cache) >= MAX_CONCURRENT_WARS:
 		return _reject_war_desire(evaluation_cache, cache_key, "达到%d场战争上限" % MAX_CONCURRENT_WARS)
@@ -2122,16 +2123,16 @@ static func war_desire_debug_lines(state: GameState, nation_id: int) -> Array[St
 	if nation_id < 0 or nation_id >= state.nations.size():
 		return lines
 	var nation := state.nations[nation_id]
-	lines.append("第%d日当前状态重算 · 阈值 %.2f · 非上次外交批次回放" % [state.day, WAR_DECLARE_SCORE])
+	lines.append("%s当前状态重算 · 阈值 %.2f · 非上次外交批次回放" % [Calendar.date(state.day), WAR_DECLARE_SCORE])
 	lines.append("基础意愿 = 收益合计 × 君主倍率 + 侵略性修正 − 态度×0.35 − 战争数×0.75；正值再乘帝国威慑系数")
 	if not nation.alive or nation.succession_identity:
 		return ["该国家已灭亡或为继承权临时身份，不评估普通备战"]
 	if state.is_vassal(nation_id):
 		lines.append("国家行动门禁：藩国不自主发起普通备战，以下仅为双边意愿")
 	if nation.war_preparation_target_nation >= 0 and nation.war_preparation_target_nation < state.nations.size():
-		lines.append("当前已对%s备战：第%d日开始；既有备战按实际集结资格推进，不重新要求意愿过线" % [state.nation_display_name(nation.war_preparation_target_nation), nation.war_preparation_started_day])
+		lines.append("当前已对%s备战：%s开始；既有备战按实际集结资格推进，不重新要求意愿过线" % [state.nation_display_name(nation.war_preparation_target_nation), Calendar.date(nation.war_preparation_started_day)])
 	if nation.war_preparation_cancelled_day >= 0 and state.day - nation.war_preparation_cancelled_day < WAR_PREPARATION_CANCEL_COOLDOWN_DAYS:
-		lines.append("国家行动门禁：取消备战冷却至第%d日" % (nation.war_preparation_cancelled_day + WAR_PREPARATION_CANCEL_COOLDOWN_DAYS))
+		lines.append("国家行动门禁：取消备战冷却至%s" % Calendar.date(nation.war_preparation_cancelled_day + WAR_PREPARATION_CANCEL_COOLDOWN_DAYS))
 	if nation.war_preparation_target_nation >= 0:
 		var center := nation.war_preparation_objective_center_city
 		var v := state.campaign_prewar_reinforcement_threat(nation_id, nation.war_preparation_target_nation, center)
@@ -4738,10 +4739,10 @@ static func _append_peace_action(
 		"bloc_b": bloc_b,
 		"score": float(assessment["combined_score"]) * 0.5,
 		"reason": (
-			"联盟战争持续%d天；集团%s：%s；集团%s：%s；"
+			"联盟战争持续%s；集团%s：%s；集团%s：%s；"
 			+ "集团态度%.2f/%.2f，整体意愿%.2f/%.2f，合计%.2f"
 		) % [
-			war_days,
+			Calendar.duration(war_days),
 			str(bloc_a),
 			reason_a,
 			str(bloc_b),
@@ -5450,9 +5451,9 @@ static func _collect_existing_war_preparation(
 		"objective_reason": nation.war_preparation_reason,
 		"mobilization_armies": mobilization_armies,
 		"reason": (
-			"完成%d天战争准备，目标城市%d方向已集结%d人，发出通牒，拒绝后宣战"
+			"完成%s战争准备，目标城市%d方向已集结%d人，发出通牒，拒绝后宣战"
 			% [
-				elapsed,
+				Calendar.duration(elapsed),
 				objective_city,
 				war_preparation_arrived_troops(
 					state, nation_id, evaluation_cache

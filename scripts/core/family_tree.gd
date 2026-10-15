@@ -1,5 +1,6 @@
 class_name FamilyTree
 extends RefCounted
+const Calendar = preload("res://scripts/core/game_calendar.gd")
 ## 简易王族谱系。国家只持有 tree/person 引用，共享谱保存在 GameState。
 
 
@@ -253,8 +254,8 @@ static func title_history_lines(member: Dictionary) -> Array[String]:
 	var result: Array[String] = []
 	var reasons := {"accession": "登基", "enfeoffment": "分封建国", "annexation": "并入他国", "death": "去世", "retitled": "改爵"}
 	for record in member.get("title_history", []):
-		result.append("%s · 来源%s（国%d） · 第%d天授爵 · %s" % [record.title, record.origin_nation_name, int(record.origin_nation_id), int(record.start_day),
-			"现有爵位" if int(record.get("end_day", -1)) < 0 else "第%d天因%s终止" % [int(record.end_day), reasons.get(str(record.end_reason), str(record.end_reason))]])
+		result.append("%s · 来源%s（国%d） · %s授爵 · %s" % [record.title, record.origin_nation_name, int(record.origin_nation_id), Calendar.date(int(record.start_day)),
+			"现有爵位" if int(record.get("end_day", -1)) < 0 else "%s因%s终止" % [Calendar.date(int(record.end_day)), reasons.get(str(record.end_reason), str(record.end_reason))]])
 	return result
 
 

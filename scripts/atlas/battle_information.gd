@@ -1,4 +1,5 @@
 extends RefCounted
+const Calendar = preload("res://scripts/core/game_calendar.gd")
 ## Read-only battle disclosure. Reuse Combat's pure allocation/stat helpers;
 ## never resolve a round, attach a guard, or generate opening dice for display.
 const Info = preload("res://scripts/atlas/information_model.gd")
@@ -138,8 +139,8 @@ static func document(state: GameState,id: int) -> Dictionary:
 		Info.row("基础展开宽度","%d 人"%Combat.combat_frontage(battle)),
 		Info.row("溃败士气阈值","%.2f"%Combat.SIDE_ROUT_THRESHOLD)]
 	if battle.city!=null: overview.append(Info.row("战场",battle.city.name,"city",Info.settlement_id(state,battle.city.id)))
-	if battle.holding_side in [1,2] and data.field: overview.append(Info.row("连续驻防","%s · %.0f天"%[labels[battle.holding_side-1],battle.holding_days]))
-	var doc: Dictionary={"title":"战斗%d"%id,"subtitle":"%s · %s · 第%d天"%[phase,status,state.day],"color":Color("c35e56"),"point":position(state,battle),
+	if battle.holding_side in [1,2] and data.field: overview.append(Info.row("连续驻防","%s · %s"%[labels[battle.holding_side-1],Calendar.duration(roundi(battle.holding_days))]))
+	var doc: Dictionary={"title":"战斗%d"%id,"subtitle":"%s · %s · %s"%[phase,status,Calendar.date(state.day)],"color":Color("c35e56"),"point":position(state,battle),
 		"notice":"左列为%s，右列为%s；士气只决定溃败，火力按当前前线与开场骰计算，均值按兵力加权。"%labels,
 		"preferred_width":560.,
 		"actions":[Info.action("focus","定位战场","center"),Info.action("copy","复制信息","copy")],

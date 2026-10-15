@@ -8,6 +8,14 @@ relations without rewinding the simulation.
 
 ## Behavior
 
+- All displayed absolute dates use `年/天`, with 360 days per year: simulation
+  day 0 is `1年1天`, day 359 is `1年360天`, and day 360 is `2年1天`.
+  This includes the live status, history slider, country/city/army/battle cards,
+  accession and title records, and diplomatic deadlines. Elapsed durations have
+  no date offset (`750` elapsed days is `2年30天`). `game_calendar.gd` owns this
+  presentation; simulation counters, snapshots, debug day fields and chronicle
+  records remain unchanged. Displayed chronicles derive the full date from the
+  event's recorded day and preserve its original names and outcome.
 - A separate bar centered along the bottom contains a permanent “历史发展” slider, previous
   and next snapshot buttons, the selected day, and “返回现在”. The slider supports
   keyboard navigation; each stop is a monthly snapshot, with a separate live stop
@@ -62,6 +70,11 @@ relations without rewinding the simulation.
 
 ## Verification
 
+- `game_calendar.gd` covers year boundaries, long dates, elapsed durations,
+  event immutability and cross-year title history. `atlas_history_timeline.gd`
+  checks independent live/history dates and layout at 1280/768 pixels; run with
+  `-- --calendar-capture` using a real renderer to save screenshots under
+  `.dbg/calendar/`.
 - Unit tests cover capture cadence, snapshot detachment, historical relations,
   and the absence of military state.
 - `political_history_rulers.gd` covers historical profile edits, real ruler

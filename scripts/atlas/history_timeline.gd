@@ -1,6 +1,7 @@
 extends VBoxContainer
 ## Monthly political snapshots plus a separate live stop; no simulation state is owned here.
 const Style = preload("res://scripts/atlas/information_theme.gd")
+const Calendar = preload("res://scripts/core/game_calendar.gd")
 var host
 var date := Label.new()
 var first_date := Label.new()
@@ -30,7 +31,7 @@ func setup(view) -> void:
 	next.pressed.connect(func(): host.select_history(int(host.history_control.value)+1))
 	current.text="返回现在"; current.pressed.connect(view.return_to_current); track.add_child(current)
 	var dates := HBoxContainer.new(); add_child(dates)
-	first_date.text="开局 · 第0天"; dates.add_child(first_date)
+	first_date.text="开局 · "+Calendar.date(0); dates.add_child(first_date)
 	date.size_flags_horizontal=Control.SIZE_EXPAND_FILL; date.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
 	date.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS; dates.add_child(date)
 	live_date.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT; dates.add_child(live_date)
@@ -50,9 +51,9 @@ func refresh() -> void:
 	next.disabled=not ready or index>=count
 	current.disabled=not ready or not host.history_session
 	if host.history_session:
-		date.text="第%d天 · %s"%[host.history.snapshot_day(index),"历史回看" if host.historical_view else "等待当日结算"]
+		date.text="%s · %s"%[Calendar.date(host.history.snapshot_day(index)),"历史回看" if host.historical_view else "等待当日结算"]
 		date.add_theme_color_override("font_color",Style.ACCENT)
 	else:
 		date.text="现在" if ready else "准备地图…"
 		date.add_theme_color_override("font_color",Style.MUTED)
-	live_date.text="现在 · 第%d天"%host.state.day if ready else "每30天记录"
+	live_date.text="现在 · "+Calendar.date(host.state.day) if ready else "每30天记录"
