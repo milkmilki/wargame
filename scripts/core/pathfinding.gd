@@ -853,7 +853,7 @@ static func nearest_supply_city(state: GameState, army: Army) -> Array:
 
 ## 返回全部可达本国/盟国粮仓，按运输损耗、势力局部物理序排序。
 static func supply_sources(state: GameState, army: Army) -> Array[Dictionary]:
-	if attack_supply_target(state, army) >= 0:
+	if supply_context_target(state, army) >= 0:
 		return supply_sources_from_network(state, army, build_supply_network(state, army.owner_nation))
 	var start := _origin_of(army)
 	if start < 0 or start >= state.cities.size():
@@ -981,9 +981,11 @@ static func supply_sources_from_network(
 	if start < 0 or start >= state.cities.size():
 		return []
 	var start_city := state.cities[start]
+	var field_defender := city_field_supply_city(state, army) >= 0
 	if (
 		not army.on_edge
 		and state.city_under_siege(start) and not state.succession_supply_city(start)
+		and not field_defender
 		and state.has_logistics_access(
 			army.owner_nation,
 			start_city.owner_nation
@@ -1059,6 +1061,10 @@ static func supply_sources_from_network(
 			"owner_nation": source["owner_nation"],
 			"loss": loss,
 		})
+	# Real field defenders first draw through the ordinary physical rear graph.
+	# If cut off, they may still spend actual food remaining in their own city.
+	if result.is_empty() and field_defender and start_city.food_storage > 0:
+		result.append({"city_id":start,"owner_nation":start_city.owner_nation,"loss":0.0})
 	# Equal-loss selection uses the same quantized mirror keys as global city
 	# ranks, but only ranks the candidate warehouses and only on an actual tie.
 	# Query-local data also avoids shared rank-cache churn in supply workers.
@@ -1078,8 +1084,25 @@ static func supply_sources_from_network(
 	return result
 
 
-## Only the actual terminal hostile target may extend a formation's supply.
-## City residents/relief keep their established siege isolation/rear rules.
+## Source caches must distinguish a city-field defender from an isolated city
+## resident at the same physical node. Neither case changes the shared rear field.
+static func supply_context_target(state: GameState, army: Army) -> int:
+	var target := attack_supply_target(state, army)
+	return target if target >= 0 else city_field_supply_city(state, army)
+
+
+static func city_field_supply_city(state: GameState, army: Army) -> int:
+	if army.is_city_garrison or army.size <= 0 or army.on_edge or army.state != Army.State.FIGHTING:
+		return -1
+	var battle := state.battle_by_id(army.battle_id)
+	if battle == null or battle.finished or battle.kind != Battle.Kind.SIEGE or battle.city == null:
+		return -1
+	if not battle.side_b_defends_city or not battle.side_b.has(army) or army.location_city != battle.city.id:
+		return -1
+	return battle.city.id if state.has_logistics_access(army.owner_nation,battle.city.owner_nation) else -1
+
+
+## Only the actual terminal hostile target may extend an attack corridor.
 static func attack_supply_target(state: GameState, army: Army) -> int:
 	if state.atlas_layout.is_empty(): return -1
 	var goal := -1

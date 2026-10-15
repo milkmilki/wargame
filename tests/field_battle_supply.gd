@@ -1,6 +1,6 @@
 extends SceneTree
 ## A city's defenders may still use an accessible rear supply anchor. Actual
-## formations stationed inside the besieged city retain the local food clock.
+## formations cut off inside the city fall back to actual local food.
 var checks := 0
 var failures: Array[String] = []
 
@@ -151,7 +151,7 @@ func test_reachable(position: String, local_food: int, sliced: bool) -> PackedBy
 
 
 func test_isolated(local_food: int, sliced: bool) -> PackedByteArray:
-	var data := fixture("inside", local_food)
+	var data := fixture("inside", local_food, true)
 	var state: GameState = data.state
 	var sim: Simulation = data.sim
 	var army: Army = data.army
@@ -192,7 +192,7 @@ func test_cut_route(sliced: bool) -> PackedByteArray:
 
 
 func run() -> void:
-	for position in ["arrived", "approaching"]:
+	for position in ["inside", "arrived", "approaching"]:
 		for food in [0, 100]:
 			var sync := await test_reachable(position, food, false)
 			var sliced := await test_reachable(position, food, true)

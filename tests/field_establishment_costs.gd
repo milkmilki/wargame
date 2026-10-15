@@ -114,16 +114,23 @@ func _siege() -> void:
 			state.battles.append(battle)
 			var sim := Simulation.new(); sim.setup(state); var before := battle.city.food_storage
 			for _day in range(30):
-				sim._build_supply_plan_for_army(army, [0, 0, 0] as Array[int])
+				sim._resolve_supply()
 				sim._drain_siege_food()
 			var expected := 30 if garrison else 68
-			check(before - battle.city.food_storage == expected, "besieged field formation pays full local maintenance; virtual city clock stays unchanged")
+			check(before - battle.city.food_storage == expected, "city-field formation pays full establishment through actual supply settlement; virtual city clock stays unchanged")
 			if not garrison:
-				battle.city.food_storage = 0
+				# Exhaust every accessible stock: real field troops follow normal
+				# shortage accounting rather than the virtual guard's food clock.
+				for city in state.cities:
+					if city.owner_nation == army.owner_nation:
+						state.change_city_food_storage(city.id, -city.food_storage)
+				state.day += 1
+				sim._resolve_supply()
+				check(army.supply_ratio == 0.0 and army.starving, "empty accessible stocks leave city-field troops genuinely unsupplied")
 				var debt := army.supply_food_debt
-				var demand := [0, 0, 0] as Array[int]
-				check(sim._build_supply_plan_for_army(army, demand).is_empty(), "empty siege remains isolated instead of adding an outside ration")
-				check(demand[0] == 0 and army.supply_food_debt == debt, "empty siege does not double-count demand or fractional debt")
+				var demand := state.nations[0].last_food_demand
+				sim._drain_siege_food()
+				check(demand > 0 and state.nations[0].last_food_demand == demand and army.supply_food_debt == debt, "siege clock does not double-count field shortage demand or fractional debt")
 			sim.free()
 
 func _actual_refill() -> void:

@@ -46,9 +46,10 @@ the defending side must not replace that result with the target city's stock.
 An army on a road likewise keeps ordinary supply. A closed rear route still
 causes a real shortage.
 
-Virtual city garrisons and formations already stationed in the besieged city
-keep local isolation. Their established ration costs and the existing fixed
-city siege clock remain unchanged. One shared predicate now governs the daily
+The 2026-10-13 fix still kept virtual city garrisons and formations already
+stationed in the besieged city locally isolated. The resident field-formation
+case is corrected by the 2026-10-15 follow-up below. Established ration costs
+and the existing fixed city siege clock remain unchanged. One shared predicate governs the daily
 supply-plan exception, worker preparation, shortage-pressure exception and
 the siege clock's local withdrawals/status updates, preventing both a later
 false-zero overwrite and duplicate field-formation food charges.
@@ -80,7 +81,8 @@ district to the existing rear warehouse field. The corridor traverses traffic
 junctions and terminates at friendly settlements; it cannot pass an uncaptured
 enemy settlement, another foreign district, enemy road presence or a closed
 road. A field encounter keeps its committed attack destination; arrived
-besiegers use the battle's target. Resident defenders retain local isolation.
+besiegers use the battle's target. Resident field defenders follow the
+2026-10-15 rule below rather than automatic local isolation.
 Real warehouse withdrawals and the existing distance-consumption formula
 remain the source of the supply ratio.
 
@@ -96,8 +98,8 @@ The user's PID34836 log identified seed1, 40 initial nations, Eurasia mask
 pre-fix source reproduced day510 battle72 at Changyin: attacking formations
 19/130/126 each had 11,658 soldiers, supply0 and a rear anchor at junction513;
 Badong warehouse128 still held 29,673 food. Applying the fixed daily settlement
-to that reproduced state gives all three supply1 while the city's empty local
-stock and resident defender remain at supply0. The original log contains
+to that reproduced state gave all three supply1 while the city's empty local
+stock and the then-isolated resident defender remained at supply0. The original log contains
 periodic summaries, not a restorable runtime save; this is a reproduced case,
 not a claim of byte-identical recovery of every user action.
 
@@ -112,6 +114,55 @@ were rerun and passed, including compilation and the shared suite (502/0).
 The final seed1 Eurasia run reached day565 with no territory, road occupancy,
 army/battle binding or resource-stock audit failures (PID30840). These runs
 validate the corrected rules; their war outcomes need not match the old log.
+
+## Resident City-Field Supply (2026-10-15)
+
+A city battle remains a `SIEGE` object while real defending field formations
+fight under field-combat rules. The previous local-food predicate incorrectly
+treated every formation physically stationed at that city as an isolated
+guard. Most non-warehouse state capitals have no local food stock, so this
+skipped reachable rear supply and repeatedly reset the defender's supply to
+zero. The resulting zero fire/defense and starvation were real simulation
+effects, not just an incorrect detail label.
+
+Resident field defenders now use the ordinary accessible rear warehouse
+network. If no rear source is reachable, they may consume the actual remaining
+food in their friendly battle city; absent both sources, normal field shortage
+still applies. The daily supply settlement charges the full establishment
+once. The fixed city food clock continues separately for virtual defense and
+cannot charge real field rations again or overwrite their supply result.
+Ordinary besieged residents outside the battle retain their isolation rule.
+The global siege flag, hostile attack corridors and warehouse distance fields
+are unchanged. Source caches and worker aliases include the field battle
+context, preventing ordinary residents' empty sources from suppressing a
+newly participating field formation's supply. No snapshot/API change is needed
+(runtime schema30, extension API7).
+
+The user's `run-2026-10-15T03-49-31-29600-64515512` log identified baseline
+`5b0b1fc`, seed1, 40 countries and the Eurasia mask (20–55 north, -15–145 east).
+Rebuilding its initial map reproduced six affected formations by day175,
+including Tuole, Yuncheng and Zhengling. At day134, Tuole's defending army178
+had zero supply although its unobstructed rear route reached warehouse117
+with 22,265 food. Restoring that same frozen state and comparing the old
+local-only predicate with the corrected predicate changes supply0 to supply1,
+effective fire0 to 93,259.287 and defense0 to 16.767. The warehouse pays one
+additional actual ration; local stock remains zero and the random stream is
+unchanged. This comparison isolates the faulty rule; it does not claim future
+war outcomes remain unchanged.
+
+`city_field_defender_supply` passes 209 checks, covering same-country/allied
+resident field troops, rear/local stock, real road cuts, empty warehouses,
+virtual guards, self-supply, role/cache transitions, displayed supply and
+combat attributes, no duplicate food charges, random-stream preservation and
+sync/frame byte equivalence. `field_battle_supply` now passes 175 checks with
+resident, arrived and approaching defenders; its isolated fixture explicitly
+cuts the real rear route. `field_establishment_costs` retains all 34 checks
+using complete supply withdrawals rather than discarded supply plans.
+Selected supply/access/war regressions include native/GDScript equivalence,
+365-day sync/frame equivalence, positive field victory and the real original
+defender counterattacking and annexing the declarer. The shared suite also
+passes 504 checks. Headless timings are correctness evidence, not GUI or
+performance measurements.
 
 ## Food Qualification And Cash Reporting
 
