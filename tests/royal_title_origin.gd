@@ -8,6 +8,7 @@ var failures: Array[String] = []
 func _init() -> void:
 	_test_heir_identity_and_accession()
 	_test_enfeoffment_and_return()
+	_test_recalled_branch_boundaries()
 	_test_migrated_household_lifetime()
 	_test_twice_annexed_archive_household()
 	_test_refounded_domestic_grandchildren()
@@ -155,9 +156,42 @@ func _test_enfeoffment_and_return() -> void:
 	check(state.revoke_vassal(subject), "real revocation rejoins household")
 	for id in migrated:
 		check(int(members[id].get("title_payer_id", -1)) == 0, "return updates affiliation to receiving country")
-		check(int(members[id].get("title_rank", 0)) == 0 and RoyalTitles.effective_rank(state, members[id]) == 0, "return does not restore former foreign title")
+		check(RoyalTitles.effective_rank(state,members[id])==(RoyalTitles.PRINCE if id==candidate else RoyalTitles.COMMANDERY), "peaceful recall grants a new domestic prince branch instead of restoring a foreign title")
 	check_ended_title(members[candidate], 0, title, "enfeoffment")
-	check(int(RoyalTitles.report(state, 0).counts[3]) == princes_before - 1, "return does not restore a princely stipend in mother country's census")
+	check(int(RoyalTitles.report(state, 0).counts[3]) == princes_before, "the new recalled prince is counted once in the receiving country's census")
+
+func _test_recalled_branch_boundaries() -> void:
+	var state := fixture()
+	var members: Dictionary=FamilyTree.tree_for_nation(state,0).members
+	var subject := state.enfeoff(0,[2,3,4] as Array[int])
+	var sibling := state.enfeoff(0,[5] as Array[int])
+	check(subject>=0 and sibling>=0,"recall boundary fixture has two same-lineage fiefs")
+	if subject<0 or sibling<0: return
+	FamilyFixture.ensure_candidates(state,subject,3)
+	var grand_fief := state.enfeoff(subject,[3] as Array[int])
+	check(grand_fief>=0,"recall boundary fixture contains an independent lower fief")
+	if grand_fief<0: return
+	var king := state.nations[subject].ruler_person_id
+	var domestic := -1
+	for id in state.nations[subject].prince_person_ids:
+		if PrincePolitics.eligible_for_nation(members[id],subject): domestic=id; break
+	check(domestic>=0,"recall fixture has a descendant to return to court in advance")
+	if domestic<0: return
+	# This descendant already belongs to the overlord; the later recall must leave his grant alone.
+	RoyalTitles._move_member(state,members[domestic],0,"annexation")
+	RoyalTitles._grant(state,members[domestic],RoyalTitles.PRINCE,0,domestic,false)
+	state.nations[subject].prince_person_ids.erase(domestic)
+	PrincePolitics.set_heir(state,subject,-1)
+	var protected_people := {}
+	for id in members:
+		if int(members[id].get("title_payer_id",-1)) in [sibling,grand_fief] or id==domestic:
+			protected_people[id]=members[id].duplicate(true)
+	check(state.revoke_vassal(subject),"real recall commits with shared-tree relatives outside the returning household")
+	check(RoyalTitles.effective_rank(state,members[king])==RoyalTitles.PRINCE,"actual returning king receives the new grant")
+	check(state.overlord_of(grand_fief)==0 and state.nations[grand_fief].alive,"lower fief reparents without losing its ruler")
+	for id in protected_people:
+		check(members[id]==protected_people[id],"recall preserves each non-returning person's office, branch and title history")
+	check(NativeSnapshotBuilder.succession_validation_error(NativeSnapshotBuilder.build(state)).is_empty(),"mixed domestic and foreign branches remain snapshot-valid")
 
 func _test_shared_tree_boundaries_and_new_founder() -> void:
 	var state := fixture()

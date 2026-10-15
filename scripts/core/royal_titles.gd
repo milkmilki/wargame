@@ -138,7 +138,7 @@ static func reconcile(state: GameState) -> void:
 
 static func grant_generation(state: GameState, nation_id: int) -> void:
 	var nation := state.nations[nation_id]
-	if not nation.royal_titles_initialized or nation.succession_identity:
+	if not nation.royal_titles_initialized or nation.succession_identity or nation.state_level!=EmpireStatus.EMPIRE:
 		return
 	var rank := PRINCE if nation.ruler_person_id == nation.empire_founder_person_id else COMMANDERY
 	for id in nation.prince_person_ids:
@@ -153,6 +153,8 @@ static func grant_generation(state: GameState, nation_id: int) -> void:
 		set_member(state, member, "title_grant_rank", rank)
 
 static func _generate_children(state: GameState, member: Dictionary) -> void:
+	if effective_rank(state,member)<=COMMON or not bool(member.get("title_adult",false)):
+		return
 	if bool(member.get("title_children_generated", false)):
 		set_member(state, member, "children_initialized", true)
 		return
@@ -374,6 +376,34 @@ static func annex(state: GameState, absorber: int, absorbed_ids: Dictionary) -> 
 			_move_member(state, member, absorber, "annexation")
 			set_member(state, member, "current_title", NAMES[COMMON])
 		state.family_revision += 1
+
+## Peacefully recalled same-lineage rulers receive a new grant after the land commit.
+## Foreign annexations retain their independent, untitled household archives.
+static func recall_vassal(state: GameState, overlord: int, subject: int, returning_people: Dictionary) -> void:
+	var nation := state.nations[overlord]
+	var former := state.nations[subject]
+	if not nation.alive or former.absorbed_into_nation_id!=overlord or nation.family_tree_id<0 or nation.family_tree_id!=former.family_tree_id:
+		return
+	var members: Dictionary=FamilyTree.tree_for_nation(state,overlord).members
+	var root := former.ruler_person_id
+	if not members.has(root) or not bool(members[root].get("alive",true)):
+		return
+	# Ordinary countries may maintain this specific branch without imperial son grants.
+	if not nation.royal_titles_initialized:
+		nation.royal_titles_initialized=true
+		state.family_revision+=1
+	var pending: Array[Vector2i]=[Vector2i(root,PRINCE)]
+	while not pending.is_empty():
+		var entry: Vector2i=pending.pop_back()
+		var member: Dictionary=members[entry.x]
+		if not returning_people.has(entry.x) or int(member.get("title_payer_id",-1))!=overlord or int(member.get("office_nation_id",-1))>=0 or int(member.get("enfeoffed_nation_id",-1))>=0 or PrincePolitics._busy(state,overlord,entry.x):
+			continue
+		for child in children(members,entry.x):
+			pending.append(Vector2i(child,maxi(COMMON,entry.y-1)))
+		if bool(member.get("alive",true)):
+			_grant(state,member,entry.y,overlord,root,entry.x==root or bool(member.get("title_adult",false)))
+	# Reuse all existing children and frozen zero-child results; never roll a second family.
+	reconcile(state)
 
 static func summary(state: GameState, nation_id: int) -> String:
 	var entry := report(state, nation_id)

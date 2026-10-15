@@ -8,6 +8,7 @@ var checks := 0
 
 func _init() -> void:
 	_test_enfeoff_revoke()
+	_test_ordinary_revoke()
 	_test_late_recognition()
 	_test_fief_becomes_empire()
 	_test_foreign_annex(false)
@@ -107,17 +108,25 @@ func _test_enfeoff_revoke() -> void:
 	var old_crown := state.nations[subject].crown_prince_person_id
 	check(PrincePolitics.accede(state, subject), "actual fief succession")
 	check(state.nations[subject].ruler_person_id == old_crown and int(members[old_crown].get("title_rank", 0)) == 0, "fief successor inherits actual office without old virtual title")
+	FamilyFixture.ensure_candidates(state, subject, 2)
+	var returning_children := RoyalTitles.children(members,old_crown)
+	state.day=30
 	var blood := {}
 	for id in members:
 		blood[id] = int(members[id].parent_id)
 	check(state.revoke_vassal(subject), "real revoke transaction succeeds")
-	check(int(members[old_crown].get("title_rank", 0)) == 0 and members[old_crown].current_title == "无爵", "revocation never restores terminated title")
+	check(RoyalTitles.effective_rank(state,members[old_crown])==RoyalTitles.PRINCE,"peaceful revocation grants the actual living former ruler a princely title")
+	check(int(members[old_crown].title_branch_id)==old_crown and members[old_crown].title_history.back().start_day==30,"the recalled ruler starts a new domestic title branch at the actual return date")
+	for child in returning_children:
+		check(RoyalTitles.effective_rank(state,members[child])==RoyalTitles.COMMANDERY and int(members[child].title_branch_id)==old_crown,"recalled prince's existing children join the ordinary declining-rank branch")
 	check(state.nations[subject].absorbed_into_nation_id == 0, "annex archive records actual destination")
 	check(TitleAudit.inspect(state).is_empty(), "revoke preserves cohorts of already reproducing families")
 	for id in blood:
 		check(int(members[id].parent_id) == int(blood[id]), "annex preserves every blood edge")
 	check(Audit.inspect(state).errors.is_empty(), "fief transitions preserve army political attribution")
 	var before := state.family_trees.duplicate(true)
+	check(not state.revoke_vassal(subject) and state.family_trees==before,"repeated revocation cannot duplicate titles or descendants")
+	check(NativeSnapshotBuilder.succession_validation_error(NativeSnapshotBuilder.build(state)).is_empty(),"recalled title and child references remain snapshot-valid")
 	check(not state.annex_nations(0, [0]), "invalid annex rejected")
 	check(state.family_trees == before, "failed annex has no genealogy effects")
 	var adults: Array[int] = []
@@ -125,10 +134,35 @@ func _test_enfeoff_revoke() -> void:
 		if members[id].get("title_payer_id", -1) == 0 and members[id].get("title_adult", false) and members[id].get("alive", true) and int(members[id].get("office_nation_id", -1)) < 0:
 			adults.append(int(id))
 	check(PrincePolitics.accede(state, 0), "overlord accession after withdrawal")
+	check(RoyalTitles.effective_rank(state,members[returning_children[0]])==RoyalTitles.PRINCE,"the recalled prince's eldest living child inherits his full rank through normal accession")
+	check(members[returning_children[0]].current_title==members[old_crown].title_history.back().title,"princely succession preserves the exact new designation")
 	var protected := [state.nations[0].ruler_person_id] + RoyalTitles.children(members, state.nations[0].ruler_person_id)
 	for id in adults:
 		if not protected.has(id):
 			check(not members[id].alive, "returned adult cohorts die at next paying ruler succession")
+
+func _test_ordinary_revoke() -> void:
+	var state := fixture()
+	state.region_ids.fill(-1)
+	var nation := state.nations[0]
+	check(nation.state_level==EmpireStatus.COUNTRY and not nation.royal_titles_initialized,"ordinary recall starts without imperial recognition")
+	var subject := enfeoff(state,0)
+	check(subject>=0,"ordinary country creates a real same-family fief")
+	if subject<0: return
+	var king := state.nations[subject].ruler_person_id
+	FamilyFixture.ensure_candidates(state,subject,2)
+	var members: Dictionary=FamilyTree.tree_for_nation(state,0).members
+	var children := RoyalTitles.children(members,king)
+	var rng := state.rng.state
+	check(state.revoke_vassal(subject),"ordinary overlord peacefully recalls its fief")
+	check(nation.state_level==EmpireStatus.COUNTRY and nation.empire_founder_person_id<0,"a recall grant cannot promote an ordinary overlord or invent a founder")
+	check(RoyalTitles.effective_rank(state,members[king])==RoyalTitles.PRINCE,"ordinary country can support the specifically recalled prince")
+	for id in nation.prince_person_ids:
+		if id!=king: check(int(members[id].get("title_rank",0))==0,"an ordinary king's other children receive no automatic imperial grants")
+	check(state.rng.state==rng,"recall grants and existing birth results do not consume simulation randomness")
+	check(NativeSnapshotBuilder.succession_validation_error(NativeSnapshotBuilder.build(state)).is_empty(),"ordinary recall has a valid domestic title institution")
+	check(PrincePolitics.accede(state,0),"ordinary overlord uses normal succession after recalling a prince")
+	check(RoyalTitles.effective_rank(state,members[children[0]])==RoyalTitles.PRINCE,"ordinary recalled branch inherits through the same title lifecycle")
 
 func _test_fief_becomes_empire() -> void:
 	var state := fixture()

@@ -46,10 +46,24 @@ static func ensure_generation(state: GameState, nation_id: int) -> void:
 	RoyalTitles.grant_generation(state, nation_id)
 	state.family_revision += 1
 
+static func can_have_children(state: GameState, nation_id: int, parent_id: int) -> bool:
+	if state.has_meta("historical_prince_reports") or nation_id<0 or nation_id>=state.nations.size():
+		return false
+	var nation := state.nations[nation_id]
+	var parent := person(state,nation_id,parent_id)
+	if not nation.alive or nation.succession_identity or parent.is_empty() or not bool(parent.get("alive",true)):
+		return false
+	if parent_id==nation.ruler_person_id:
+		return true
+	return int(parent.get("title_payer_id",-1))==nation_id and bool(parent.get("title_adult",false)) and RoyalTitles.effective_rank(state,parent)>RoyalTitles.COMMON
+
 static func initialize_children(state: GameState, nation_id: int, parent_id: int, family_salt: int = 0) -> Array[int]:
 	var members: Dictionary = FamilyTree.tree_for_nation(state, nation_id).members
-	var parent: Dictionary = members[parent_id]
 	var existing := RoyalTitles.children(members, parent_id)
+	# A blocked untitled/waiting family may later inherit a title; do not seal its birth result.
+	if not can_have_children(state,nation_id,parent_id):
+		return existing
+	var parent: Dictionary = members[parent_id]
 	if bool(parent.get("children_initialized", false)):
 		return existing
 	RoyalTitles.set_member(state, parent, "children_initialized", true)
@@ -144,7 +158,7 @@ static func _successor_candidate(state: GameState, nation_id: int, member: Dicti
 	if office >= 0 or fief >= 0:
 		return office == fief and fief >= 0 and fief < state.nations.size() and state.nations[fief].ruler_person_id == id and state.nations[fief].family_tree_id == nation.family_tree_id and _peaceful_subject_of(state, fief, nation_id) and not state.succession_conflicts.has(fief)
 	if not eligible_for_nation(member, nation_id) or _busy(state, nation_id, id): return false
-	return crown or not nation.royal_titles_initialized or RoyalTitles.effective_rank(state, member) > 0
+	return crown or nation.state_level!=EmpireStatus.EMPIRE or not nation.royal_titles_initialized or RoyalTitles.effective_rank(state, member) > 0
 
 static func _birth_path(members: Dictionary, person_id: int, ancestor: int) -> Array[int]:
 	var path: Array[int] = []

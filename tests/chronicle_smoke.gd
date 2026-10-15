@@ -188,13 +188,18 @@ func _test_coalition_declaration() -> void:
 			"kind": DiplomacyAI.Action.MAKE_PEACE, "a": 0, "b": 1
 		}), "real diplomacy makes coalition peace")
 		ChronicleRules.finalize_pending(state)
-		_check(state.chronicle_events.size() == 1, "real coalition war emits only one final event")
-		if state.chronicle_events.size() == 1:
-			var views: Dictionary = state.chronicle_events[0].views
+		# World generation can already have recorded empire recognitions.
+		var completed := state.chronicle_events.filter(func(event): return event.get("kind", "") == "external_war")
+		_check(completed.size() == 1, "real coalition war emits only one final event")
+		if completed.size() == 1:
+			var views: Dictionary = completed[0].views
 			for id in [0, 2]:
 				_check(str(views.get(id, "")) == "1年 伐蜀、吴，破之，斩敌1200", "real attacking coalition has full enemy list")
 			for id in [1, 3]:
 				_check(str(views.get(id, "")) == "1年 秦、韩伐我，败绩", "real defending coalition has full enemy list")
+		var events_after := state.chronicle_events.size()
+		ChronicleRules.finalize_pending(state)
+		_check(state.chronicle_events.size()==events_after,"repeated finalization preserves recognition events and cannot duplicate the coalition war")
 	simulation.queue_free()
 
 func _test_defender_annexation(with_ally: bool = false) -> void:
