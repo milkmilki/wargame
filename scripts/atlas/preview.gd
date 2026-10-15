@@ -624,7 +624,9 @@ func publish_political(result: Dictionary,front_signature: int,revision: int) ->
 			prepare_political(); return
 		for kind in geometry:
 			var key := "geometry:%d:%d"%[render_scheduler.versions.get("geometry",0),result.stroke_keys[kind]]
-			render_scheduler.remember(key,geometry[kind],geometry_bytes[kind],true)
+			# Preparing a mesh does not imply a live layer will use it. Front
+			# classification can produce a different key, leaving this revision unused.
+			render_scheduler.remember(key,geometry[kind],geometry_bytes[kind],int(render_scheduler.geometry_users.get(key,0))>0)
 		display.lines=result.lines; political_index=result.index; political_labels=result.labels; political_cache=result.cache
 		if not political_buffers.is_empty(): political_buffer_index=staging
 		if not result.segments.is_empty():

@@ -56,7 +56,7 @@ ATLAS = [
     "atlas_time_controls", "atlas_history_timeline", "atlas_map_drag", "atlas_map_selection", "atlas_diplomacy_view", "atlas_nation_list",
     "atlas_startup_cache", "atlas_startup_climate", "atlas_startup_order",
     "atlas_information_model", "atlas_world_naming", "atlas_information_panel", "atlas_ruler_editor",
-    "atlas_render_scheduler", "atlas_render_publication_batch", "atlas_native_display", "atlas_political_incremental",
+    "atlas_render_scheduler", "atlas_render_publication_batch", "atlas_render_lifetime", "atlas_native_display", "atlas_political_incremental",
     "atlas_military_marker_cache", "atlas_military_layer_invalidation", "atlas_attack_arrows", "atlas_city_marker_preparation",
     "atlas_render_index", "atlas_persistent_strokes", "atlas_shared_stroke_cache",
     "atlas_symbol_mesh", "atlas_symbol_tiles", "atlas_incremental_text", "atlas_wrapped_text", "atlas_city_markers",

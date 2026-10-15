@@ -26,8 +26,10 @@ var geometry_users := {}
 var publication_costs := {}
 
 func release_geometry(key: String) -> void:
-	geometry_users[key] = maxi(0,int(geometry_users.get(key,0))-1)
-	if cache.has(key): cache[key].pinned = geometry_users[key]>0
+	var remaining := maxi(0,int(geometry_users.get(key,0))-1)
+	if remaining>0: geometry_users[key]=remaining
+	else: geometry_users.erase(key)
+	if cache.has(key): cache[key].pinned = remaining>0
 	trim()
 
 func _ready() -> void:

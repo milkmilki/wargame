@@ -67,8 +67,10 @@ func set_paths(paths: Array) -> void:
 		if scheduler.cache.has(asset_key):
 			chunks = scheduler.touch(asset_key); scheduler.cache[asset_key].pinned = true; pool[value] = chunks; preparing = false; coverage = Rect2(); queue_redraw(); return
 		preparing = true
-		var generation := revision; var input := paths.duplicate(); var owner := self
+		var generation := revision; var input := paths.duplicate(); var owner_ref: WeakRef = weakref(self)
 		var publish := func(uploaded):
+			# Capturing the Node itself errors before this body can run after free.
+			var owner = owner_ref.get_ref()
 			if not is_instance_valid(owner) or owner.revision!=generation: return
 			owner.pool[value] = uploaded; owner.chunks = uploaded; owner.preparing = false; owner.coverage = Rect2(); owner.queue_redraw()
 		if scheduler.geometry_pending.has(asset_key): scheduler.geometry_pending[asset_key].append(publish); return
