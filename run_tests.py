@@ -11,6 +11,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent
 CORE = [
+	"regional_rebellion_realm",
 	"royal_landed_titles", "royal_foreign_recall", "atlas_family_genealogy",
 	"royal_birth_eligibility",
 	"environment_nations", "nomad_names", "empire_recognition", "empire_security",

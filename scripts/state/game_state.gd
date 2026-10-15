@@ -3070,8 +3070,7 @@ func set_diplomatic_relation(
 	if not faction.is_empty() and (faction.central.has(nation_b) or faction.rebels.has(nation_b)) and nations[nation_a].alive and nations[nation_b].alive:
 		var required := DiplomaticRelation.ALLIED if faction.central.has(nation_a) == faction.central.has(nation_b) else DiplomaticRelation.WAR
 		if relation != required: return false
-	# 活跃地方叛军的战争严格限定为母国独立战争，不能向第三国宣战，
-	# 第三国也不能把叛军拖入另一场战争。
+	# 活跃地方叛乱仅限母国所属和平宗藩体系共同平叛；普通外盟不能借此参战。
 	if (
 		relation == DiplomaticRelation.WAR
 		and not _regional_rebellion_war_allowed(nation_a, nation_b)
@@ -3139,6 +3138,17 @@ func regional_rebellion_parent(rebel_id: int) -> int:
 	return int((rebellions[rebel_id] as Dictionary).get("parent_id", -1))
 
 
+## Only the peaceful political realm participates; ordinary foreign allies do not.
+func regional_rebellion_defenders(parent_id: int) -> Array[int]:
+	var result: Array[int] = []
+	if parent_id < 0 or parent_id >= nations.size() or not nations[parent_id].alive:
+		return result
+	for member in food_pool_members(food_pool_holder(parent_id)):
+		if nations[member].alive and not nations[member].succession_identity:
+			result.append(member)
+	return result
+
+
 func is_regional_rebellion_pair(nation_a: int, nation_b: int) -> bool:
 	return (
 		regional_rebellion_parent(nation_a) == nation_b
@@ -3146,17 +3156,17 @@ func is_regional_rebellion_pair(nation_a: int, nation_b: int) -> bool:
 	)
 
 
-## 活跃且双方仍存续的母国—地方叛军，在起兵后 360 天内不得结束战争。
+## 活跃地方叛乱与母国整个和平宗藩体系，在起兵后360天内不得结束战争。
 ## 旧档若缺 started_day，则以当前战争关系的起始日作为兼容回退。
 func regional_rebellion_peace_locked(nation_a: int, nation_b: int) -> bool:
 	var rebel_id := -1
 	var parent_id := -1
-	if regional_rebellion_parent(nation_a) == nation_b:
+	if regional_rebellion_defenders(regional_rebellion_parent(nation_a)).has(nation_b):
 		rebel_id = nation_a
-		parent_id = nation_b
-	elif regional_rebellion_parent(nation_b) == nation_a:
+		parent_id = regional_rebellion_parent(nation_a)
+	elif regional_rebellion_defenders(regional_rebellion_parent(nation_b)).has(nation_a):
 		rebel_id = nation_b
-		parent_id = nation_a
+		parent_id = regional_rebellion_parent(nation_b)
 	if (
 		rebel_id < 0
 		or parent_id < 0
@@ -3546,6 +3556,12 @@ func start_regional_rebellion(
 		"active": true,
 		"reason": "全州连续低忠诚起义",
 	}
+	# A local uprising is a shared suppression war for the entire peaceful realm.
+	# Reuse the parent's ID so campaigns/pools do not count each vassal as a war.
+	var suppression_war := war_id_between(parent_id, rebel.id)
+	for member in regional_rebellion_defenders(parent_id):
+		set_diplomatic_relation(member, rebel.id, DiplomaticRelation.WAR)
+		war_relation_ids[_diplomacy_key(member, rebel.id)] = suppression_war
 	parent.last_rebellion_day = day
 	rebel.last_rebellion_day = day
 	RegionalStrategy.update_target(self, rebel.id)
@@ -3855,10 +3871,11 @@ func rebellion_structure_valid() -> bool:
 		if bool(record.get("active", false)):
 			if not nations[rebel_id].alive or not is_enemy(rebel_id, parent_id):
 				return false
+			var defenders := regional_rebellion_defenders(parent_id)
 			for third in nations:
 				if (
 					third.id != rebel_id
-					and third.id != parent_id
+					and not defenders.has(third.id)
 					and is_enemy(rebel_id, third.id)
 				):
 					return false
@@ -5536,8 +5553,8 @@ func _inherit_overlord_diplomacy(overlord_id: int, subject_id: int) -> void:
 	)
 
 
-## 地方叛军只建立与母国的独立战争；所有第三国统一为中立，不继承母国的
-## 战争或盟约，也不会因同源关系自动与另一支叛军敌对。
+## 初始化为中立，随后仅把母国和平宗藩体系加入同一平叛战争。
+## 不继承普通外盟或既有外战，也不与另一支地方叛军自动敌对。
 func _initialize_rebel_diplomacy(parent_id: int, rebel_id: int) -> void:
 	for third in nations:
 		if third.id == rebel_id or third.id == parent_id:
@@ -5555,7 +5572,7 @@ func _regional_rebellion_war_allowed(nation_a: int, nation_b: int) -> bool:
 		if not bool(record.get("active", false)):
 			continue
 		var other := nation_b if candidate == nation_a else nation_a
-		if other != int(record.get("parent_id", -1)):
+		if not regional_rebellion_defenders(int(record.get("parent_id", -1))).has(other):
 			return false
 	return true
 

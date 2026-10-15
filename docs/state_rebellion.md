@@ -1,5 +1,14 @@
 # Administrative State Rebellions
 
+Local uprisings inside a peaceful vassal realm put the parent, its sovereign
+overlord and all peaceful direct/indirect fellow vassals at war with the rebels.
+All participants share the parent's war ID and the 360-day minimum-war lock.
+Ordinary foreign allies stay neutral; this grants no new transit rights or
+automatic armies and does not bypass readiness, supply or campaign allocation.
+Existing city capture and suppression cleanup release the realm's war bindings.
+`regional_rebellion_realm.gd` covers real submissions, nested vassals, foreign
+alliance exclusion and a sibling vassal's actual siege victory and cleanup.
+
 City loyalty and its low-loyalty counter remain independent, including the
 existing vassal-rebellion assessment. Local independence and political
 restoration instead use administrative states, not trade/business regions or
