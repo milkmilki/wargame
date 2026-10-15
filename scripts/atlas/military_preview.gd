@@ -115,8 +115,12 @@ var player_nation := SpinBox.new()
 var military_status := Label.new()
 var last_owner_revision := -1
 var last_nation_revision: Array = []
-var history_control := SpinBox.new()
+var history_control := HSlider.new()
 var historical_view := false
+var history_session := false
+var history_request := 0
+var history_return_paused := true
+var history_return_mode := 0
 var pending_selection := {}
 var hovered_city := -1
 var hover_key: Array = []
@@ -158,7 +162,7 @@ func make_ui() -> void:
 	status.text="滚轮缩放 · 中键平移 · 左键查看辖区 · 右键下令"
 
 func time_controls_available() -> bool:
-	return simulation!=null and view_ready and not generating and not historical_view
+	return simulation!=null and view_ready and not generating and not historical_view and not history_session
 
 func set_time_speed(multiplier: float) -> void:
 	if time_controls_available(): simulation.set_speed_multiplier(multiplier)
@@ -366,6 +370,7 @@ func build_view() -> void:
 func present_world(prepared: GameState,payload: Dictionary,source: String = "atlas_native_zhoufu") -> void:
 	# Swap only after generation succeeds; the old scenario remains intact on failure.
 	await _pause_previous_world()
+	history_request+=1; history_session=false
 	state = prepared; military_payload = payload; historical_view = false; selected_army = -1; selected_region = -1; command_target=-1
 	trade_key.clear(); trade_hub_key.clear(); trade_center_ids.clear(); trade_lines.clear(); trade_pending=false; render_scheduler.invalidate("trade_regions")
 	trade_route_key.clear()
@@ -378,6 +383,8 @@ func present_world(prepared: GameState,payload: Dictionary,source: String = "atl
 	if simulation!=null: simulation.queue_free()
 	simulation = Simulation.new(); simulation.setup(state); simulation.paused = true; add_child(simulation)
 	history.reset(state)
+	simulation.runtime_day_committed.connect(capture_history)
+	capture_history(state.day)
 	if run_log.path.is_empty(): run_log.begin("res://atlas_military.tscn")
 	var settings := state.generation_metadata.duplicate(true)
 	settings["options"] = payload.data.options.duplicate(true)
@@ -449,7 +456,6 @@ func _process(_delta: float) -> void:
 	overlay.selection = selected_army
 	refresh_attack_arrows()
 	military_status.text = "历史：第%d天 · 只读政治快照"%overlay.state.day if historical_view else "第%d天 · 军队%d · 战斗%d · %s"%[state.day,state.armies.size(),state.battles.size(),"暂停" if simulation.paused else "运行军事AI"]
-	history_control.max_value = maxi(0,history.snapshot_count()-1)
 	if not historical_view:
 		var owners_changed := last_owner_revision != state.ownership_revision
 		var names_changed := false
@@ -474,7 +480,7 @@ func _process(_delta: float) -> void:
 		var source:=information_source()
 		if source!=null and (trade_key[0]!=source.get_instance_id() or trade_key[1]!=source.region_analysis_revision): update_trade_mode()
 	refresh_diplomacy()
-	history.maybe_capture(state); run_log.checkpoint(state)
+	run_log.checkpoint(state)
 
 func refresh_attack_arrows(force: bool = false) -> void:
 	if not is_instance_valid(attack_arrows) or state == null: return
@@ -607,24 +613,56 @@ func load_military_template() -> void:
 	await present_world(prepared,prepared.atlas_layout,"atlas_template:"+str(loaded.path))
 
 func show_history() -> void:
-	if state==null or simulation.runtime_day_in_progress(): return
-	simulation.paused = true
-	var view := history.build_view_state(state,int(history_control.value))
-	if view==null: return
-	historical_view = true; overlay.state = view
-	refresh_attack_arrows()
-	for c in range(data.cities.size()): data.ownership[c] = view.cities[c].owner_nation
-	sync_nations(view)
-	refresh_ownership(); refresh_diplomacy(); details.text = "历史：第%d天"%view.day
+	select_history(int(history_control.value))
+
+func capture_history(_day: int) -> void:
+	if state==null: return
+	history.maybe_capture(state)
+	# One extra stop always denotes the live world, including on snapshot days.
+	history_control.max_value=history.snapshot_count()
+	if not history_session: history_control.set_value_no_signal(history_control.max_value)
+
+func select_history(index: int) -> void:
+	if state==null or simulation==null or not view_ready or generating or not is_instance_valid(overlay): return
+	if index>=history.snapshot_count(): return_to_current(); return
+	if index<0: return
+	if not history_session:
+		history_return_paused=simulation.paused; history_return_mode=mode_control.selected
+		history_session=true
+	simulation.paused=true
+	history_request+=1
+	var request := history_request
+	history_control.set_value_no_signal(index)
+	# Finish an in-flight day; neither capture nor display a half-settled world.
+	if simulation.runtime_day_in_progress(): await simulation.runtime_day_committed
+	if request!=history_request or not history_session or generating: return
+	var view := history.build_view_state(state,index)
+	if view==null: return_to_current(); return
+	historical_view=true
+	present_history_source(view)
+	details.text="历史：第%d天"%view.day
+
+func present_history_source(source: GameState) -> void:
+	overlay.state=source
+	selected_army=-1; pending_selection.clear()
+	if family_panel!=null and family_panel.visible: family_panel.close()
+	if information_kind in ["army","battle","person"]: close_information()
+	for c in range(data.cities.size()): data.ownership[c]=source.cities[c].owner_nation
+	sync_nations(source)
+	if source==state: last_owner_revision=state.ownership_revision
+	refresh_ownership(); update_mode(); refresh_attack_arrows(true); refresh_diplomacy()
 	if info_panel!=null and info_panel.visible: info_panel.show_document(information_document())
 
 func return_to_current() -> void:
-	if state==null or simulation.runtime_day_in_progress(): return
-	historical_view=false; simulation.paused=true
-	refresh_attack_arrows(true)
-	if overlay!=null: overlay.state=state
-	last_owner_revision=-1; refresh_diplomacy()
-	if info_panel!=null and info_panel.visible: info_panel.show_document(information_document())
+	if state==null or simulation==null: return
+	history_request+=1
+	history_control.set_value_no_signal(history.snapshot_count())
+	if not history_session: return
+	var needs_refresh := historical_view
+	historical_view=false; history_session=false
+	mode_control.select(history_return_mode)
+	if needs_refresh: present_history_source(state)
+	simulation.paused=history_return_paused
 
 func sync_nations(source: GameState) -> bool:
 	var nations: Array = []

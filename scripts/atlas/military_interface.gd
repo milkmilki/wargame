@@ -17,6 +17,7 @@ var countries := Countries.new()
 var diplomacy_row := HBoxContainer.new()
 var observer_label := Label.new()
 var relation_legend := Label.new()
+var history_timeline := preload("res://scripts/atlas/history_timeline.gd").new()
 class PauseInput extends Node:
 	var host
 	func _input(event: InputEvent) -> void:
@@ -85,11 +86,6 @@ func setup(view) -> void:
 	var templates := HBoxContainer.new(); body.add_child(templates)
 	button(templates,"保存地图模板",func(): if view.state!=null: view.status.text=str(MapDefinition.save_state(view.state,"atlas-military.json")))
 	button(templates,"加载地图模板",view.load_military_template)
-	var historic := Label.new(); historic.text="历史快照"; body.add_child(historic)
-	var history_row := HBoxContainer.new(); body.add_child(history_row)
-	view.history_control.min_value=0; view.history_control.max_value=0; history_row.add_child(view.history_control)
-	button(history_row,"查看历史",view.show_history)
-	button(history_row,"返回当前",view.return_to_current)
 	add_child(footer); footer.mouse_filter=Control.MOUSE_FILTER_IGNORE
 	var messages := VBoxContainer.new(); footer.add_child(messages); messages.mouse_filter=Control.MOUSE_FILTER_IGNORE
 	messages.add_child(diplomacy_row); observer_label.size_flags_horizontal=Control.SIZE_EXPAND_FILL; observer_label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART; diplomacy_row.add_child(observer_label)
@@ -99,6 +95,8 @@ func setup(view) -> void:
 	diplomacy_row.hide(); relation_legend.hide()
 	view.status.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART; view.status.mouse_filter=Control.MOUSE_FILTER_IGNORE; messages.add_child(view.status)
 	view.military_status.add_theme_font_size_override("font_size",12); view.military_status.add_theme_color_override("font_color",Style.MUTED); view.military_status.mouse_filter=Control.MOUSE_FILTER_IGNORE; messages.add_child(view.military_status)
+	messages.add_child(HSeparator.new())
+	messages.add_child(history_timeline); history_timeline.setup(view)
 	add_child(view.details); view.details.hide()
 	resized.connect(place); place()
 	footer.resized.connect(func(): footer.position.y=size.y-footer.size.y-14)
@@ -120,6 +118,7 @@ func _process(_delta: float) -> void:
 	footer.position.y=size.y-footer.size.y-14
 	if countries.visible: countries.size.y=maxf(160,footer.position.y-countries.position.y-8)
 	if host==null: return
+	history_timeline.refresh()
 	var blocked: bool=not host.time_controls_available()
 	pause_button.disabled=blocked
 	step_button.disabled=blocked or (host.simulation!=null and (not host.simulation.paused or host.simulation.runtime_day_in_progress()))

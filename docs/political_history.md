@@ -8,7 +8,13 @@ relations without rewinding the simulation.
 
 ## Behavior
 
+- The bottom-right status panel contains a permanent “历史发展” slider, previous
+  and next snapshot buttons, the selected day, and “返回现在”. The slider supports
+  keyboard navigation; each stop is a monthly snapshot, with a separate live stop
+  at the right edge (even on a capture day).
 - Capture day 0 and then one snapshot every 30 committed simulation days.
+  Capture is connected to `Simulation.runtime_day_committed`, not map-frame
+  polling, so sliced days cannot publish partially settled snapshots.
 - Freeze empire level, founder, recognition day, royal title/payer/cohort records,
   family revision and last royal court expense breakdown. Historical tree
   readers cannot initialize a lineage, grant titles, promote or create children.
@@ -22,6 +28,8 @@ relations without rewinding the simulation.
 - The rightmost timeline position is always the live state.
 - Selecting an older position pauses simulation and renders a detached
   historical `GameState` view.
+  If a day is in flight, the viewer pauses, finishes that transaction, and then
+  displays the last requested snapshot. Returning to now cancels pending requests.
 - Historical views contain no armies, battles, campaign arrows, or trade
   routes.
 - Clicking historical territory selects its nation and shows historical wars,
@@ -44,6 +52,12 @@ relations without rewinding the simulation.
   and the absence of military state.
 - Scene smoke tests verify that the timeline is present and switches between a
   historical view and the live view.
+- `atlas_history_timeline.gd` covers commit-boundary capture, slider selection,
+  cancellation, pause/mode restoration and live-state/RNG isolation.
+- Run `tests/atlas_history_visual.gd` without `--headless` for real-renderer
+  verification on seed 1 / 40 countries / the Eurasia mask, 60 committed days,
+  rapid scrubbing, historical country details and 1280/960/768-pixel layouts.
+  Screenshots are written to the ignored `.dbg/history-timeline/` directory.
 # 环境与国号历史（2026-10-14）
 
 国家政治记录额外冻结 `environment_kind`，与原有 `state_level` 一起恢复历史正式国号。升格前的“某国／某部”不会被当前等级改写成“某／某汗”；编年史和战争事务名称在发生时保存正式称号。新局模板版本 9 不变；运行期 Native 快照为版本 30，拒绝旧运行快照，不猜测迁移。
