@@ -3,7 +3,7 @@ extends SceneTree
 
 func _init() -> void:
 	var state := preload("res://tests/support/grid_world.gd").new()
-	state.generate_grid_world(94201)
+	state.generate_grid_world(94201, false)
 	var center_id := -1
 	for center_value in state.administrative_center_city_ids:
 		var candidate := int(center_value)

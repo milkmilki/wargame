@@ -892,7 +892,12 @@ func city_garrison_capacity(city_id: int) -> int:
 		or not cities[city_id].politically_active
 	):
 		return 0
-	return ZHOU_GARRISON_CAPACITY if is_zhou_city(city_id) else 0
+	if not is_zhou_city(city_id):
+		return 0
+	return ZHOU_GARRISON_CAPACITY * (
+		EmpireStatus.CORE_GARRISON_MULTIPLIER
+		if EmpireStatus.has_core_garrison_bonus(self, city_id) else 1
+	)
 
 
 ## Batch queries pass their already resolved bloc; direct queries resolve it here.

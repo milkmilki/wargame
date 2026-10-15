@@ -55,6 +55,10 @@ const ALLIANCE_STRONG_AVERAGE_RATIO: float = 1.50
 const ALLIANCE_STRONG_WORLD_SHARE: float = 0.20
 const ALLIANCE_STRONG_SCORE_CAP: float = 0.75
 const WAR_DECLARE_SCORE: float = 0.85
+## Ordinary rulers avoid comparable imperial realms; overwhelming strength relieves caution.
+const EMPIRE_WAR_CAUTION_MIN := 0.10
+const EMPIRE_WAR_RELIEF_START_RATIO := 1.5
+const EMPIRE_WAR_RELIEF_FULL_RATIO := 3.0
 const OBSERVED_WAR_PREPARATION_THREAT_BONUS: float = 0.75
 const PEACE_ESCALATION_START_DAYS: int = 180
 const PEACE_ESCALATION_FULL_DAYS: int = 540
@@ -2059,6 +2063,16 @@ static func war_desire(
 		own_overextension,
 		_cached_war_benefit_multiplier(state, nation_id, evaluation_cache)
 	)
+	var pre_caution_score := result
+	var protected_by := EmpireStatus.protecting_empire(state, target_id)
+	var empire_caution := 1.0
+	if state.nations[nation_id].state_level != EmpireStatus.EMPIRE and protected_by >= 0:
+		empire_caution = lerpf(EMPIRE_WAR_CAUTION_MIN, 1.0, clampf(
+			(ratio - EMPIRE_WAR_RELIEF_START_RATIO)
+			/ (EMPIRE_WAR_RELIEF_FULL_RATIO - EMPIRE_WAR_RELIEF_START_RATIO), 0.0, 1.0
+		))
+		if result > 0.0:
+			result *= empire_caution
 	if bool(evaluation_cache.get("__war_desire_debug", false)):
 		evaluation_cache["breakdown:" + cache_key] = {
 			"score": result, "blocked_reason": "", "objective": objective.duplicate(true),
@@ -2077,6 +2091,8 @@ static func war_desire(
 			"attitude_penalty": attitude * ATTITUDE_WAR_WEIGHT,
 			"attitude_breakdown": diplomatic_attitude_breakdown(state, nation_id, target_id, evaluation_cache).duplicate(true),
 			"overextension_penalty": own_overextension,
+			"pre_caution_score": pre_caution_score, "empire_caution_multiplier": empire_caution,
+			"protecting_empire_id": protected_by,
 		}
 	evaluation_cache[cache_key] = result
 	return result
@@ -2108,7 +2124,7 @@ static func war_desire_debug_lines(state: GameState, nation_id: int) -> Array[St
 		return lines
 	var nation := state.nations[nation_id]
 	lines.append("第%d日当前状态重算 · 阈值 %.2f · 非上次外交批次回放" % [state.day, WAR_DECLARE_SCORE])
-	lines.append("意愿 = 收益合计 × 君主倍率 + 侵略性修正 − 态度×0.35 − 战争数×0.75")
+	lines.append("基础意愿 = 收益合计 × 君主倍率 + 侵略性修正 − 态度×0.35 − 战争数×0.75；正值再乘帝国威慑系数")
 	if not nation.alive or nation.succession_identity:
 		return ["该国家已灭亡或为继承权临时身份，不评估普通备战"]
 	if state.is_vassal(nation_id):
@@ -2154,7 +2170,7 @@ static func war_desire_debug_lines(state: GameState, nation_id: int) -> Array[St
 		var attitude: Dictionary = report.attitude_breakdown
 		lines.append("态度 %.3f（历史 %+.3f、军事 %+.3f、政治 %+.3f）×0.35：扣分 %+.3f" % [report.attitude, attitude.historical, attitude.military, attitude.political, report.attitude_penalty])
 		lines.append("态度条目：边疆 %+.3f、目标利益 %+.3f、共同敌国%d、敌国盟友%d、边防释放 %+.3f、叛乱母国 %+.3f" % [attitude.border_component, attitude.objective_component, attitude.common_enemies, attitude.enemy_allies, attitude.frontier_relief, attitude.parent_rebel_component])
-		lines.append("多线作战扣分 %.3f；最终 %.3f" % [report.overextension_penalty, report.score])
+		lines.append("多线作战扣分 %.3f；基础 %.3f · 帝国威慑 ×%.2f；最终 %.3f" % [report.overextension_penalty, report.pre_caution_score, report.empire_caution_multiplier, report.score])
 	if best_target >= 0:
 		lines.append("当前最高双边意愿：%s %.3f（%s）；仍受上述国家行动门禁和外交批次占用限制" % [state.nation_display_name(best_target), best_score, "过线" if best_score >= WAR_DECLARE_SCORE else "未过线"])
 	else:
@@ -2780,6 +2796,7 @@ static func _ensure_evaluation_cache_current(
 		state.region_analysis_revision,
 		state.administrative_region_revision,
 		state.road_network_revision,
+		state.garrison_revision,
 	]
 	var cached_revision: Variant = evaluation_cache.get(
 		REVISION_KEY, null

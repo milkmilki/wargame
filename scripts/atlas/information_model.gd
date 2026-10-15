@@ -209,9 +209,11 @@ static func nation(state: GameState,id: int) -> Dictionary:
 	var politics := [row("继承人",crown.get("name","未记录"),"person",n.crown_prince_person_id),
 		row("竞争状态",prince_report(state,id).get("status","未记录")),
 		row("帝国晋升",("第%d天"%n.empire_recognized_day) if n.empire_recognized_day>=0 else "尚未晋升"),
-		row("晋升条件","和平宗藩体系完成至少两个贸易区域的法理与实控整合"),
+		row("晋升条件","和平宗藩体系完成一个贸易区域的法理与实控整合"),
 		row("月结爵位人数","一字王%d · 郡王%d · 国公%d · 无爵%d"%[n.last_royal_title_counts[3],n.last_royal_title_counts[2],n.last_royal_title_counts[1],n.last_royal_title_counts[0]]),row("俸禄占税收","%.2f%%"%(n.last_royal_expense_basis_points/100.)),
 		row("本君主继承来源",{"crown":"太子","direct":"直系","collateral":"旁系宗室","remote":"远支"}.get(str(PrincePolitics.person(state,id,n.ruler_person_id).get("accession_source","")),"未记录"))]
+	if EmpireStatus.protecting_empire(state,id)>=0:
+		politics.append(row("帝国守备","合法整合州治守军上限30000，沿用人力与供给规则逐月补充"))
 	var report_data: Dictionary = prince_report(state,id)
 	var internal: Dictionary=report_data.get("internal_battle",{})
 	if not internal.is_empty():

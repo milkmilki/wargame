@@ -17,6 +17,17 @@ func run():
 	var started := Time.get_ticks_usec()
 	check(state.generate_from_atlas(payload).ok,"real Eurasia world installs")
 	var install_usec := Time.get_ticks_usec()-started
+	check(state.world_seed==1 and state.nations.size()==40 and payload.data.options.settlement_mask==preload("res://scripts/atlas/settlement_mask.gd").EURASIA,"imperial opening audit uses seed 1, 40 countries and the Eurasia mask")
+	var completed := EmpireStatus.completed_regions(state)
+	var initial_empires := 0
+	for nation in state.nations:
+		if nation.state_level==EmpireStatus.EMPIRE: initial_empires+=1
+		check((nation.state_level==EmpireStatus.EMPIRE)==(int(completed.get(nation.id,0))>=1),"real opening recognizes exactly the sovereigns integrating a whole region")
+	for center in state.administrative_center_city_ids:
+		var city: City=state.cities[center]
+		check(state.city_garrison_capacity(center)==(30000 if state.nations[city.owner_nation].state_level==EmpireStatus.EMPIRE else 15000),"real opening guard establishment follows actual imperial recognition")
+		check(city.garrison_manpower<=15000,"real opening recognition does not instantly recruit extra guards")
+	print("EMPIRE_ATLAS_OPENING seed=",state.world_seed," countries=",state.nations.size()," empires=",initial_empires," states=",state.administrative_center_city_ids.size())
 	var roots := {}; var counts := {}
 	var profiles: Dictionary = state.atlas_layout.nation_environment.profiles
 	for city in state.land_cities():

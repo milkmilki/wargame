@@ -33,7 +33,7 @@ func generate_world(seed_value: int = 12345, nation_count: int = 4, city_count: 
 	EmpireStatus.reconcile(self); reconcile_adjacent_sovereign_colors()
 	return true
 
-func generate_grid_world(world_seed: int = 12345) -> void:
+func generate_grid_world(world_seed: int = 12345, recognize_empires: bool = true) -> void:
 	_reset_world(world_seed)
 	uses_heightmap = false
 	map_aspect_ratio = 1.0
@@ -55,7 +55,8 @@ func generate_grid_world(world_seed: int = 12345) -> void:
 	_initialize_city_loyalty()
 	_generate_armies()
 	RegionalStrategy.initialize_targets(self)
-	EmpireStatus.reconcile(self)
+	if recognize_empires:
+		EmpireStatus.reconcile(self)
 	reconcile_adjacent_sovereign_colors()
 
 	assert(cities.size() == CITY_COUNT, "城市数应为 64")

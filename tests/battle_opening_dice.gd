@@ -78,6 +78,7 @@ func _counter_fixture() -> Dictionary:
 func _test_counter_conquest_equivalence() -> void:
 	var first := _counter_fixture()
 	var second := _counter_fixture()
+	var initiator_name: String = first.state.nation_display_name(0)
 	var field_seen := false
 	var assault_seen := false
 	Combat.battle_log_enabled = true
@@ -101,7 +102,7 @@ func _test_counter_conquest_equivalence() -> void:
 	_check(first.state.chronicle_events.size() == 1, "counter-conquest writes exactly one final chronicle")
 	if first.state.chronicle_events.size() == 1:
 		var event: Dictionary = first.state.chronicle_events[0]
-		_check(str(event.views[1]).contains("破之") and str(event.views[1]).ends_with("灭秦为郡"), "victorious defender chronicle preserves reverse-conquest result")
+		_check(str(event.views[1]).contains("破之") and str(event.views[1]).ends_with("灭%s为郡" % initiator_name), "victorious defender chronicle preserves reverse-conquest result and occurrence-time formal name")
 		_check(str(event.views[0]).contains("败绩") and str(event.views[0]).ends_with("国除"), "defeated initiator chronicle records extinction")
 	_check(bool(CombatLog.replay_records(Combat.battle_log).ok), "real counter-conquest four-dice log replays")
 	Combat.battle_log_enabled = false

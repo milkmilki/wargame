@@ -4,22 +4,21 @@ var failures: Array[String] = []
 
 func _init() -> void:
 	var state := preload("res://tests/support/grid_world.gd").new()
-	state.generate_grid_world(73001)
+	state.generate_grid_world(73001, false)
 	var service = load("res://scripts/core/empire_status.gd")
 	if service == null:
 		push_error("EMPIRE_RECOGNITION_FAIL: empire recognition service absent")
 		quit(1)
 		return
-	# Two actual regions split between two independent countries.
+	# A single actual region split between two independent countries.
 	state.region_ids.fill(-1)
 	var land := state.land_cities_of(0)
 	var foreign := state.land_cities_of(1)
 	state.region_ids[land[0].id] = 10
-	state.region_ids[land[1].id] = 20
-	state.region_ids[foreign[0].id] = 20
+	state.region_ids[foreign[0].id] = 10
 	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.ALLIED)
 	service.reconcile(state)
-	check(state.nations[0].get("state_level") == 0, "one complete region plus one partial cannot promote")
+	check(state.nations[0].get("state_level") == 0, "one partial region cannot promote")
 	check(state.nations[0].empire_founder_person_id == -1, "ordinary allies do not complete imperial integration")
 	state.cities[foreign[0].id].owner_nation = 0
 	service.reconcile(state)
@@ -30,7 +29,7 @@ func _init() -> void:
 	check(state.nations[0].get("state_level") == 0, "rebellious subjects cannot promote root")
 	state.suzerainty[1].civil_war = false
 	service.reconcile(state)
-	check(state.nations[0].get("state_level") == 1, "two lawful peaceful regions promote root")
+	check(state.nations[0].get("state_level") == 1, "one lawful peaceful region promotes root")
 	check(state.nations[1].get("state_level") == 0, "subject does not promote with root")
 	var founder: int = state.nations[0].get("empire_founder_person_id")
 	check(founder == state.nations[0].ruler_person_id, "current ruler is Taizu")
@@ -42,16 +41,21 @@ func _init() -> void:
 	service.reconcile(state)
 	check(state.nations[0].get("state_level") == 1 and state.nations[0].get("empire_founder_person_id") == founder, "empire and founder survive losses")
 	state = preload("res://tests/support/grid_world.gd").new()
-	state.generate_grid_world(73001)
+	state.generate_grid_world(73001, false)
 	state.region_ids.fill(-1)
 	land = state.land_cities_of(0)
 	state.region_ids[land[0].id] = 10
 	state.region_ids[land[1].id] = 20
+	land[0].politically_active = false
 	land[1].politically_active = false
 	for city in state.cities:
 		if city.is_dock: state.region_ids[city.id] = 30
 	service.reconcile(state)
 	check(state.nations[0].state_level == 0, "docks, inactive land and invalid regions never add an imperial region")
+	land[0].politically_active = true
+	service.reconcile(state)
+	check(state.nations[0].state_level == 1, "one valid complete region is sufficient without a second region")
+	check(not state.chronicle_events.is_empty() and state.chronicle_events.back().text.contains("一个贸易区域"), "new recognition report uses the one-region rule")
 	for failure in failures:
 		push_error("EMPIRE_RECOGNITION_FAIL: " + failure)
 	print("EMPIRE_RECOGNITION_RESULT failures=%d" % failures.size())

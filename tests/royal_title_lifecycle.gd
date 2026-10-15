@@ -21,7 +21,7 @@ func _init() -> void:
 
 func fixture() -> GameState:
 	var state := preload("res://tests/support/grid_world.gd").new()
-	state.generate_grid_world(73003)
+	state.generate_grid_world(73003, false)
 	FamilyFixture.ensure_candidates(state, 0, 3)
 	for a in range(state.nations.size()):
 		for b in range(a + 1, state.nations.size()):
@@ -57,9 +57,9 @@ func promote(state: GameState, nation_id: int) -> void:
 	state.region_ids.fill(-1)
 	var land := state.land_cities_of(nation_id)
 	for index in range(land.size()):
-		state.region_ids[land[index].id] = 10 if index < land.size() / 2 else 20
+		state.region_ids[land[index].id] = 10
 	EmpireStatus.reconcile(state)
-	check(state.nations[nation_id].state_level == 1, "two whole regions establish empire")
+	check(state.nations[nation_id].state_level == 1, "one whole region establishes empire")
 
 func enfeoff(state: GameState, nation_id: int) -> int:
 	for center in state.administrative_center_city_ids:
@@ -82,6 +82,10 @@ func _test_enfeoff_revoke() -> void:
 	var subject := enfeoff(state, 0)
 	check(subject >= 0, "actual enfeoffment succeeds")
 	if subject < 0: return
+	for center in state.administrative_center_city_ids:
+		if state.cities[center].owner_nation == subject:
+			check(state.city_garrison_capacity(center) == 30000, "real peaceful enfeoffment inherits imperial guard capacity")
+			check(state.cities[center].garrison_manpower <= 15000, "real enfeoffment does not instantly fill the additional imperial guards")
 	var king := state.nations[subject].ruler_person_id
 	var original_title: String = original_titles[king]
 	var past := history.build_view_state(state, 0)

@@ -87,9 +87,9 @@ func test_titles():
 	var event_text: String = state.chronicle_events.back().text
 	state.region_ids.fill(-1)
 	var land := state.land_cities_of(0)
-	state.region_ids[land[0].id]=10; state.region_ids[land[1].id]=20
+	state.region_ids[land[0].id]=10
 	EmpireStatus.reconcile(state)
-	check(nation.state_level==1 and state.nation_display_name(0)=="秦汗","nomad uses the real two-region recognition path")
+	check(nation.state_level==1 and state.nation_display_name(0)=="秦汗","nomad uses the real one-region recognition path")
 	var events := state.chronicle_events.size(); EmpireStatus.reconcile(state)
 	check(state.chronicle_events.size()==events,"repeated recognition records once")
 	check(state.chronicle_events[event_index].text==event_text and state.chronicle_events[event_index].actor_name==before,"old event preserves its occurrence-time title")
@@ -108,7 +108,7 @@ func test_titles():
 	check(state.nation_display_name(0)=="李明军","rebel titles never acquire sovereign suffixes")
 
 func test_affinity():
-	var state := preload("res://tests/support/grid_world.gd").new(); state.generate_grid_world(91022)
+	var state := preload("res://tests/support/grid_world.gd").new(); state.generate_grid_world(91022, false)
 	state.region_ids.fill(0); state.region_analysis_revision+=1
 	var centers: Array[int] = []
 	for city in state.cities:
@@ -118,6 +118,9 @@ func test_affinity():
 	var profiles := {}
 	for center in centers: profiles[center]={"kind":"farm","area":1.,"affinities":{"farm":0.,"nomad":0.,"sea":0.,"highland":0.,"river":0.,"lake":0.,"forest":0.}}
 	state.atlas_layout={"settlement_adjacency":state.adjacency,"nation_environment":{"version":NationEnvironment.VERSION,"profiles":profiles}}
+	# Atlas route previews require road jurisdictions as well as adjacency.
+	for edge in state.edges:
+		edge.control_city_id=edge.city_b if state.cities[edge.city_b].owner_nation==1 else edge.city_a
 	state.armies.clear()
 	for city in state.cities_of(1):
 		city.gold_per_month=10; city.food_per_half_year=100; city.manpower_per_month=10

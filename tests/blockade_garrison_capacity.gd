@@ -5,8 +5,9 @@ var failures: Array[String] = []
 
 
 func _initialize() -> void:
-	_test_blockade(0, 1)
-	_test_blockade(1, 0)
+	for imperial in [false, true]:
+		_test_blockade(0, 1, imperial)
+		_test_blockade(1, 0, imperial)
 	for message in failures:
 		printerr("BLOCKADE_GARRISON_CAPACITY_FAIL ", message)
 	print("BLOCKADE_GARRISON_CAPACITY checks=%d failures=%d" % [checks, failures.size()])
@@ -19,10 +20,14 @@ func _check(condition: bool, message: String) -> void:
 		failures.append(message)
 
 
-func _test_blockade(attacker_owner: int, defender_owner: int) -> void:
+func _test_blockade(attacker_owner: int, defender_owner: int, imperial: bool) -> void:
 	var state := preload("res://tests/support/grid_world.gd").new()
 	state.generate_world(94108, 2, 200)
 	_check(state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR), "nation zero declares the real war before either side besieges")
+	# Lock the political fixture after the declaration's recognition boundary.
+	state.region_ids.fill(0)
+	state.nations[defender_owner].state_level = EmpireStatus.EMPIRE if imperial else EmpireStatus.COUNTRY
+	state.garrison_revision += 1
 	state.armies.clear()
 	state.battles.clear()
 	var city: City = null
@@ -54,14 +59,16 @@ func _test_blockade(attacker_owner: int, defender_owner: int) -> void:
 		return
 	var battle: Battle = state.battles[0]
 	var guard := sim._attach_city_garrison(battle)
-	_check(guard != null and guard.max_size == 15000, "virtual guard uses city establishment")
+	var capacity := 30000 if imperial else 15000
+	var daily_loss := int(ceil(capacity * Simulation.BLOCKADE_GARRISON_ATTRITION_RATE))
+	_check(guard != null and guard.max_size == capacity, "virtual guard uses ordinary or imperial city establishment")
 	sim._detach_city_garrison(battle, guard)
 	var revision := state.garrison_revision
 	sim._resolve_battles()
-	_check(city.garrison_manpower == 4970, "blockade loses 30 from a 15000 establishment, not 10 from 5000 survivors")
+	_check(city.garrison_manpower == 5000 - daily_loss, "blockade loses a percentage of ordinary or imperial maximum, rather than survivors")
 	_check(state.garrison_revision == revision + 1, "blockade updates the persistent garrison revision once")
 	sim._resolve_battles()
-	_check(city.garrison_manpower == 4940, "daily loss stays fixed as survivors decrease")
+	_check(city.garrison_manpower == 5000 - 2 * daily_loss, "daily loss stays fixed as survivors decrease")
 	_check(not battle.finished and battle.side_b.is_empty(), "blockade retains the persistent guard outside field combat")
 	var defender := Army.new()
 	defender.owner_nation = defender_owner
