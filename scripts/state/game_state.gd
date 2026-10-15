@@ -69,8 +69,6 @@ const TERRITORY_CAPTURE_SPOILS_RATE: float = 0.30
 
 ## 分封默认贡赋率。
 const DEFAULT_TRIBUTE_RATE: float = 0.25
-const VASSAL_DISSOLUTION_COHESION_THRESHOLD: float = 0.35
-const VASSAL_SYSTEM_DISSOLUTION_DAYS: int = 360
 const VASSAL_COLOR_HUE_OFFSET_DEGREES: float = 5.0
 const VASSAL_COLOR_SATURATION_OFFSET: float = 0.10
 const VASSAL_COLOR_VALUE_OFFSET: float = 0.05
@@ -203,10 +201,6 @@ var war_objectives: Dictionary = {}
 var suzerainty: Dictionary = {}
 var vassal_conflicts: Dictionary = {}
 var last_vassal_conflict_result: Dictionary = {}
-## 宗藩根 id -> 本轮连续低于私人战争阈值的首日。
-var suzerainty_low_cohesion_since_day: Dictionary = {}
-var _suzerainty_cohesion_revision: int = -1
-var _suzerainty_cohesion_by_root: Dictionary = {}
 var uses_heightmap: bool = false
 var map_aspect_ratio: float = 1.0
 var generation_metadata: Dictionary = {}
@@ -498,9 +492,6 @@ func _reset_world(world_seed: int) -> void:
 	suzerainty.clear()
 	vassal_conflicts.clear()
 	last_vassal_conflict_result.clear()
-	suzerainty_low_cohesion_since_day.clear()
-	_suzerainty_cohesion_revision = -1
-	_suzerainty_cohesion_by_root.clear()
 	generation_metadata = {}
 	map_models = {}
 	last_generation_error = ""
@@ -3056,15 +3047,6 @@ func can_alliance_blocs_declare_war(
 	return true
 
 
-func suzerainty_cohesion(nation_id: int) -> float:
-	if nation_id < 0 or nation_id >= nations.size():
-		return 1.0
-	var root := suzerainty_root(nation_id)
-	if _suzerainty_cohesion_revision != ownership_revision:
-		_rebuild_suzerainty_cohesion_cache()
-	return float(_suzerainty_cohesion_by_root.get(root, 1.0))
-
-
 func set_diplomatic_relation(
 	nation_a: int,
 	nation_b: int,
@@ -4010,244 +3992,6 @@ func suzerainty_root(nation_id: int) -> int:
 		current = int(suzerainty[current]["overlord_id"])
 		guard += 1
 	return current
-
-
-func _rebuild_suzerainty_cohesion_cache() -> void:
-	var total_by_root: Dictionary = {}
-	var direct_by_root: Dictionary = {}
-	for city in cities:
-		if city.is_dock:
-			continue
-		var legal_owner := recognized_owner_of(city.id)
-		if legal_owner < 0 or legal_owner >= nations.size():
-			continue
-		var root := suzerainty_root(legal_owner)
-		total_by_root[root] = int(total_by_root.get(root, 0)) + 1
-		if legal_owner == root:
-			direct_by_root[root] = int(direct_by_root.get(root, 0)) + 1
-	_suzerainty_cohesion_by_root.clear()
-	for root_value in total_by_root:
-		var root := int(root_value)
-		var total := int(total_by_root[root])
-		_suzerainty_cohesion_by_root[root] = (
-			float(int(direct_by_root.get(root, 0))) / float(total)
-			if total > 0
-			else 1.0
-		)
-	_suzerainty_cohesion_revision = ownership_revision
-
-
-## 每日推进宗藩体系的低凝聚力连续计时。恢复到阈值即清零；连续满一年时，
-## 整个宗藩树同时解体。返回本日解体的原宗主根，按 id 升序。
-func advance_suzerainty_dissolution() -> Array[int]:
-	VassalConflict.reconcile(self)
-	var active_roots := {}
-	for subject_value in suzerainty:
-		var subject_id := int(subject_value)
-		if subject_id < 0 or subject_id >= nations.size():
-			continue
-		var root := suzerainty_root(subject_id)
-		if root >= 0 and root < nations.size() and nations[root].alive:
-			active_roots[root] = true
-	for tracked_value in suzerainty_low_cohesion_since_day.keys():
-		var tracked_root := int(tracked_value)
-		if not active_roots.has(tracked_root):
-			suzerainty_low_cohesion_since_day.erase(tracked_root)
-	var roots: Array[int] = []
-	roots.assign(active_roots.keys())
-	roots.sort()
-	var dissolved: Array[int] = []
-	for root in roots:
-		if not VassalConflict.for_nation(self, root).is_empty():
-			suzerainty_low_cohesion_since_day.erase(root)
-			continue
-		if suzerainty_cohesion(root) >= VASSAL_DISSOLUTION_COHESION_THRESHOLD:
-			suzerainty_low_cohesion_since_day.erase(root)
-			continue
-		if not suzerainty_low_cohesion_since_day.has(root):
-			suzerainty_low_cohesion_since_day[root] = day
-			continue
-		if (
-			day - int(suzerainty_low_cohesion_since_day[root])
-			< VASSAL_SYSTEM_DISSOLUTION_DAYS
-		):
-			continue
-		if _dissolve_suzerainty_system(root):
-			dissolved.append(root)
-			suzerainty_low_cohesion_since_day.erase(root)
-	return dissolved
-
-
-func suzerainty_dissolution_days_remaining(nation_id: int) -> int:
-	if nation_id < 0 or nation_id >= nations.size():
-		return -1
-	var root := suzerainty_root(nation_id)
-	if not suzerainty_low_cohesion_since_day.has(root):
-		return -1
-	return maxi(
-		VASSAL_SYSTEM_DISSOLUTION_DAYS
-			- (day - int(suzerainty_low_cohesion_since_day[root])),
-		0
-	)
-
-
-## 把同一宗藩根下的全部层级同时升格为独立国家，并把全体原成员组成
-## 两两结盟的大联盟。内部战争按州治实控整州确认领土后结束；共享粮仓
-## 按各成员粮产拆分。
-func _dissolve_suzerainty_system(root_id: int) -> bool:
-	if (
-		root_id < 0
-		or root_id >= nations.size()
-		or suzerainty_root(root_id) != root_id
-	):
-		return false
-	var members := suzerainty_members(root_id)
-	if members.size() <= 1:
-		return false
-	var member_set := {}
-	for member_id in members:
-		member_set[member_id] = true
-	var food_members_by_holder := {}
-	for member_id in members:
-		if not nations[member_id].alive:
-			continue
-		var holder_id := food_pool_holder(member_id)
-		if not food_members_by_holder.has(holder_id):
-			food_members_by_holder[holder_id] = [] as Array[int]
-		(food_members_by_holder[holder_id] as Array[int]).append(member_id)
-	var food_split_plans: Array[Dictionary] = []
-	var holder_ids: Array[int] = []
-	holder_ids.assign(food_members_by_holder.keys())
-	holder_ids.sort()
-	for holder_id in holder_ids:
-		var pool_members: Array[int] = food_members_by_holder[holder_id]
-		pool_members.sort()
-		var output_by_member := {}
-		var total_output := 0
-		for member_id in pool_members:
-			var member_output := 0
-			for city in land_cities_of(member_id):
-				member_output += city.food_per_half_year
-			output_by_member[member_id] = member_output
-			total_output += member_output
-		food_split_plans.append({
-			"holder_id": holder_id,
-			"members": pool_members,
-			"stock": _food_pool_stock(holder_id),
-			"total_output": total_output,
-			"output_by_member": output_by_member,
-		})
-	var proposed := suzerainty.duplicate(true)
-	for subject_value in suzerainty:
-		var subject_id := int(subject_value)
-		if member_set.has(subject_id):
-			proposed.erase(subject_id)
-	var territory_operations: Array[Dictionary] = []
-	var settled_internal_pairs := {}
-	for a in members:
-		for b in members:
-			if a != b: settled_internal_pairs[edge_key(a, b)] = true
-	var blocked_states := {}
-	for city in cities:
-		var legal_owner := recognized_owner_of(city.id)
-		if not member_set.has(legal_owner): continue
-		var sponsor := city.occupation_sponsor_nation
-		if sponsor >= 0 and not member_set.has(sponsor) and is_enemy(sponsor, legal_owner): continue
-		var center := administrative_center_of(city.id)
-		var recipient := cities[center].owner_nation if center >= 0 else city.owner_nation
-		if center >= 0:
-			if not blocked_states.has(center):
-				blocked_states[center] = administrative_settlement_has_external_claim(center, settled_internal_pairs)
-			if blocked_states[center]: recipient = legal_owner
-		if not member_set.has(recipient): recipient = legal_owner
-		# External legal territory is never acquired by dissolving an internal
-		# political hierarchy. External temporary occupations keep their troops
-		# and sponsor; only the internal legal claim follows the state seat.
-		if center >= 0 and not member_set.has(recognized_owner_of(center)): continue
-		var internal_control := member_set.has(city.owner_nation)
-		var controller := recipient if internal_control else city.owner_nation
-		sponsor = -1 if internal_control else sponsor
-		if controller == city.owner_nation and recipient == legal_owner and sponsor == city.occupation_sponsor_nation: continue
-		territory_operations.append({
-			"city_id": city.id,
-			"controller_id": controller,
-			"legal_owner_id": recipient,
-			"sponsor_id": sponsor,
-			"reset_political_target": true,
-			"reason": "suzerainty_dissolution_occupation_recognized",
-			"stock_policy": TerritoryStockDisposition.MOVE_TO_NEW_POOL,
-		})
-	var diplomacy_operations: Array[Dictionary] = []
-	for first_index in range(members.size()):
-		for second_index in range(first_index + 1, members.size()):
-			var nation_a := members[first_index]
-			var nation_b := members[second_index]
-			diplomacy_operations.append({
-				"nation_a": nation_a,
-				"nation_b": nation_b,
-				"relation": DiplomaticRelation.ALLIED,
-				"truce_days": 0,
-			})
-	var result := apply_territory_transaction(
-		territory_operations,
-		{},
-		-1,
-		proposed,
-		diplomacy_operations
-	)
-	if not bool(result.get("ok", false)) or not bool(result.get("changed", false)):
-		return false
-	for split_plan in food_split_plans:
-		var holder_id := int(split_plan["holder_id"])
-		var stock := int(split_plan["stock"])
-		var total_output := int(split_plan["total_output"])
-		var output_by_member: Dictionary = split_plan["output_by_member"]
-		for member_value in split_plan["members"]:
-			var member_id := int(member_value)
-			if member_id == holder_id:
-				continue
-			var share := _proportional_share(
-				stock, int(output_by_member.get(member_id, 0)), total_output
-			)
-			var capital_id := nations[member_id].capital_city_id
-			if (
-				share <= 0
-				or capital_id < 0
-				or capital_id >= cities.size()
-				or not cities[capital_id].has_warehouse
-			):
-				continue
-			var withdrawn := _withdraw_food_from_warehouses(
-				nations[holder_id], share
-			)
-			cities[capital_id].food_storage += withdrawn
-	for objective_key in war_objectives.keys():
-		var objective: Dictionary = war_objectives[objective_key]
-		if (
-			member_set.has(int(objective.get("attacker", -1)))
-			and member_set.has(int(objective.get("defender", -1)))
-		):
-			war_objectives.erase(objective_key)
-	for member_id in members:
-		var nation := nations[member_id]
-		if member_set.has(nation.war_preparation_target_nation):
-			nation.war_preparation_target_nation = -1
-			nation.war_preparation_objective_city = -1
-			nation.war_preparation_objective_center_city = -1
-			nation.war_preparation_staging_city_id = -1
-			nation.war_preparation_army_ids.clear()
-			nation.war_preparation_started_day = -1
-			nation.war_preparation_reason = ""
-			nation.war_preparation_unready_since_day = -1
-	refresh_derived()
-	diplomatic_history.append({
-		"day": day,
-		"kind": "suzerainty_dissolved",
-		"root_nation": root_id,
-		"member_nations": members.duplicate(),
-		"alliance_formed": true,
-	})
-	return true
 
 
 ## 无城控制者的对外领土接收回退。正常占领优先保留实际控制者；仅当控制者已

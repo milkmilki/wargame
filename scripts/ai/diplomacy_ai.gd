@@ -138,8 +138,8 @@ const CENTRALIZE_COOLDOWN_DAYS: int = 1825          ## 一次削藩后约5年内
 ## （分封 created_day 与削藩 last_centralization_day 是两套字段，缺此门控时新藩王当即满足削藩）。
 ## 拉长到约 4 年：一次分封的政治重组需长期稳定，杜绝"封了又撤"的高频横跳。
 const CENTRALIZE_MIN_VASSAL_AGE_DAYS: int = 1440
-# 兼容旧诊断/测试的展示阈值；实际反抗判定由 RebellionSystem 统一负责。
-const CENTRALIZE_RESIST_RATIO_THRESHOLD: float = 0.45
+const CENTRALIZE_RESIST_RATIO_THRESHOLD: float = RebellionSystem.CENTRALIZATION_STRONG_POWER_RATIO
+const CENTRALIZE_SAFE_POWER_RATIO: float = 1.50
 ## 财政收益不为正时，只有达到此高威胁比才因政治风险削藩。该阈值显著高于反抗阈值，
 ## 因此威胁分支天然会进入内战，而不会让一般军力增长压过财政理性。
 const CENTRALIZE_POLITICAL_THREAT_RATIO_THRESHOLD: float = 0.80
@@ -7295,26 +7295,8 @@ static func _collect_enfeoff_actions(
 
 # ------------------------------------------------------------------ 削藩（藩王系统 C2）
 # 宗主在和平期、撤藩财政收益为正或藩王已成高威胁且冷却已过时发起削藩。
-# 是否反抗统一委托 RebellionSystem，以忠诚、持续时间、冷却和军力共同决定。
+# 强藩与征服者必反，弱藩沿用忠诚叛乱判定；普通宗主还须通过阵营胜算门禁。
 # 执行仍由 Simulation 完成；本层只产出候选动作并预判藩王反应，附在动作里供展示。
-
-## 宗主当前可用于镇压内战的军力：总军力扣除被其它实战线占用的兵力。
-## 第一版：宗主削藩本就要求和平（无实战前线），故可镇压 ≈ 全部军力。
-## 仍按「扣除与非宗藩敌国交战占用」派生，为将来宗主多线状态保留正确性。
-static func _suppression_power(
-	state: GameState,
-	overlord_id: int,
-	evaluation_cache: Dictionary = {}
-) -> float:
-	# 与任何非本宗藩体系的敌国交战时，占用的前线兵力不计入可镇压力。
-	# 和平时该集合为空，可镇压力 = 全部军力。
-	var tied_up := 0.0
-	for enemy_id in state.wars_of(overlord_id):
-		if state.suzerainty_root(enemy_id) == state.suzerainty_root(overlord_id):
-			continue  # 宗藩体系内部（如正在进行的其它内战）不在此扣除
-		tied_up += _national_power(state, enemy_id, evaluation_cache)
-	return maxf(_national_power(state, overlord_id, evaluation_cache) - tied_up, 1.0)
-
 
 ## 藩王反抗比 = 藩王军力 / 宗主可镇压军力。越高越敢反抗。
 static func vassal_resist_ratio(
@@ -7322,12 +7304,57 @@ static func vassal_resist_ratio(
 	subject_id: int,
 	evaluation_cache: Dictionary = {}
 ) -> float:
-	var overlord_id := state.overlord_of(subject_id)
-	if overlord_id < 0:
-		return 0.0
-	var subject_power := _national_power(state, subject_id, evaluation_cache)
-	var suppression := _suppression_power(state, overlord_id, evaluation_cache)
-	return subject_power / maxf(suppression, 1.0)
+	return RebellionSystem.centralization_power_ratio(state, subject_id)
+
+
+static func _centralization_side_power(state: GameState, side: Array, opponents: Array, participants: Array) -> float:
+	var reachable_by_owner := {}
+	for owner in side:
+		var reached := MilitaryReachability.planned_reachable(state, int(owner), side, participants)
+		for city in state.cities:
+			if opponents.has(city.owner_nation) and not MilitaryReachability.planned_entries(state, city.id, int(owner), side, participants, reached).is_empty():
+				reachable_by_owner[int(owner)] = reached
+				break
+	var power := 0.0
+	for army in state.armies:
+		if army.is_city_garrison or not state.army_effective_for_field_campaign(army) or not reachable_by_owner.has(army.owner_nation): continue
+		var position := army.move_to if army.on_edge else army.location_city
+		if (reachable_by_owner[army.owner_nation] as Dictionary).has(position): power += ArmyPower.effective(army)
+	return power
+
+
+## Read-only political forecast using the actual faction planner. Ordinary allies
+## are transit partners, not participants. Uprising uses its maximum base quality,
+## never samples the simulation RNG, and is doubled only for conqueror princes.
+static func centralization_assessment(state: GameState, subject: int) -> Dictionary:
+	var root := state.overlord_of(subject)
+	var result := {"resist": false, "can_attempt": false, "mode": "reject", "central_power":0.0,
+		"rebel_power":0.0, "uprising_power":0.0, "guard_power":0.0, "power_ratio":0.0}
+	if root<0 or root>=state.nations.size() or subject<0 or subject>=state.nations.size() or not state.nations[root].alive or not state.nations[subject].alive or state.is_in_civil_war(subject): return result
+	if state.nations[root].ruler_archetype==RulerProfile.PUPPET or _overlord_under_war_pressure(state,root) or not VassalConflict.for_nation(state,root).is_empty(): return result
+	result.resist = RebellionSystem.must_resist_centralization(state,subject) or RebellionSystem.should_vassal_rebel(state,subject)
+	if not result.resist:
+		result.mode = "peace"; result.can_attempt = true
+		return result
+	var plan := state.plan_vassal_conflict(subject)
+	result.mode = plan.mode
+	if plan.mode=="reject": return result
+	var tyrant := state.nations[root].ruler_archetype==RulerProfile.TYRANT
+	if plan.mode=="independence":
+		result.can_attempt = tyrant
+		return result
+	result.central_power = _centralization_side_power(state,plan.central,plan.rebels,plan.participants)
+	result.rebel_power = _centralization_side_power(state,plan.rebels,plan.central,plan.participants)
+	var count := ceili(0.1*state.land_cities_of(subject).size())
+	var prince := state.nations[subject]
+	var quality := sqrt(RulerProfile.attack_multiplier(prince)*RulerProfile.defense_multiplier(prince))
+	result.uprising_power = count * GameState.INITIAL_HEAVY_ARMY_SIZE * 1.5 * quality * (2 if prince.ruler_archetype==RulerProfile.CONQUEROR else 1)
+	var capital := prince.capital_city_id
+	var central: Array[int] = []; central.assign(plan.central)
+	result.guard_power = state.cities[capital].garrison_manpower * state.city_garrison_defense_bonus(root,capital,central) * maxf(state.cities[capital].ruler_city_defense_multiplier,0.1) * Army.funding_from_payment(prince.military_payment_ratio)
+	result.power_ratio = float(result.central_power)/maxf(float(result.rebel_power)+float(result.uprising_power)+float(result.guard_power),1.0)
+	result.can_attempt = tyrant or (float(result.central_power)>0.0 and float(result.power_ratio)>=CENTRALIZE_SAFE_POWER_RATIO)
+	return result
 
 
 ## 撤藩对宗主的月度财政反事实。藩王城市恢复直辖后失去 1.5 倍治理加成；其军队
@@ -7395,8 +7422,8 @@ static func evaluate_centralization_fiscal_benefit(
 
 ## 生成削藩候选动作。规则（文档 17、18 节）：
 ##   宗主非藩王、处于和平、冷却已过、当前无内战，且撤藩财政收益为正 → 削藩。
-##   财政不划算时，仅高政治威胁比可例外触发；军力比不再作为宗主优势硬门槛。
-## 暴君无视财政/威胁收益门槛，但仍须满足和平、藩王年龄与削藩冷却。
+##   财政不划算时高威胁可提供动机，但不能绕过普通宗主的阵营胜算门禁。
+## 暴君无视收益和胜算门槛，仍须满足和平、藩王年龄、冷却及合法冲突预检。
 ## 动作附带预判：resist=true 表示藩王将反抗（执行时开内战），否则和平撤藩。
 static func _collect_centralization_actions(
 	state: GameState,
@@ -7438,9 +7465,7 @@ static func _collect_centralization_actions(
 					evaluation_cache
 				)
 			)
-			var subject_power := _national_power(state, subject_id, evaluation_cache)
-			var suppression := _suppression_power(state, overlord_id, evaluation_cache)
-			var resist_ratio := subject_power / maxf(suppression, 1.0)
+			var resist_ratio := vassal_resist_ratio(state, subject_id, evaluation_cache)
 			var fiscal_benefit := int(
 				fiscal["monthly_fiscal_benefit"]
 			)
@@ -7458,10 +7483,9 @@ static func _collect_centralization_actions(
 				and not tyrant_centralization
 			):
 				continue
-			var will_resist := (
-				RebellionSystem.must_resist_centralization(state, subject_id)
-				or RebellionSystem.should_vassal_rebel(state, subject_id)
-			)
+			var assessment := centralization_assessment(state,subject_id)
+			if not assessment.can_attempt: continue
+			var will_resist: bool = assessment.resist
 			var motive := (
 				"撤藩月增益%+d（直辖%d+下级贡赋%d-原贡赋%d-接军费%d）"
 				% [
@@ -7484,16 +7508,18 @@ static func _collect_centralization_actions(
 				"a": overlord_id,
 				"b": subject_id,
 				"resist": will_resist,
+				"centralization_assessment": assessment,
 				"resist_ratio": resist_ratio,
 				"monthly_fiscal_benefit":
 					fiscal_benefit,
 				"reason": (
-					"和平期对藩王%d削藩：%s；反抗比%.2f，%s"
+					"和平期对藩王%d削藩：%s；反抗比%.2f，%s；中央/反叛含起兵城防战力比%.2f"
 					% [
 						subject_id,
 						motive,
 						resist_ratio,
 						"藩王将反抗，转削藩内战" if will_resist else "藩王接受，和平撤藩直辖",
+						assessment.power_ratio,
 					]
 				),
 			})

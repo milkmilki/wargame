@@ -100,7 +100,6 @@ static func start(state: GameState, subject: int, multiplier: int = 1) -> bool:
 		state.cities[int(capitals[int(member)])].food_storage += withdrawn
 		state.nations[int(member)].last_rebellion_day = state.day
 	state.nations[root].last_rebellion_day = state.day
-	state.suzerainty_low_cohesion_since_day.erase(root)
 	if proposed.mode == "war":
 		var record := {"war_id": war_id, "central_leader": root, "rebel_leader": subject, "central": proposed.central.duplicate(), "rebels": proposed.rebels.duplicate(), "loyalty": proposed.loyalty.duplicate(true), "started_day": state.day, "active": true, "outcome": ""}
 		state.vassal_conflicts[war_id] = record
@@ -188,7 +187,6 @@ static func finish(state: GameState, record: Dictionary, winner: int, expected_r
 	_release(state, record)
 	WorldNaming.promote_vassal_to_sovereign(state, winner)
 	FamilyTree.record_current_title(state, winner)
-	state.suzerainty_low_cohesion_since_day.erase(winner)
 	EmpireStatus.reconcile(state)
 	_append_event(state, "vassal_faction_result", record, "%s内战获胜，吞并%s，其余存活藩王改隶，整场内战结束" % [WorldNaming.nation_display_name(state, winner), WorldNaming.nation_display_name(state, loser)])
 	return true

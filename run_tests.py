@@ -12,6 +12,7 @@ import time
 ROOT = Path(__file__).resolve().parent
 CORE = [
 	"environment_nations", "nomad_names", "empire_recognition", "empire_security",
+	"vassal_centralization", "vassal_faction_conflict", "enfeoff_shared_lineage",
 	"administrative_state_integrity", "regional_rebel_capital_capture", "campaign_forward_camp_access", "campaign_neutral_route", "vassal_occupation_routes",
     "state_campaign_lifecycle", "coalition_campaign_pairs", "coalition_campaign_frame_slice_equivalence",
     "native_city_partitions",

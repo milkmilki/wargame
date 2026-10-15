@@ -115,11 +115,6 @@ func build_view_state(live_state: GameState, index: int) -> GameState:
 	_view_state.suzerainty = (
 		(snapshot["suzerainty"] as Dictionary).duplicate(true)
 	)
-	_view_state.suzerainty_low_cohesion_since_day = (
-		(snapshot.get(
-			"suzerainty_low_cohesion_since_day", {}
-		) as Dictionary).duplicate(true)
-	)
 	_view_state.rebellions = (
 		(snapshot["rebellions"] as Dictionary).duplicate(true)
 	)
@@ -292,9 +287,6 @@ func _capture(game_state: GameState) -> void:
 		"vassal_conflicts": game_state.vassal_conflicts.duplicate(true),
 		"next_war_id": game_state.next_war_id,
 		"suzerainty": game_state.suzerainty.duplicate(true),
-		"suzerainty_low_cohesion_since_day": (
-			game_state.suzerainty_low_cohesion_since_day.duplicate(true)
-		),
 		"rebellions": game_state.rebellions.duplicate(true),
 		# 编年史是只追加事实；快照只保存前缀长度，避免每月复制完整历史。
 		"chronicle_event_count": game_state.chronicle_events.size(),

@@ -699,43 +699,8 @@ func _advance_day(spread_runtime_work: bool = false) -> void:
 	)
 	state.prune_dead_suzerainty()
 	EmpireStatus.reconcile(state)
-	var dissolution_members_by_root := {}
-	var internal_preparation_members := {}
-	for tracked_value in state.suzerainty_low_cohesion_since_day:
-		var tracked_root := int(tracked_value)
-		if state.suzerainty_dissolution_days_remaining(tracked_root) != 0:
-			continue
-		dissolution_members_by_root[tracked_root] = (
-			state.suzerainty_members(tracked_root)
-		)
-	for members_value in dissolution_members_by_root.values():
-		var member_ids: Array[int] = members_value
-		var member_set := {}
-		for member_id in member_ids:
-			member_set[member_id] = true
-		for member_id in member_ids:
-			if member_set.has(
-				state.nations[member_id].war_preparation_target_nation
-			):
-				internal_preparation_members[member_id] = true
-	var dissolved_suzerainty_roots := (
-		state.advance_suzerainty_dissolution()
-	)
-	if not dissolved_suzerainty_roots.is_empty():
-		for dissolved_root in dissolved_suzerainty_roots:
-			var dissolved_members: Array[int] = (
-				dissolution_members_by_root.get(
-					dissolved_root, [] as Array[int]
-				)
-			)
-			_reconcile_battles_after_coalition_peace(
-				dissolved_members, dissolved_members
-			)
-			for member_id in dissolved_members:
-				if internal_preparation_members.has(member_id):
-					_clear_war_preparation(member_id)
-				_clear_finished_war_mobilization(member_id)
-		_ai_last_decision_day = -1
+	# Political conflicts still require lifecycle repair when leaders die.
+	VassalConflict.reconcile(state)
 	state.prune_rebellions()
 	if runtime_stage_profiling_enabled:
 		_record_runtime_span(&"cleanup_suzerainty", cleanup_part_started)
@@ -4714,12 +4679,18 @@ func _execute_diplomatic_action(
 		DiplomacyAI.Action.CENTRALIZE:
 			# 削藩：藩王反抗则开内战（占首都通吃留待领土结算），否则和平撤藩直辖。
 			if state.overlord_of(nation_b) == nation_a and not state.is_in_civil_war(nation_b):
+				# AI proposals may wait behind other political commits; re-plan sides
+				# and odds before launch. Explicit commands have no AI forecast field.
+				if action.has("centralization_assessment"):
+					var assessment := DiplomacyAI.centralization_assessment(state,nation_b)
+					if not assessment.can_attempt: return false
+					action.centralization_assessment = assessment
 				var forced_resistance := (
 					RebellionSystem.must_resist_centralization(state, nation_b)
 				)
-				if bool(action.get("resist", false)) or forced_resistance:
+				if forced_resistance or RebellionSystem.should_vassal_rebel(state,nation_b):
 					changed = state.start_civil_war(
-						nation_b, 2 if forced_resistance else 1
+						nation_b, 2 if state.nations[nation_b].ruler_archetype==RulerProfile.CONQUEROR else 1
 					)
 				else:
 					changed = state.revoke_vassal(nation_b)

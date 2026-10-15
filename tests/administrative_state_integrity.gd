@@ -282,57 +282,6 @@ func test_direct_occupation_recognition(seat_captured: bool, reverse: bool) -> v
 		"repeating direct recognition does not recredit captured stock")
 
 
-func test_suzerainty_dissolution(seat_captured: bool) -> void:
-	var state := Direct.fixture()
-	# Keep a second complete subject state so taking this non-capital seat
-	# does not turn the setup into a capital annexation or an eliminated root.
-	for id in [6, 7]:
-		state.cities[id].owner_nation = 1
-		state.recognized_city_owners[id] = 1
-	state.nations[1].capital_city_id = 6
-	state.suzerainty[1] = {"overlord_id": 0,
-		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE, "created_day": 0,
-		"last_centralization_day": -1, "civil_war": true}
-	# A neutral pre-existing title is outside this internal settlement,
-	# even though its prefecture shares the disputed administrative state.
-	var neutral_fu := City.new()
-	neutral_fu.id = state.cities.size()
-	neutral_fu.owner_nation = 2
-	neutral_fu.food_storage = 12345
-	state.cities.append(neutral_fu)
-	state.recognized_city_owners.append(2)
-	state.administrative_center_by_city.append(3)
-	state.region_ids.append(0)
-	state.adjacency[neutral_fu.id] = [] as Array[int]
-	state._add_edge(3, neutral_fu.id)
-	var capture := 3 if seat_captured else 4
-	var result := state.apply_territory_transaction([{
-		"city_id": capture, "controller_id": 0, "legal_owner_id": 1,
-		"sponsor_id": 0, "stock_policy": GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL,
-		"reason": "regression_internal_war_occupation",
-	}] as Array[Dictionary])
-	check(bool(result.get("ok", false)), "internal occupation uses a real territory transaction")
-	state.refresh_derived()
-	var before := resources(state)
-	var neutral_before := [state.cities[neutral_fu.id].owner_nation,
-		state.recognized_owner_of(neutral_fu.id), state.cities[neutral_fu.id].food_storage,
-		state.nations[2].treasury_gold]
-	check(state._dissolve_suzerainty_system(0), "real suzerainty dissolution commits")
-	check(owned_and_legal(state, [3, 4] as Array[int], 0 if seat_captured else 1),
-		"internal dissolution settles the whole state's own legal members by its seat controller")
-	check(not state.is_vassal(1) and state.relation_between(0, 1) == GameState.DiplomaticRelation.ALLIED,
-		"dissolution actually ends internal war and removes the vassal hierarchy")
-	check([state.cities[neutral_fu.id].owner_nation,
-		state.recognized_owner_of(neutral_fu.id), state.cities[neutral_fu.id].food_storage,
-		state.nations[2].treasury_gold] == neutral_before,
-		"internal dissolution preserves external neutral legal titles and stocks")
-	check(resources(state) == before, "internal dissolution conserves food and treasury gold")
-	var after := [draft_for(state), resources(state), state.diplomatic_history.size()]
-	check(not state._dissolve_suzerainty_system(0)
-		and [draft_for(state), resources(state), state.diplomatic_history.size()] == after,
-		"repeated dissolution does not duplicate territory, food or final history")
-
-
 func test_partial_state_cannot_start_rebellion() -> void:
 	var state := Direct.fixture()
 	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.NEUTRAL)
@@ -354,60 +303,12 @@ func test_partial_state_cannot_start_rebellion() -> void:
 	check(state.rng.state == rng_before, "rejecting a partial-state uprising consumes no simulation randomness")
 
 
-func test_dissolution_preserves_external_occupation_claim() -> void:
-	var state := Direct.fixture()
-	# A distinct state keeps the subject alive after its non-capital seat
-	# becomes occupied. Nation 2 is an external ally, not a hierarchy member.
-	for id in [6, 7]:
-		state.cities[id].owner_nation = 1
-		state.recognized_city_owners[id] = 1
-	state.nations[1].capital_city_id = 6
-	state.suzerainty[1] = {"overlord_id": 0,
-		"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE, "created_day": 0,
-		"last_centralization_day": -1, "civil_war": true}
-	state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
-	state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.WAR)
-	var external_war := state.war_id_between(1, 2)
-	# Troops departing from an ally's territory can freeze that ally as the
-	# actual controller while retaining the external attacker's sponsor.
-	var captured := state.apply_territory_transaction([{
-		"city_id": 3, "controller_id": 0, "legal_owner_id": 1,
-		"sponsor_id": 2, "stock_policy": GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL,
-		"reason": "regression_external_sponsored_occupation",
-	}] as Array[Dictionary])
-	check(bool(captured.get("ok", false)), "external-sponsored occupation uses the real territory transaction")
-	state.refresh_derived()
-	var before := resources(state)
-	var occupation_before := [state.cities[3].owner_nation,
-		state.recognized_owner_of(3), state.cities[3].occupation_sponsor_nation]
-	check(state._dissolve_suzerainty_system(0), "hierarchy can dissolve during a separate external war")
-	check(state.recognized_owner_of(3) == 1 and state.recognized_owner_of(4) == 1,
-		"internal dissolution cannot confirm externally sponsored conquest of a whole state")
-	check([state.cities[3].owner_nation, state.recognized_owner_of(3),
-		state.cities[3].occupation_sponsor_nation] == occupation_before,
-		"the actual occupied seat retains its external sponsor and controller until that war settles")
-	check(state.is_enemy(1, 2) and state.war_id_between(1, 2) == external_war,
-		"internal dissolution cannot terminate the external sponsor's independent war")
-	check(not state.is_vassal(1) and state.relation_between(0, 1) == GameState.DiplomaticRelation.ALLIED,
-		"only the internal hierarchy and internal war conclude")
-	check(resources(state) == before, "dissolving around an external occupation conserves food and gold")
-	var after := [draft_for(state), resources(state), state.diplomatic_history.size(), external_war]
-	check(not state._dissolve_suzerainty_system(0)
-		and [draft_for(state), resources(state), state.diplomatic_history.size(), state.war_id_between(1, 2)] == after,
-		"repeated internal dissolution does not overwrite the external claim or duplicate history")
-
-
-func test_external_fu_claim_defers_whole_state(dissolution: bool, fu_controller: int) -> void:
+func test_external_fu_claim_defers_whole_state(fu_controller: int) -> void:
 	var state := Direct.fixture()
 	for id in [6, 7]:
 		state.cities[id].owner_nation = 1
 		state.recognized_city_owners[id] = 1
 	state.nations[1].capital_city_id = 6
-	if dissolution:
-		state.suzerainty[1] = {"overlord_id": 0,
-			"tribute_rate": GameState.DEFAULT_TRIBUTE_RATE, "created_day": 0,
-			"last_centralization_day": -1, "civil_war": true}
-		state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
 	state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.WAR)
 	var external_war := state.war_id_between(1, 2)
 	var occupied := state.apply_territory_transaction([{
@@ -426,8 +327,8 @@ func test_external_fu_claim_defers_whole_state(dissolution: bool, fu_controller:
 		state.cities[4].occupation_sponsor_nation]
 	var sim := Simulation.new()
 	sim.setup(state)
-	var kind := "dissolution" if dissolution else "ordinary peace"
-	check(state._dissolve_suzerainty_system(0) if dissolution else peace(sim, 0, 1),
+	var kind := "ordinary peace"
+	check(peace(sim, 0, 1),
 		kind + " concludes the internal/selected war while external war continues")
 	check(state.recognized_owner_of(3) == 1 and state.recognized_owner_of(4) == 1,
 		kind + " cannot split a unified legal state around an unsettled external fu claim")
@@ -578,12 +479,8 @@ func run() -> void:
 	for seat_captured in [false, true]:
 		for reverse in [false, true]:
 			test_direct_occupation_recognition(seat_captured, reverse)
-		test_suzerainty_dissolution(seat_captured)
 	test_partial_state_cannot_start_rebellion()
-	test_dissolution_preserves_external_occupation_claim()
-	test_external_fu_claim_defers_whole_state(true, 0)
-	test_external_fu_claim_defers_whole_state(true, 2)
-	test_external_fu_claim_defers_whole_state(false, 2)
+	test_external_fu_claim_defers_whole_state(2)
 	test_rebellion_parent_annexed_by_third_country()
 	test_original_chengdu_transfer_chain()
 	test_direct_rebel_recognition_preserves_external_fu_claim()

@@ -96,7 +96,7 @@ func add_army(state: GameState, nation_id: int, person_id: int) -> Army:
 		army.political_person_id = person_id
 	return army
 
-func test_shared_princes(dissolved: bool = false) -> void:
+func test_shared_princes(independent: bool = false) -> void:
 	var state := fixture()
 	var subject := state.enfeoff(0, [4, 5, 6, 7] as Array[int])
 	check(subject >= 0, "shared/first_real_enfeoff")
@@ -106,10 +106,16 @@ func test_shared_princes(dissolved: bool = false) -> void:
 	var vassal := state.nations[subject]
 	FamilyFixture.ensure_candidates(state, subject)
 	check(vassal.family_tree_id == sovereign.family_tree_id, "shared/same_tree")
-	if dissolved:
-		check(state._dissolve_suzerainty_system(0), "dissolved/real_dissolution")
-		check(not state.is_vassal(subject), "dissolved/independent")
-		check(vassal.family_tree_id == sovereign.family_tree_id, "dissolved/ancestry_retained")
+	if independent:
+		# Independence is a controlled political transaction in this genealogy
+		# fixture; there is no automatic realm-dissolution gameplay entry.
+		var graph := state.suzerainty.duplicate(true)
+		graph.erase(subject)
+		var result := state.apply_territory_transaction([],{},-1,graph,[{"nation_a":0,"nation_b":subject,"relation":GameState.DiplomaticRelation.NEUTRAL,"truce_days":180}] as Array[Dictionary])
+		check(result.ok, "independent/real_political_transaction")
+		WorldNaming.promote_vassal_to_sovereign(state,subject)
+		check(not state.is_vassal(subject), "independent/no_overlord")
+		check(vassal.family_tree_id == sovereign.family_tree_id, "independent/ancestry_retained")
 	var expected := vassal.prince_person_ids[1]
 	var protected_ids: Array[int] = []
 	for person_id in sovereign.prince_person_ids:

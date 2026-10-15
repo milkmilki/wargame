@@ -6139,7 +6139,7 @@ func _test_civil_war_relations() -> void:
 # ------------------------------------------------------------------ 32h. 削藩决策与反抗判据（增量 C2）
 
 func _test_centralization_decision() -> void:
-	print("[32h] 削藩：财政收益主判据、高威胁例外、反抗比、和平撤藩守恒")
+	print("[32h] 削藩：财政收益与胜算门禁、强藩必反、暴君冒险、和平撤藩守恒")
 	# 构造宗主 0 + 藩王：把藩王大部分军队清掉，制造宗主压倒性优势→藩王接受。
 	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32081)
@@ -6393,7 +6393,7 @@ func _test_centralization_decision() -> void:
 		"撤藩财政亏损且政治威胁未达高危阈值时，不得削藩"
 	)
 
-	# 高威胁例外：大藩王即使撤藩财政亏损、军力强于宗主，仍应触发削藩并反抗。
+	# 威胁不能绕过胜算：中央没有可用军队时，普通宗主应保留强藩。
 	var rs := preload("res://tests/support/grid_world.gd").new()
 	rs.generate_grid_world(32082)
 	for a in range(rs.nations.size()):
@@ -6429,8 +6429,7 @@ func _test_centralization_decision() -> void:
 			)
 	)
 	var strong_ratio := DiplomacyAI.vassal_resist_ratio(rs, rs_sub)
-	# 削藩反抗现由 RebellionSystem 统一判断：除军力外，还必须满足
-	# 低忠诚持续三个月与双方叛乱冷却。显式构造该政治成熟状态。
+	# 保留低忠诚成熟状态，验证原有自发反叛分支没有被强藩判定删除。
 	for city in rs.land_cities_of(rs_sub):
 		city.loyalty = RebellionSystem.LOYALTY_REBEL
 		city.rebellion_progress = RebellionSystem.REBELLION_PROGRESS_MONTHS
@@ -6444,6 +6443,12 @@ func _test_centralization_decision() -> void:
 		{}
 	)
 	var resist_action := {}
+	_check(rs_actions.all(func(action): return int(action.get("kind",-1))!=DiplomacyAI.Action.CENTRALIZE or int(action.get("b",-1))!=rs_sub),
+		"高威胁不能让普通宗主主动发动无法镇压的削藩战争")
+	# 暴君保留冒险性格；同一实际局面可以发起真实内战。
+	rs.nations[0].ruler_archetype = RulerProfile.TYRANT
+	rs_actions.clear()
+	DiplomacyAI._collect_centralization_actions(rs,rs_actions,{}, {})
 	for action in rs_actions:
 		if (
 			int(action.get("kind", -1))
@@ -6467,13 +6472,13 @@ func _test_centralization_decision() -> void:
 			and bool(resist_action.get("resist", false))
 			and str(
 				resist_action.get("reason", "")
-			).contains("政治威胁比")
+			).contains("暴君")
 			and rs_exec
 			and rs.is_in_civil_war(rs_sub)
 			and rs.is_enemy(0, rs_sub)
 			and rs.is_vassal(rs_sub)
 			and rs.suzerainty_structure_valid(),
-		"高威胁大藩王须绕过财政亏损触发削藩，并以反抗进入内战"
+		"暴君可冒险削藩，强藩通过真实执行入口反抗并进入内战"
 	)
 	rs_sim.free()
 
