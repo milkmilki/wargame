@@ -29,6 +29,11 @@ relations without rewinding the simulation.
   accession source, heir and trade policy. Ruler profiles and trade policy are
   frozen independently at each point; later edits and succession do not rewrite
   earlier cards. Countries not yet founded cannot expose their future rulers.
+- Clicking a person in the native family tree displays their own “人物类型”,
+  type description, traits and trait descriptions. An active ruler's profile
+  comes from the selected source nation's record; other members use their own
+  family entry. Unknown profiles display “未记录” instead of guessing “均衡”.
+  This resolution only updates the detached display model, never the live tree.
 - Store the last settled court expense rate, amount due, and amount paid at
   each history point. Historical details display those records without
   recomputing them from the current ruler or running a resource forecast.
@@ -62,6 +67,10 @@ relations without rewinding the simulation.
 - `political_history_rulers.gd` covers historical profile edits, real ruler
   death/accession, trade policy isolation, reign duration, person links,
   future-country isolation and live-state/RNG immutability.
+- `atlas_family_person_types.gd` exercises real mouse clicks on ruler, relative
+  and unknown ancestor nodes, stale/missing ruler entries, historical isolation
+  and wide/compact layouts. Run without `--headless` and add
+  `-- --family-person-capture` for GPU screenshots in `.dbg/family-person-types/`.
 - Scene smoke tests verify that the timeline is present and switches between a
   historical view and the live view.
 - `atlas_history_timeline.gd` covers commit-boundary capture, slider selection,

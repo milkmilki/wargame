@@ -26,7 +26,7 @@ CORE = [
     "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test", "political_history_rulers",
     "regional_strategy", "regional_access_recovery", "family_tree_smoke",
     "royal_title_origin", "royal_title_generations", "royal_title_lifecycle",
-    "succession_virtual", "succession_virtual_lifecycle", "succession_preparation", "succession_conflict", "succession_chain", "succession_lifecycle", "atlas_family_model", "atlas_family_runtime", "atlas_family_interaction", "atlas_family_close_input", "ruler_succession_extremes", "succession_counterattack", "diplomatic_battle_lifecycle",
+    "succession_virtual", "succession_virtual_lifecycle", "succession_preparation", "succession_conflict", "succession_chain", "succession_lifecycle", "atlas_family_model", "atlas_family_runtime", "atlas_family_interaction", "atlas_family_person_types", "atlas_family_close_input", "ruler_succession_extremes", "succession_counterattack", "diplomatic_battle_lifecycle",
     "encirclement_index_equivalence", "diplomacy_objective_batch_cache",
     "strategic_betweenness_preference", "strategic_target_cache", "strategic_edge_queries", "war_diplomacy_runtime_equivalence",
     "ultimatum_forecast_cache_equivalence",

@@ -11,6 +11,12 @@ static func capture(state: GameState, nation_id: int) -> Dictionary:
 	for n in state.nations:
 		if n.family_tree_id != nation.family_tree_id: continue
 		countries.append({"id":n.id,"name":WorldNaming.nation_display_name(state,n.id),"ruler":n.ruler_person_id,"alive":n.alive,"started":n.ruler_started_day})
+		# Nation is authoritative for an active ruler. Resolve missing/stale
+		# family profiles only in this source's detached presentation copy.
+		if n.alive and members.has(n.ruler_person_id):
+			var member: Dictionary=members[n.ruler_person_id]
+			member["archetype"]=n.ruler_archetype
+			member["traits"]=n.ruler_traits.duplicate()
 	var reigns := {}; var reign_ends := {}
 	for event in state.chronicle_events:
 		if event.get("kind","") != "ruler_succession": continue
@@ -45,9 +51,18 @@ static func structural_key(model: Dictionary) -> int:
 static func person_document(model: Dictionary,id: int) -> Dictionary:
 	if model.is_empty() or not model.members.has(id): return {}
 	var m: Dictionary = model.members[id]
+	var archetype := int(m.get("archetype",-1))
+	var recorded := RulerProfile.is_valid_archetype(archetype)
 	var rows: Array = [Info.row("身份",m.display_title),Info.row("状态","在世" if m.get("alive",true) else "已故"),
-		Info.row("类型",RulerProfile.archetype_name(int(m.get("archetype",RulerProfile.BALANCED)))),
-		Info.row("太子","是" if m.get("crown",false) else "否"),Info.row("生卒 / 年龄","未记录")]
+		Info.row("人物类型",RulerProfile.archetype_name(archetype) if recorded else "未记录")]
+	if recorded: rows.append(Info.row("类型说明",RulerProfile.archetype_description(archetype)))
+	var traits: Array = []
+	for trait_id in m.get("traits",[]): traits.append(RulerProfile.trait_name(str(trait_id)))
+	rows.append(Info.row("特质","、".join(traits) if not traits.is_empty() else "无" if m.has("traits") else "未记录"))
+	for trait_id in m.get("traits",[]):
+		rows.append(Info.row("特质 · "+RulerProfile.trait_name(str(trait_id)),RulerProfile.trait_description(str(trait_id))))
+	rows.append(Info.row("太子","是" if m.get("crown",false) else "否"))
+	rows.append(Info.row("生卒 / 年龄","未记录"))
 	rows.append(Info.row("即位起日","第%d天"%int(m.last_reign) if int(m.last_reign)>=0 else "未记录"))
 	rows.append(Info.row("即位止日","第%d天"%int(m.reign_end) if int(m.reign_end)>=0 else "未记录"))
 	rows.append(Info.row("太祖","是" if m.get("taizu",false) else "否"))
@@ -55,9 +70,6 @@ static func person_document(model: Dictionary,id: int) -> Dictionary:
 	var fief:=int(m.get("enfeoffed_nation_id",-1))
 	for n in model.countries:
 		if n.id==fief: rows.append(Info.row("实封",n.name,"nation",fief))
-	var traits: Array = []
-	for trait_id in m.get("traits",[]): traits.append(RulerProfile.trait_name(str(trait_id)))
-	rows.append(Info.row("特质","、".join(traits) if not traits.is_empty() else "无"))
 	var parent := int(m.get("parent_id",-1))
 	rows.append(Info.row("父亲",model.members.get(parent,{}).get("name","未记录"),"person",parent if model.members.has(parent) else -1))
 	var children: Array = []
