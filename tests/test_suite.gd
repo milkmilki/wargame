@@ -3507,9 +3507,9 @@ func _test_capital_capture_capitulation() -> void:
 	_check(
 		expected_capital_transfers == captured_region
 			and surrender_state.ownership_revision
-				== capital_capture_revision_before + 2,
+				== capital_capture_revision_before + 1,
 		(
-			"首都所在州须原子提交，随后和平结算独立提交"
+			"首都整州割让与和平结算须合并为一次原子领土提交"
 			+ "（revision %d→%d）"
 		) % [
 			capital_capture_revision_before,
@@ -3681,8 +3681,8 @@ func _test_capital_capture_capitulation() -> void:
 			"transfer_city_sovereignty 必须原子完成实控、法理和政治目标的永久转移"
 		)
 
-	# 首都失陷投降后，和平结算检测剩余合法飞地，并把飞地整体转交给
-	# 与其陆路边界最多的周边国家；主体领土仍归战败国。
+	# 旧夹具中的城16是单府飞地，同州仍有其他国家的合法领土。
+	# 和平飞地整理不能继续按单城割让，扩大这种既有拆州；主体领土保留。
 	var enclave_state := preload("res://tests/support/grid_world.gd").new()
 	enclave_state.generate_grid_world(6366)
 	enclave_state.armies.clear()
@@ -3732,12 +3732,12 @@ func _test_capital_capture_capitulation() -> void:
 	enclave_sim._capture_city(enclave_captor, enclave_state.cities[1])
 	var enclave_capital := enclave_state.nations[1].capital_city_id
 	_check(
-		enclave_state.cities[16].owner_nation == 2
-			and enclave_state.recognized_owner_of(16) == 2
+		enclave_state.cities[16].owner_nation == 1
+			and enclave_state.recognized_owner_of(16) == 1
 			and enclave_state.cities[16].occupation_sponsor_nation == -1
 			and enclave_state.cities[4].owner_nation == 1,
 		(
-			"投降后合法飞地城16必须转交周边国家，"
+			"投降后不得把旧拆州中的单府城16再割给周边国家，"
 			+ "主体城4也保留：城16归属=%d 法理=%d 首都=%d"
 		) % [
 			enclave_state.cities[16].owner_nation,
@@ -3747,7 +3747,7 @@ func _test_capital_capture_capitulation() -> void:
 	)
 	_check(
 		enclave_state.territory_structure_valid(),
-		"首都投降转交合法飞地后领土结构不变量必须成立"
+		"首都投降保留旧拆州单府后领土结构不变量必须成立"
 	)
 	enclave_sim.free()
 
@@ -7257,11 +7257,34 @@ func _test_suzerainty_disconnection_requires_capture() -> void:
 			and sb.cities[5].owner_nation == 1
 			and sb.recognized_owner_of(5) == 1
 			and sb.cities[5].occupation_sponsor_nation == -1
-			and sb.cities[4].owner_nation == 2
-			and sb.recognized_owner_of(4) == 2
+			and sb.cities[4].owner_nation == 1
+			and sb.recognized_owner_of(4) == 1
 			and sb.cities[4].occupation_sponsor_nation == -1
 			and sb.territory_structure_valid(),
-		"只有实际攻占形成的临时占领，才可在集团议和后确认为法理领土"
+		"只攻占属府而未攻占州治时，议和必须恢复原国实控与法理"
+	)
+	# 真正占领州治后，集团议和才将该州敌方的法理领土整体确认。
+	var sb_center := sb.administrative_center_of(4)
+	var sb_ceded_members: Array[int] = []
+	for member in sb.administrative_members(sb_center):
+		if sb.recognized_owner_of(member) == 1:
+			sb_ceded_members.append(member)
+	var sb_center_capture: Dictionary = sb.transfer_city_control(sb_center, 2, 2)
+	var sb_state_recognized := sb.recognize_coalition_occupied_territory(
+		[0, 1] as Array[int], [2, 3] as Array[int]
+	)
+	var sb_whole_state_confirmed := bool(sb_center_capture.get("changed", false))
+	for member in sb_ceded_members:
+		sb_whole_state_confirmed = (
+			sb_whole_state_confirmed
+			and sb_state_recognized.has(member)
+			and sb.cities[member].owner_nation == 2
+			and sb.recognized_owner_of(member) == 2
+			and sb.cities[member].occupation_sponsor_nation == -1
+		)
+	_check(
+		sb_whole_state_confirmed and sb.territory_structure_valid(),
+		"实际占领州治后须整体确认同州敌方法理，不能只确认先前攻下的属府"
 	)
 
 
@@ -7323,7 +7346,16 @@ func _test_external_territory_sovereignty() -> void:
 			break
 	var second_target: City = null
 	for city in gs.land_cities_of(3):
-		if city != subject_target and not city.is_capital and not city.has_warehouse:
+		if (
+			city != subject_target and not city.is_capital and not city.has_warehouse
+			and gs.administrative_center_of(city.id)
+				!= gs.administrative_center_of(subject_target.id)
+		):
+			var whole_enemy_state := true
+			for member in gs.administrative_members(gs.administrative_center_of(city.id)):
+				whole_enemy_state = whole_enemy_state and gs.cities[member].owner_nation == 3
+			if not whole_enemy_state:
+				continue
 			second_target = city
 			break
 	_check(
@@ -7363,23 +7395,47 @@ func _test_external_territory_sovereignty() -> void:
 			+ "sponsor 保留宗主且不能把控制权上收"
 		)
 	)
+	# 属府占领本身不能换取法理。先让同一支军队实际攻下州治，
+	# 再确认以州治控制者为接收者的完整敌方州域。
+	var subject_center := gs.cities[gs.administrative_center_of(subject_target.id)]
+	var subject_ceded_members: Array[int] = []
+	for member in gs.administrative_members(subject_center.id):
+		if gs.recognized_owner_of(member) == 3:
+			subject_ceded_members.append(member)
+	if subject_center.owner_nation != 1:
+		subject_army.location_city = subject_target.id
+		subject_army.move_from = subject_target.id
+		sim._capture_city(subject_army, subject_center)
 	var recognized := gs.recognize_coalition_occupied_territory(
 		[0, 1] as Array[int],
 		[2, 3] as Array[int]
 	)
+	var subject_state_confirmed := subject_center.owner_nation == 1
+	for member in subject_ceded_members:
+		subject_state_confirmed = (
+			subject_state_confirmed and recognized.has(member)
+			and gs.cities[member].owner_nation == 1
+			and gs.recognized_owner_of(member) == 1
+			and gs.cities[member].occupation_sponsor_nation == -1
+		)
 	_check(
-		recognized.has(subject_target.id)
+		subject_state_confirmed and recognized.has(subject_target.id)
 			and subject_target.owner_nation == 1
 			and gs.recognized_owner_of(subject_target.id) == 1
 			and subject_target.occupation_sponsor_nation == -1,
-		"集团议和确认战果时，外国藩王旧地必须成为实际占领藩王的法理领土"
+		"集团议和须将同州敌方法理整体交给实际占领州治的藩王，不得上收宗主"
 	)
 
 	# 集团和平：claimant 1 控制并持有库存的粮仓确认给自身时，作为
 	# 和平藩王仍共享宗主 0 的粮池，库存必须完整进入根粮仓。
 	var coalition_warehouse: City = null
 	for candidate in gs.land_cities_of(2):
-		if not candidate.is_capital and not candidate.has_warehouse:
+		if (
+			not candidate.is_capital and not candidate.has_warehouse
+			and gs.cities[gs.administrative_center_of(candidate.id)].owner_nation == 2
+			and gs.administrative_center_of(candidate.id)
+				!= gs.administrative_center_of(second_target.id)
+		):
 			coalition_warehouse = candidate
 			break
 	_check(
@@ -7387,6 +7443,14 @@ func _test_external_territory_sovereignty() -> void:
 		"集团和平粮仓上收回归必须找到一座普通敌方城市"
 	)
 	if coalition_warehouse != null:
+		# 先通过真实控制权事务建立已占州治，粮仓库存才有整州确认的前提。
+		var warehouse_center := gs.administrative_center_of(coalition_warehouse.id)
+		var warehouse_center_result := gs.transfer_city_control(warehouse_center, 1, 1)
+		_check(
+			bool(warehouse_center_result.get("ok", false))
+				and gs.cities[warehouse_center].owner_nation == 1,
+			"集团和平粮仓夹具必须先真实占领该州州治"
+		)
 		var coalition_recipient_warehouse := gs.warehouse_cities_of(0)[0]
 		var coalition_food_before := coalition_recipient_warehouse.food_storage
 		var coalition_captured_food := 137
@@ -7420,7 +7484,10 @@ func _test_external_territory_sovereignty() -> void:
 		)
 
 	# 宗主替本体系藩王收复其法理旧地时，法理优先，仍归原藩王。
-	gs.recognized_city_owners[second_target.id] = 1
+	# 整州都是藩王旧地，处于敌国临时占领下；收复单府不应改变其法理。
+	for member in gs.administrative_members(gs.administrative_center_of(second_target.id)):
+		gs.recognized_city_owners[member] = 1
+		gs.cities[member].occupation_sponsor_nation = 3
 	var root_army := _make_army(12992, 0, 5000, 10, 10)
 	root_army.location_city = second_target.id
 	root_army.move_from = second_target.id

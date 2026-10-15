@@ -5410,23 +5410,7 @@ func _append_coalition_territory_operation(
 	reason: String,
 	stock_policy: int
 ) -> void:
-	var owners: Array = draft["owners"]
-	var legal: Array = draft["legal"]
-	var sponsors: Array = draft["sponsors"]
-	var operation_by_city: Dictionary = draft["operation_by_city"]
-	owners[city_id] = controller_id
-	legal[city_id] = legal_owner_id
-	sponsors[city_id] = sponsor_id
-	operation_by_city[city_id] = {
-		"city_id": city_id,
-		"controller_id": controller_id,
-		"legal_owner_id": legal_owner_id,
-		"sponsor_id": sponsor_id,
-		"reset_political_target": true,
-		"reason": reason,
-		"stock_policy": stock_policy,
-	}
-
+	state._append_coalition_territory_operation(draft, city_id, controller_id, legal_owner_id, sponsor_id, reason, stock_policy)
 
 func _coalition_plan_operation_count(
 	draft: Dictionary,
@@ -5499,130 +5483,11 @@ func _plan_disconnected_coalition_occupation_restoration(
 
 
 func _plan_coalition_occupation_recognition(
-	draft: Dictionary,
-	bloc_a: Array[int],
-	bloc_b: Array[int],
-	settled_war_pairs: Dictionary
+	draft: Dictionary, bloc_a: Array[int], bloc_b: Array[int], settled_war_pairs: Dictionary
 ) -> Array[int]:
-	var side_a := {}
-	var side_b := {}
-	for nation_id in bloc_a:
-		side_a[nation_id] = true
-	for nation_id in bloc_b:
-		side_b[nation_id] = true
-	var transferred: Array[int] = []
-	var owners: Array = draft["owners"]
-	var legal: Array = draft["legal"]
-	var sponsors: Array = draft["sponsors"]
-	var operation_by_city: Dictionary = draft["operation_by_city"]
-	# Land territory follows the current controller of each administrative seat.
-	# Only legal owners in the opposing settled bloc are affected; neutral third
-	# parties and allies inside the same geographic region remain untouched.
-	for center_value in state.administrative_center_city_ids:
-		var center_id := int(center_value)
-		if center_id < 0 or center_id >= state.cities.size():
-			continue
-		var center_controller := int(owners[center_id])
-		var center_sponsor := int(sponsors[center_id])
-		var settlement_actor := (
-			center_sponsor if center_sponsor >= 0 else center_controller
-		)
-		var controlling_side := (
-			0 if side_a.has(settlement_actor)
-			else 1 if side_b.has(settlement_actor)
-			else -1
-		)
-		if controlling_side < 0:
-			continue
-		var recipient := (
-			center_controller
-			if _coalition_plan_nation_has_city(draft, center_controller)
-			else _planned_external_territory_recipient(
-				center_controller, draft
-			)
-		)
-		if recipient < 0:
-			continue
-		for city_id in state.administrative_members(center_id):
-			var recognized_owner := int(legal[city_id])
-			var recognized_side := (
-				0 if side_a.has(recognized_owner)
-				else 1 if side_b.has(recognized_owner)
-				else -1
-			)
-			if recognized_side < 0 or recognized_side == controlling_side:
-				continue
-			if not settled_war_pairs.has(
-				GameState.edge_key(settlement_actor, recognized_owner)
-			):
-				continue
-			_append_coalition_territory_operation(
-				draft, city_id, recipient, recipient, -1,
-				"coalition_territory_recognized",
-				GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
-			)
-			transferred.append(city_id)
-	# Docks retain node-by-node recognition. Occupied land cities not covered by
-	# a captured seat are restored, so taking a subordinate prefecture alone
-	# cannot produce a peace-time territorial transfer.
-	for city_id in range(state.cities.size()):
-		if operation_by_city.has(city_id):
-			continue
-		var controller := int(owners[city_id])
-		var recognized_owner := int(legal[city_id])
-		if controller == recognized_owner:
-			continue
-		var sponsor := int(sponsors[city_id])
-		if (
-			sponsor >= 0
-			and sponsor < state.nations.size()
-			and not settled_war_pairs.has(
-				GameState.edge_key(sponsor, recognized_owner)
-			)
-		):
-			continue
-		var occupying_side := -1
-		if side_a.has(sponsor):
-			occupying_side = 0
-		elif side_b.has(sponsor):
-			occupying_side = 1
-		elif side_a.has(controller):
-			occupying_side = 0
-		elif side_b.has(controller):
-			occupying_side = 1
-		var recognized_side := -1
-		if side_a.has(recognized_owner):
-			recognized_side = 0
-		elif side_b.has(recognized_owner):
-			recognized_side = 1
-		if (
-			occupying_side < 0
-			or recognized_side < 0
-			or occupying_side == recognized_side
-		):
-			continue
-		if state.cities[city_id].is_dock:
-			var recipient := (
-				controller
-				if _coalition_plan_nation_has_city(draft, controller)
-				else _planned_external_territory_recipient(controller, draft)
-			)
-			if recipient < 0:
-				continue
-			_append_coalition_territory_operation(
-				draft, city_id, recipient, recipient, -1,
-				"coalition_territory_recognized",
-				GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
-			)
-			transferred.append(city_id)
-		else:
-			_append_coalition_territory_operation(
-				draft, city_id, recognized_owner, recognized_owner, -1,
-				"peace_occupation_restored",
-				GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
-			)
-	return transferred
-
+	return state.plan_coalition_occupation_recognition(draft, bloc_a, bloc_b, settled_war_pairs,
+		func(controller: int) -> int:
+			return controller if _coalition_plan_nation_has_city(draft, controller) else _planned_external_territory_recipient(controller, draft))
 
 func _plan_coalition_rebellion_peace(
 	draft: Dictionary,
@@ -5642,19 +5507,15 @@ func _plan_coalition_rebellion_peace(
 			continue
 		var record: Dictionary = state.rebellions[rebel_id]
 		var core_city_ids: Array[int] = []
-		var controls_core := false
 		for city_value in record.get("core_city_ids", []):
 			var city_id := int(city_value)
 			core_city_ids.append(city_id)
-			if (
-				city_id >= 0
-				and city_id < state.cities.size()
-				and int(frozen_owners[city_id]) == rebel_id
-			):
-				controls_core = true
+		var recognized_members := state.regional_rebellion_recognition_city_ids(rebel_id, frozen_owners, draft["legal"])
+		var controls_core := not recognized_members.is_empty()
 		outcomes[rebel_id] = {
 			"parent_id": parent_id,
 			"core_city_ids": core_city_ids,
+			"recognized_members": recognized_members,
 			"recognized": controls_core,
 		}
 		if not controls_core:
@@ -5671,17 +5532,11 @@ func _plan_coalition_rebellion_peace(
 			continue
 		var core_city_ids: Array[int] = []
 		core_city_ids.assign(outcome["core_city_ids"])
-		for city_id in core_city_ids:
-			if (
-				city_id < 0
-				or city_id >= state.cities.size()
-				or int(frozen_owners[city_id]) != rebel_id
-			):
-				continue
+		for city_id in outcome["recognized_members"]:
 			_append_coalition_territory_operation(
 				draft, city_id, rebel_id, rebel_id, -1,
 				"regional_rebellion_recognized",
-				GameState.TerritoryStockDisposition.RETURN_TO_OLD_POOL
+				GameState.TerritoryStockDisposition.MOVE_TO_NEW_POOL
 			)
 		updates.append({
 			"rebel_id": rebel_id,
@@ -5786,7 +5641,6 @@ func _plan_coalition_enclave_transfers(
 	while guard > 0:
 		guard -= 1
 		var owners: Array = draft["owners"]
-		var legal: Array = draft["legal"]
 		var moved := false
 		for nation_id in candidate_nation_ids:
 			if nation_id < 0 or nation_id >= state.nations.size():
@@ -5803,12 +5657,7 @@ func _plan_coalition_enclave_transfers(
 			)
 			for component_index in range(1, components.size()):
 				var component: Array = components[component_index]
-				var legal_component := true
-				for city_id in component:
-					if int(legal[city_id]) != nation_id:
-						legal_component = false
-						break
-				if not legal_component:
+				if not _planned_component_has_complete_states(draft, component, nation_id):
 					continue
 				var border_counts := {}
 				for city_id in component:
@@ -5855,6 +5704,22 @@ func _plan_coalition_enclave_transfers(
 	return transferred_total
 
 
+func _planned_component_has_complete_states(draft: Dictionary, component: Array[int], nation_id: int) -> bool:
+	var owners: Array = draft["owners"]
+	var legal: Array = draft["legal"]
+	var checked := {}
+	for city_id in component:
+		if int(legal[city_id]) != nation_id: return false
+		var center := state.administrative_center_of(city_id)
+		if center < 0 or checked.has(center): continue
+		checked[center] = true
+		# A contested state or a legacy mixed legal state cannot be ceded by
+		# removing only the cities currently held by this settlement's member.
+		for member in state.administrative_members(center):
+			if int(owners[member]) != nation_id or int(legal[member]) != nation_id: return false
+	return true
+
+
 func _planned_land_components_for_owner(
 	draft: Dictionary,
 	nation_id: int
@@ -5873,11 +5738,19 @@ func _planned_land_components_for_owner(
 		unseen.erase(queue[0])
 		var component: Array[int] = []
 		var cursor := 0
+		var expanded_states := {}
 		while cursor < queue.size():
 			var city_id := queue[cursor]
 			cursor += 1
 			component.append(city_id)
-			for neighbor in state.territorial_border_neighbors(city_id):
+			var neighbors := state.territorial_border_neighbors(city_id)
+			var center := state.administrative_center_of(city_id)
+			if center >= 0 and not expanded_states.has(center):
+				expanded_states[center] = true
+				# Administrative states are indivisible settlement units. Joining
+				# their owned members here does not grant any military road access.
+				neighbors.append_array(state.administrative_members(center))
+			for neighbor in neighbors:
 				if not unseen.has(neighbor):
 					continue
 				unseen.erase(neighbor)
