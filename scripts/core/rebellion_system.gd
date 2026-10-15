@@ -47,7 +47,6 @@ const VASSAL_DEFIANT_LOYALTY: float = 35.0
 const VASSAL_DESPERATE_POWER_RATIO: float = 0.20
 const VASSAL_DEFIANT_POWER_RATIO: float = 0.35
 const VASSAL_REBEL_POWER_RATIO: float = 0.55
-const CENTRALIZATION_STRONG_POWER_RATIO: float = 0.50
 const _CACHE_PRESENT_KEY: StringName = &"__rebellion_cache_present"
 
 
@@ -642,14 +641,14 @@ static func vassal_loyalty(
 	)
 
 
-## 削藩是独立政治事件：强藩即使忠诚、未满叛乱计时或尚在叛乱冷却也必反。
-## 只计算实际野战军战力，领土和虚拟城防不冒充可以用于镇压的军队。
+## 供政治威胁与削藩诊断使用；军力比本身不强制普通藩国反抗。
+## 只计算实际野战军战力，领土和虚拟城防不计入。
 static func centralization_power_ratio(state: GameState, subject_id: int) -> float:
 	var root := state.overlord_of(subject_id)
 	if not _valid_living_nation(state, subject_id) or not _valid_living_nation(state, root): return 0.0
 	return _nation_military_power(state, subject_id) / maxf(_nation_military_power(state, root), 1.0)
 
-## 预告与执行共用，执行时重新读取兵力，不能被过期的 resist=false 绕过。
+## 保留原有征服者例外，预告与执行共用；普通藩国沿用忠诚叛乱条件。
 static func must_resist_centralization(
 	state: GameState,
 	subject_id: int
@@ -658,8 +657,7 @@ static func must_resist_centralization(
 		_valid_living_nation(state, subject_id)
 		and state.is_vassal(subject_id)
 		and not state.is_in_civil_war(subject_id)
-		and (state.nations[subject_id].ruler_archetype == RulerProfile.CONQUEROR
-			or centralization_power_ratio(state, subject_id) >= CENTRALIZATION_STRONG_POWER_RATIO)
+		and state.nations[subject_id].ruler_archetype == RulerProfile.CONQUEROR
 	)
 
 

@@ -48,27 +48,36 @@ func target_action(state: GameState) -> Dictionary:
 		if action.a==0 and action.b==1: return action
 	return {}
 
+func make_rebellious(state: GameState) -> void:
+	for city in state.land_cities_of(1):
+		city.loyalty = RebellionSystem.LOYALTY_REBEL
+		city.rebellion_progress = RebellionSystem.REBELLION_PROGRESS_MONTHS
+	state.nations[0].last_rebellion_day = -1
+	state.nations[1].last_rebellion_day = -1
+
 func test_resistance() -> void:
 	var state := fixture(100000,49999)
-	check(not RebellionSystem.must_resist_centralization(state,1),"a loyal subject below half the central military power may accept")
+	check(not RebellionSystem.must_resist_centralization(state,1),"loyal ordinary subjects have no compulsory resistance")
 	state.armies.back().size += 1
-	check(RebellionSystem.must_resist_centralization(state,1),"a strong loyal subject at the exact half-power boundary must resist")
+	check(not RebellionSystem.must_resist_centralization(state,1),"the former half-power boundary no longer forces resistance")
 	check(not RebellionSystem.should_vassal_rebel(state,1),"strength alone does not trigger spontaneous rebellion")
 	var rng_before := state.rng.state
+	var soldiers_before := troops_of(state,0)+troops_of(state,1)
+	var gold_before := state.nations[0].treasury_gold+state.nations[1].treasury_gold
 	var sim := Simulation.new(); sim.setup(state)
-	check(sim._execute_diplomatic_action({"kind":DiplomacyAI.Action.CENTRALIZE,"a":0,"b":1,"resist":false,"reason":"stale peaceful preview"}),
-		"execution recomputes strong-subject resistance instead of trusting a stale peaceful preview")
-	check(state.is_in_civil_war(1) and state.nations[1].alive,"strong loyal subject starts a real faction war rather than being peacefully absorbed")
-	var new_troops := troops_of(state,1)-50000
-	check(new_troops==15000,"ordinary strong subject receives the normal uprising rather than conqueror's double uprising")
-	check(state.rng.state!=rng_before,"real uprising retains the existing randomized army creation")
+	check(sim._execute_diplomatic_action({"kind":DiplomacyAI.Action.CENTRALIZE,"a":0,"b":1,"resist":true,"reason":"stale compulsory resistance preview"}),
+		"execution rechecks actual loyalty instead of trusting an obsolete compulsory-resistance preview")
+	check(not state.nations[1].alive and not state.is_in_civil_war(1),"a loyal ordinary subject accepts peaceful centralization at the former threshold")
+	check(troops_of(state,0)==soldiers_before and troops_of(state,1)==0,"peaceful centralization transfers existing armies without spawning uprising troops")
+	check(state.nations[0].treasury_gold==gold_before and state.nations[1].treasury_gold==0,"peaceful centralization transfers treasury once")
+	check(state.rng.state==rng_before,"peaceful centralization does not draw uprising randomness")
 	sim.free()
 	state = fixture(100000,0)
 	state.nations[1].ruler_archetype = RulerProfile.CONQUEROR
 	check(RebellionSystem.must_resist_centralization(state,1),"weak conquerors retain their existing compulsory resistance")
 	sim = Simulation.new(); sim.setup(state)
 	check(sim._execute_diplomatic_action({"kind":DiplomacyAI.Action.CENTRALIZE,"a":0,"b":1,"resist":false}),"conqueror centralization executes")
-	new_troops = 0
+	var new_troops := 0
 	for unit in state.armies:
 		if unit.owner_nation==1: new_troops += unit.size
 	check(new_troops==30000,"conquerors retain double uprising manpower")
@@ -76,12 +85,16 @@ func test_resistance() -> void:
 
 func test_ai() -> void:
 	var state := fixture(100000,300000)
+	var loyal_action := target_action(state)
+	check(not loyal_action.is_empty() and not bool(loyal_action.get("resist",true)),"a loyal ordinary subject stronger than the root can peacefully accept centralization")
+	make_rebellious(state)
 	check(target_action(state).is_empty(),"ordinary overlord refuses a politically threatening but losing centralization war")
 	state.nations[0].ruler_archetype = RulerProfile.TYRANT
 	check(not target_action(state).is_empty(),"tyrant may risk an unfavorable centralization war")
 	state.nations[0].ruler_archetype = RulerProfile.PUPPET
 	check(target_action(state).is_empty(),"puppet overlord still does not centralize")
 	state = fixture()
+	make_rebellious(state)
 	for city in state.land_cities_of(2): city.loyalty = 25
 	army(state,2,200000)
 	army(state,4,1000000)
@@ -98,6 +111,7 @@ func test_ai() -> void:
 		check(not state.is_in_civil_war(1),"stale AI action cannot start a newly hopeless civil war")
 		sim.free()
 	state = fixture(200000,100000)
+	make_rebellious(state)
 	check(not target_action(state).is_empty(),"ordinary overlord may centralize a strong subject with sufficient military advantage")
 	for unit in state.armies:
 		if unit.owner_nation==0: unit.state=Army.State.RECOVERING
@@ -109,6 +123,7 @@ func test_ai() -> void:
 	check(not DiplomacyAI.centralization_assessment(state,-1).can_attempt,"invalid subject has no centralization forecast")
 	for change in ["puppet", "external_war"]:
 		state = fixture(200000,100000)
+		make_rebellious(state)
 		action = target_action(state)
 		if change=="puppet": state.nations[0].ruler_archetype=RulerProfile.PUPPET
 		else:
@@ -121,8 +136,9 @@ func test_ai() -> void:
 
 func test_actual_victory(winner: int) -> void:
 	var state := fixture()
+	make_rebellious(state)
 	var sim := Simulation.new(); sim.setup(state)
-	check(sim._execute_diplomatic_action({"kind":DiplomacyAI.Action.CENTRALIZE,"a":0,"b":1,"resist":false}),"actual centralization starts compulsory strong-subject resistance")
+	check(sim._execute_diplomatic_action({"kind":DiplomacyAI.Action.CENTRALIZE,"a":0,"b":1,"resist":false}),"actual centralization rechecks and starts an eligible low-loyalty rebellion")
 	var war_id := state.war_id_between(0,1)
 	var loser := 1 if winner==0 else 0
 	var capital := state.nations[loser].capital_city_id

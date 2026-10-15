@@ -6139,7 +6139,7 @@ func _test_civil_war_relations() -> void:
 # ------------------------------------------------------------------ 32h. 削藩决策与反抗判据（增量 C2）
 
 func _test_centralization_decision() -> void:
-	print("[32h] 削藩：财政收益与胜算门禁、强藩必反、暴君冒险、和平撤藩守恒")
+	print("[32h] 削藩：财政收益与胜算门禁、忠诚反抗、暴君冒险、和平撤藩守恒")
 	# 构造宗主 0 + 藩王：把藩王大部分军队清掉，制造宗主压倒性优势→藩王接受。
 	var gs := preload("res://tests/support/grid_world.gd").new()
 	gs.generate_grid_world(32081)
@@ -6151,13 +6151,12 @@ func _test_centralization_decision() -> void:
 	var subject := gs.enfeoff(0, region)
 	_check(subject > 0, "分封应成功建立藩王")
 
-	# 削弱藩王：清空其大部分军队，使反抗比远低于阈值 → 预判为「接受」。
+	# 削弱藩王并保持正常忠诚，验证原有条件下可以和平接受。
 	var removed := 0
 	for army in gs.armies:
 		if army.owner_nation == subject and removed < 100:
 			army.size = 0
 			removed += 1
-	var weak_ratio := DiplomacyAI.vassal_resist_ratio(gs, subject)
 	var weak_fiscal := (
 		DiplomacyAI
 			.evaluate_centralization_fiscal_benefit(
@@ -6177,8 +6176,8 @@ func _test_centralization_decision() -> void:
 		subject
 	]
 	_check(
-		weak_ratio
-			< DiplomacyAI.CENTRALIZE_RESIST_RATIO_THRESHOLD
+		not RebellionSystem.must_resist_centralization(gs, subject)
+			and not RebellionSystem.should_vassal_rebel(gs, subject)
 			and int(weak_fiscal["projected_direct_income"])
 				== expected_direct_income
 			and int(weak_fiscal["inherited_subordinate_tribute"])
@@ -6429,7 +6428,7 @@ func _test_centralization_decision() -> void:
 			)
 	)
 	var strong_ratio := DiplomacyAI.vassal_resist_ratio(rs, rs_sub)
-	# 保留低忠诚成熟状态，验证原有自发反叛分支没有被强藩判定删除。
+	# 构造原有低忠诚成熟状态，削藩反抗继续遵守持续时间与冷却条件。
 	for city in rs.land_cities_of(rs_sub):
 		city.loyalty = RebellionSystem.LOYALTY_REBEL
 		city.rebellion_progress = RebellionSystem.REBELLION_PROGRESS_MONTHS
@@ -6478,7 +6477,7 @@ func _test_centralization_decision() -> void:
 			and rs.is_enemy(0, rs_sub)
 			and rs.is_vassal(rs_sub)
 			and rs.suzerainty_structure_valid(),
-		"暴君可冒险削藩，强藩通过真实执行入口反抗并进入内战"
+		"暴君可冒险削藩，低忠诚藩王通过真实执行入口反抗并进入内战"
 	)
 	rs_sim.free()
 

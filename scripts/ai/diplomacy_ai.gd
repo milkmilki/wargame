@@ -138,10 +138,9 @@ const CENTRALIZE_COOLDOWN_DAYS: int = 1825          ## 一次削藩后约5年内
 ## （分封 created_day 与削藩 last_centralization_day 是两套字段，缺此门控时新藩王当即满足削藩）。
 ## 拉长到约 4 年：一次分封的政治重组需长期稳定，杜绝"封了又撤"的高频横跳。
 const CENTRALIZE_MIN_VASSAL_AGE_DAYS: int = 1440
-const CENTRALIZE_RESIST_RATIO_THRESHOLD: float = RebellionSystem.CENTRALIZATION_STRONG_POWER_RATIO
 const CENTRALIZE_SAFE_POWER_RATIO: float = 1.50
-## 财政收益不为正时，只有达到此高威胁比才因政治风险削藩。该阈值显著高于反抗阈值，
-## 因此威胁分支天然会进入内战，而不会让一般军力增长压过财政理性。
+## 财政收益不为正时，高政治威胁可提供削藩动机；是否反抗仍按忠诚等条件判断，
+## 预判反抗时普通宗主还须通过阵营胜算门禁。
 const CENTRALIZE_POLITICAL_THREAT_RATIO_THRESHOLD: float = 0.80
 
 ## A/B 与专项等价测试开关。关闭时逐次执行历史实现，不创建或命中
@@ -7295,7 +7294,7 @@ static func _collect_enfeoff_actions(
 
 # ------------------------------------------------------------------ 削藩（藩王系统 C2）
 # 宗主在和平期、撤藩财政收益为正或藩王已成高威胁且冷却已过时发起削藩。
-# 强藩与征服者必反，弱藩沿用忠诚叛乱判定；普通宗主还须通过阵营胜算门禁。
+# 征服者保留反抗例外，其余藩国按忠诚等叛乱条件判定；普通宗主还须评估阵营胜算。
 # 执行仍由 Simulation 完成；本层只产出候选动作并预判藩王反应，附在动作里供展示。
 
 ## 藩王反抗比 = 藩王军力 / 宗主可镇压军力。越高越敢反抗。
