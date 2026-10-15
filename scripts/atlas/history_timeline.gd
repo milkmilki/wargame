@@ -12,12 +12,8 @@ var refresh_key: Array=[]
 
 func setup(view) -> void:
 	host=view; mouse_filter=Control.MOUSE_FILTER_STOP; mouse_force_pass_scroll_events=false
-	var heading := HBoxContainer.new(); add_child(heading)
-	var title := Label.new(); title.text="历史发展"; heading.add_child(title)
-	date.size_flags_horizontal=Control.SIZE_EXPAND_FILL; date.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT
-	date.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS; heading.add_child(date)
-	current.text="返回现在"; current.pressed.connect(view.return_to_current); heading.add_child(current)
 	var track := HBoxContainer.new(); add_child(track)
+	var title := Label.new(); title.text="历史发展"; track.add_child(title)
 	previous.text="‹"; previous.tooltip_text="上一个历史快照"; track.add_child(previous)
 	previous.pressed.connect(func(): host.select_history(maxi(0,int(host.history_control.value)-1)))
 	var slider: HSlider=view.history_control
@@ -32,8 +28,12 @@ func setup(view) -> void:
 	track.add_child(slider)
 	next.text="›"; next.tooltip_text="下一个快照／返回现在"; track.add_child(next)
 	next.pressed.connect(func(): host.select_history(int(host.history_control.value)+1))
+	current.text="返回现在"; current.pressed.connect(view.return_to_current); track.add_child(current)
 	var dates := HBoxContainer.new(); add_child(dates)
-	first_date.text="开局 · 第0天"; first_date.size_flags_horizontal=Control.SIZE_EXPAND_FILL; dates.add_child(first_date); dates.add_child(live_date)
+	first_date.text="开局 · 第0天"; dates.add_child(first_date)
+	date.size_flags_horizontal=Control.SIZE_EXPAND_FILL; date.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
+	date.text_overrun_behavior=TextServer.OVERRUN_TRIM_ELLIPSIS; dates.add_child(date)
+	live_date.horizontal_alignment=HORIZONTAL_ALIGNMENT_RIGHT; dates.add_child(live_date)
 	for label in [first_date,live_date]:
 		label.add_theme_font_size_override("font_size",12); label.add_theme_color_override("font_color",Style.MUTED)
 	refresh()

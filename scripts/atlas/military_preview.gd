@@ -130,6 +130,7 @@ var hover_mouse_valid := false
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouse:
 		hover_mouse_position=event.position; hover_mouse_valid=true
+	super._input(event)
 	# Run before GUI dispatch, including both halves of ui_accept. Space belongs
 	# to the timeline even when a button, dropdown or editor owns keyboard focus.
 	if event is InputEventKey and event.keycode==KEY_SPACE:
@@ -159,7 +160,7 @@ func load_cached_payload(payload: Dictionary) -> void:
 func make_ui() -> void:
 	mouse_filter=Control.MOUSE_FILTER_IGNORE
 	interface=Interface.new(); add_child(interface); interface.setup(self)
-	status.text="滚轮缩放 · 中键平移 · 左键查看辖区 · 右键下令"
+	status.text="滚轮缩放 · 左键／中键拖动 · 左键单击查看 · 右键下令"
 
 func time_controls_available() -> bool:
 	return simulation!=null and view_ready and not generating and not historical_view and not history_session

@@ -68,6 +68,10 @@ var mode_control := OptionButton.new()
 var hud := VBoxContainer.new()
 var zoom := 1.0
 var dragging := false
+const MAP_DRAG_THRESHOLD := 6.
+var map_pan_button: MouseButton = MOUSE_BUTTON_NONE
+var map_pan_origin := Vector2.ZERO
+var pending_map_click: InputEventMouseButton
 var capture_path := ""
 var selected_region := -1
 var province_labels := PackedInt32Array()
@@ -120,6 +124,8 @@ var last_camera_input_usec := 0
 const NAVIGATION_SETTLE_SECONDS := .14
 
 func _ready() -> void:
+	get_window().focus_exited.connect(cancel_map_pan)
+	get_window().mouse_exited.connect(cancel_map_pan)
 	seed_control.min_value = 0; seed_control.max_value = 4294967295; seed_control.value = 1
 	threshold_control.min_value = 0; threshold_control.max_value = 50; threshold_control.step = .1; threshold_control.value = 1
 	add_child(map_root)
@@ -786,16 +792,45 @@ func await_render_ready(timeout_ms: int = 10000) -> bool:
 	while not render_is_ready() and Time.get_ticks_msec()<deadline: await get_tree().process_frame
 	return render_is_ready()
 
+func cancel_map_pan() -> void:
+	map_pan_button=MOUSE_BUTTON_NONE; dragging=false; pending_map_click=null
+
+func _input(event: InputEvent) -> void:
+	# Capture only gestures that began on the map. Motion and release must still
+	# reach them when the pointer crosses a HUD panel or the history slider.
+	if event is InputEventMouseMotion and map_pan_button!=MOUSE_BUTTON_NONE:
+		var displacement: Vector2=event.position-map_pan_origin
+		var delta: Vector2=event.relative
+		if not dragging:
+			if displacement.length()<MAP_DRAG_THRESHOLD: return
+			dragging=true; delta=displacement
+		start_navigation(); map_root.position+=delta; limit_pan(); schedule_symbols()
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton:
+		pending_map_click=null
+		if not event.pressed and event.button_index==map_pan_button:
+			var click: bool=map_pan_button==MOUSE_BUTTON_LEFT and not dragging and event.position.distance_to(map_pan_origin)<MAP_DRAG_THRESHOLD
+			cancel_map_pan()
+			if click: pending_map_click=event
+			else: get_viewport().set_input_as_handled()
+		elif dragging:
+			get_viewport().set_input_as_handled()
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
-		if event.button_index==MOUSE_BUTTON_MIDDLE: dragging = event.pressed
+		if event.button_index in [MOUSE_BUTTON_LEFT,MOUSE_BUTTON_MIDDLE] and event.pressed:
+			if not view_ready or generating or map_pan_button!=MOUSE_BUTTON_NONE: return
+			map_pan_button=event.button_index; map_pan_origin=event.position
+			dragging=map_pan_button==MOUSE_BUTTON_MIDDLE
+			pending_map_click=null
 		if event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP,MOUSE_BUTTON_WHEEL_DOWN]:
 			start_navigation()
 			var before := map_root.to_local(event.position)
 			zoom = clampf(zoom*(1.2 if event.button_index==MOUSE_BUTTON_WHEEL_UP else 1/1.2),minf(size.x/2048.,size.y/1024.),8.)
 			map_root.scale = Vector2.ONE*zoom; map_root.position = event.position-before*zoom; limit_pan()
 			schedule_symbols()
-		if event.pressed and event.button_index==MOUSE_BUTTON_LEFT: select_at(map_root.to_local(event.position))
+		if event==pending_map_click:
+			pending_map_click=null; select_at(map_root.to_local(event.position))
 	elif event is InputEventMouseMotion and dragging:
 		start_navigation(); map_root.position += event.relative; limit_pan(); schedule_symbols()
 

@@ -50,7 +50,7 @@ ATLAS = [
     "atlas_static_layers", "atlas_static_symbol_baking",
     "atlas_runtime_costs", "atlas_battle_strength", "atlas_battle_information", "atlas_battle_information_interaction", "atlas_battle_comparison",
     "atlas_runtime_equivalence",
-    "atlas_time_controls", "atlas_history_timeline", "atlas_map_selection", "atlas_diplomacy_view", "atlas_nation_list",
+    "atlas_time_controls", "atlas_history_timeline", "atlas_map_drag", "atlas_map_selection", "atlas_diplomacy_view", "atlas_nation_list",
     "atlas_startup_cache", "atlas_startup_climate", "atlas_startup_order",
     "atlas_information_model", "atlas_world_naming", "atlas_information_panel", "atlas_ruler_editor",
     "atlas_render_scheduler", "atlas_render_publication_batch", "atlas_native_display", "atlas_political_incremental",

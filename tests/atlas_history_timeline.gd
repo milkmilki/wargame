@@ -16,7 +16,13 @@ func check(ok: bool, message: String) -> void:
 	if not ok: failures += 1; printerr("HISTORY_TIMELINE_FAIL ",message)
 func _initialize() -> void: call_deferred("run")
 func run() -> void:
-	var view := View.new(); root.add_child(view)
+	root.size=Vector2i(1280,720)
+	var view := View.new(); root.add_child(view); view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	await process_frame; await process_frame
+	var timeline: Control=view.interface.history_timeline
+	check(not view.interface.footer.is_ancestor_of(timeline),"history occupies an independent bottom bar")
+	check(absf(timeline.get_global_rect().get_center().x-640.)<1.,"history bar is horizontally centered")
+	check(view.interface.footer.get_global_rect().end.y<timeline.get_global_rect().position.y,"status capsule stays above the independent bar")
 	if not view.history_control.is_class("HSlider") or not view.has_method("select_history"):
 		check(false,"a visible draggable history timeline must replace the hidden snapshot number picker")
 		view.queue_free(); await process_frame; quit(1); return

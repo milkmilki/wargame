@@ -7,6 +7,7 @@ var host
 var tools := PanelContainer.new()
 var toolbar := PanelContainer.new()
 var footer := PanelContainer.new()
+var timeline_bar := PanelContainer.new()
 var pause_button: Button
 var step_button: Button
 var speed_label := Label.new()
@@ -95,11 +96,14 @@ func setup(view) -> void:
 	diplomacy_row.hide(); relation_legend.hide()
 	view.status.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART; view.status.mouse_filter=Control.MOUSE_FILTER_IGNORE; messages.add_child(view.status)
 	view.military_status.add_theme_font_size_override("font_size",12); view.military_status.add_theme_color_override("font_color",Style.MUTED); view.military_status.mouse_filter=Control.MOUSE_FILTER_IGNORE; messages.add_child(view.military_status)
-	messages.add_child(HSeparator.new())
-	messages.add_child(history_timeline); history_timeline.setup(view)
+	add_child(timeline_bar)
+	var timeline_style := Style.panel(); timeline_style.content_margin_top=8; timeline_style.content_margin_bottom=8
+	timeline_bar.add_theme_stylebox_override("panel",timeline_style)
+	timeline_bar.add_child(history_timeline); history_timeline.setup(view)
 	add_child(view.details); view.details.hide()
 	resized.connect(place); place()
-	footer.resized.connect(func(): footer.position.y=size.y-footer.size.y-14)
+	footer.resized.connect(place_bottom)
+	timeline_bar.resized.connect(place)
 
 func refresh_diplomacy() -> void:
 	var source: GameState=host.information_source()
@@ -115,7 +119,7 @@ func _process(_delta: float) -> void:
 	# A wrapped startup message can initially have a large minimum height before
 	# its width is assigned. Refit this small status capsule as its text settles.
 	footer.size.y=footer.get_combined_minimum_size().y
-	footer.position.y=size.y-footer.size.y-14
+	place_bottom()
 	if countries.visible: countries.size.y=maxf(160,footer.position.y-countries.position.y-8)
 	if host==null: return
 	history_timeline.refresh()
@@ -130,8 +134,6 @@ func _process(_delta: float) -> void:
 		row.node.disabled=blocked; row.node.set_pressed_no_signal(is_equal_approx(speed,row.multiplier))
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.button_index==MOUSE_BUTTON_MIDDLE and not event.pressed:
-		host.dragging=false # Release remains visible even when the card handles GUI input.
 	if event is InputEventKey and event.pressed and event.keycode==KEY_ESCAPE:
 		if tools.visible: tools.hide(); get_viewport().set_input_as_handled()
 		elif countries.visible: countries.hide(); get_viewport().set_input_as_handled()
@@ -140,11 +142,17 @@ func button(parent: Control,text_value: String,callback: Callable) -> Button:
 	return control
 func place() -> void:
 	if host==null or host.info_panel==null: return
+	place_bottom()
 	var width := 372. if size.x>=1100 else 340.
 	width=maxf(width,host.info_panel.preferred_width)
-	host.info_panel.position=Vector2(14,14); host.info_panel.size=Vector2(minf(width,maxf(300,size.x-28)),maxf(240,size.y-28))
+	host.info_panel.position=Vector2(14,14); host.info_panel.size=Vector2(minf(width,maxf(300,size.x-28)),maxf(240,timeline_bar.position.y-22))
 	toolbar.position=Vector2(maxf(14,size.x-430),14); toolbar.size=Vector2(416,88)
-	tools.position=Vector2(maxf(14,size.x-446),116); tools.size=Vector2(432,minf(380,size.y-140))
+	tools.position=Vector2(maxf(14,size.x-446),116); tools.size=Vector2(432,minf(380,timeline_bar.position.y-124))
 	countries.position=Vector2(maxf(14,size.x-430),116); countries.size=Vector2(416,maxf(200,size.y-144))
 	var footer_width := minf(620,maxf(300,size.x-width-42))
-	footer.position=Vector2(size.x-footer_width-14,size.y-footer.size.y-14); footer.size.x=footer_width
+	footer.position.x=size.x-footer_width-14; footer.size.x=footer_width
+
+func place_bottom() -> void:
+	timeline_bar.size=Vector2(minf(960,maxf(300,size.x-28)),timeline_bar.get_combined_minimum_size().y)
+	timeline_bar.position=Vector2((size.x-timeline_bar.size.x)*.5,size.y-timeline_bar.size.y-14)
+	footer.position.y=timeline_bar.position.y-footer.size.y-8

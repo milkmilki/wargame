@@ -8,10 +8,13 @@ relations without rewinding the simulation.
 
 ## Behavior
 
-- The bottom-right status panel contains a permanent “历史发展” slider, previous
+- A separate bar centered along the bottom contains a permanent “历史发展” slider, previous
   and next snapshot buttons, the selected day, and “返回现在”. The slider supports
   keyboard navigation; each stop is a monthly snapshot, with a separate live stop
   at the right edge (even on a capture day).
+- Country details and the status capsule end above the history bar. Dragging its
+  slider never pans or selects the map. Drag the map with the left or middle mouse
+  button; a left click with small pointer jitter still opens the map inspector.
 - Capture day 0 and then one snapshot every 30 committed simulation days.
   Capture is connected to `Simulation.runtime_day_committed`, not map-frame
   polling, so sliced days cannot publish partially settled snapshots.
@@ -57,6 +60,9 @@ relations without rewinding the simulation.
 - Run `tests/atlas_history_visual.gd` without `--headless` for real-renderer
   verification on seed 1 / 40 countries / the Eurasia mask, 60 committed days,
   rapid scrubbing, historical country details and 1280/960/768-pixel layouts.
+  It also checks real left-button map dragging, country clicks and timeline
+  dragging against the native GPU viewport. `atlas_map_drag.gd` covers pointer
+  capture across HUD panels, release over UI, click/drag separation and middle drag.
   Screenshots are written to the ignored `.dbg/history-timeline/` directory.
 # 环境与国号历史（2026-10-14）
 
