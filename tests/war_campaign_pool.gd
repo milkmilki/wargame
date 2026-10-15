@@ -388,12 +388,24 @@ func _test_objective_owner_becomes_front_anchor() -> void:
 		"共享目标必须保留实际提出目标的成员国作为路线锚点")
 	var staged_army := _army(945800, members[1], state.nations[members[1]].capital_city_id)
 	state.armies.append(staged_army)
+	# Planning adopts the capital's idle force into its active defense task.
+	# Keep its one-army defense floor and provide a second army for the proposed
+	# offensive; a lone garrison is correctly unavailable for a new front.
+	var home_guard := _army(945801, members[1], staged_army.location_city)
+	state.armies.append(home_guard)
 	sim._plan_coalition_component(component, [] as Array[int], {})
 	var fronts := state.campaign_fronts_for_nation(
 		members[0], war_id, CoalitionCampaignFront.Mode.OFFENSE
 	)
 	_check(not fronts.is_empty() and fronts[0].anchor_nation_id == members[1],
 		"共享战线入口和集结点必须使用目标提出国，而非成员排序第一国")
+	var capital_defense := state.campaign_front_for(
+		members[1], state.administrative_center_of(staged_army.location_city),
+		CoalitionCampaignFront.Mode.DEFENSE, war_id
+	)
+	_check(capital_defense != null and sim._front_effective_manpower(capital_defense)
+		>= GameState.INITIAL_HEAVY_ARMY_SIZE,
+		"建立提案国进攻战线时，不能挪用首都防守所需的最低一军")
 	sim.free()
 
 
