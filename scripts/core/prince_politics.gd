@@ -50,7 +50,7 @@ static func can_have_children(state: GameState, nation_id: int, parent_id: int) 
 	if state.has_meta("historical_prince_reports") or nation_id<0 or nation_id>=state.nations.size():
 		return false
 	var nation := state.nations[nation_id]
-	var parent := person(state,nation_id,parent_id)
+	var parent: Dictionary=FamilyTree.tree_for_person(state,parent_id,nation_id).get("members",{}).get(parent_id,{})
 	if not nation.alive or nation.succession_identity or parent.is_empty() or not bool(parent.get("alive",true)):
 		return false
 	if parent_id==nation.ruler_person_id:
@@ -58,7 +58,7 @@ static func can_have_children(state: GameState, nation_id: int, parent_id: int) 
 	return int(parent.get("title_payer_id",-1))==nation_id and bool(parent.get("title_adult",false)) and RoyalTitles.effective_rank(state,parent)>RoyalTitles.COMMON
 
 static func initialize_children(state: GameState, nation_id: int, parent_id: int, family_salt: int = 0) -> Array[int]:
-	var members: Dictionary = FamilyTree.tree_for_nation(state, nation_id).members
+	var members: Dictionary = FamilyTree.tree_for_person(state,parent_id,nation_id).get("members",{})
 	var existing := RoyalTitles.children(members, parent_id)
 	# A blocked untitled/waiting family may later inherit a title; do not seal its birth result.
 	if not can_have_children(state,nation_id,parent_id):
@@ -79,13 +79,15 @@ static func _create_person(state: GameState, nation_id: int, parent_id: int, ord
 	var id := state.next_family_person_id
 	state.next_family_person_id += 1
 	var salt := nation.ruler_revision * 1009 + family_salt + order * 31 + 700001
-	var members: Dictionary = FamilyTree.tree_for_nation(state, nation_id).members
+	var tree := FamilyTree.tree_for_person(state,parent_id,nation_id)
+	if tree.is_empty(): tree=FamilyTree.tree_for_nation(state,nation_id)
+	var members: Dictionary=tree.members
 	if members.has(parent_id):
 		var child_ids := RoyalTitles.children(members, parent_id)
 		child_ids.append(id)
 		members[parent_id]["child_ids"] = child_ids
 	var name := WorldNaming.person_name_for(state.world_seed, nation_id, salt)
-	name = FamilyTree.surname_for_nation(state, nation_id) + name.substr(1)
+	name = FamilyTree.surname_for_tree(tree,nation.ruler_name) + name.substr(1)
 	members[id] = {"id": id, "name": name, "parent_id": parent_id, "child_ids": [], "children_initialized": false, "titles": [], "nation_ids": [],
 		"archetype": RulerProfile.archetype_for(state.world_seed, nation_id, salt),
 		"traits": RulerProfile.traits_for(state.world_seed, nation_id, salt),
@@ -344,7 +346,7 @@ static func enfeoff_candidate(state: GameState, nation_id: int, initialize: bool
 	return -1
 
 static func _busy(state: GameState, nation_id: int, person_id: int) -> bool:
-	var tree_id := state.nations[nation_id].family_tree_id
+	var tree_id := int(FamilyTree.tree_for_person(state,person_id,nation_id).get("id",-1))
 	for nation in state.nations:
 		if nation.family_tree_id != tree_id:
 			continue

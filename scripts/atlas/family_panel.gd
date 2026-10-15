@@ -79,6 +79,10 @@ func refresh_model() -> void:
 		selector.add_item(label_text,country.id)
 		if country.id==nation_id: selector.select(selector.item_count-1)
 		button(side,label_text,func(): open(country.id))
+	for family in Model.related_families(source,nation_id):
+		var label_text: String="查看"+family.name
+		selector.add_item(label_text,family.id)
+		button(side,label_text,func(): open(family.id))
 	if inspector.visible: inspector.show_document(Model.person_document(model,canvas.focus_id))
 	elif canvas.focus_id<0: canvas.fit_all(); canvas.locate(model.current)
 func responsive() -> void:

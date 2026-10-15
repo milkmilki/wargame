@@ -50,7 +50,7 @@ func test_large_generation() -> void:
 		surnames[person_name.left(1)] = true
 		lengths[person_name.length()] = true
 	check(invalid.is_empty(), "generation/%d_names_are_2_or_3_han_chars examples=" % sample_count + str(invalid))
-	check(surnames.size() > 1, "generation/surnames_vary_in_same_family")
+	check(surnames.size()==1 and surnames.has(FamilyTree.surname_for_nation(state,0)), "generation/family_surname_preserved")
 	check(lengths.has(2) and lengths.has(3), "generation/one_and_two_char_given_names")
 	check(state.rng.state == before, "generation/simulation_rng_unchanged")
 	print("PERSON_RANDOM_NAMES_SAMPLE: count=%d surnames=%d lengths=%s invalid_examples=%s" % [sample_count, surnames.size(), str(lengths.keys()), str(invalid)])

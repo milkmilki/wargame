@@ -5016,8 +5016,8 @@ func revoke_vassal(subject_id: int) -> bool:
 	# Capture actual affiliation before annexation rewrites it. Shared ancestry
 	# alone must not retitle relatives who already live at court or in another fief.
 	var returning_people := {}
-	if nations[overlord_id].family_tree_id>=0 and nations[overlord_id].family_tree_id==nations[subject_id].family_tree_id:
-		for member in FamilyTree.tree_for_nation(self,subject_id).members.values():
+	for tree in family_trees.values():
+		for member in tree.members.values():
 			if int(member.get("title_payer_id",-1))==subject_id or int(member.id)==nations[subject_id].ruler_person_id:
 				returning_people[int(member.id)]=true
 	# 兼并原语会原子移除 subject 并把其直接藩王改投宗主。

@@ -159,8 +159,20 @@ static func tree_for_nation(state: GameState, nation_id: int) -> Dictionary:
 	return state.family_trees.get(tree_id, {}) as Dictionary
 
 
+## Political affiliation may change while a person's original family stays separate.
+static func tree_for_person(state: GameState, person_id: int, preferred_nation: int = -1) -> Dictionary:
+	var preferred := tree_for_nation(state,preferred_nation)
+	if (preferred.get("members",{}) as Dictionary).has(person_id):
+		return preferred
+	for tree in state.family_trees.values():
+		if tree.members.has(person_id):
+			return tree
+	return {}
+
 static func surname_for_nation(state: GameState, nation_id: int) -> String:
-	var tree := tree_for_nation(state, nation_id)
+	return surname_for_tree(tree_for_nation(state,nation_id),state.nations[nation_id].ruler_name)
+
+static func surname_for_tree(tree: Dictionary, fallback_name: String) -> String:
 	if not str(tree.get("surname", "")).is_empty():
 		return str(tree.surname)
 	# 旧谱的初代君主最早入谱；未知先祖和补录祖链不作为姓氏来源。
@@ -171,7 +183,7 @@ static func surname_for_nation(state: GameState, nation_id: int) -> String:
 		var name := str(members[id].get("name", "？"))
 		if name not in ["？", "未载名", ""]:
 			return WorldNaming.ruler_surname(name)
-	return WorldNaming.ruler_surname(state.nations[nation_id].ruler_name)
+	return WorldNaming.ruler_surname(fallback_name)
 
 
 static func _ensure_surname(state: GameState, nation_id: int) -> void:

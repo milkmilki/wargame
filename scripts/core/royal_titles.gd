@@ -101,7 +101,7 @@ static func _grant(state: GameState, member: Dictionary, rank: int, payer: int, 
 			state.family_revision += 1
 	# 加授/继承升等时，只提升尚未成家的低爵孩子，保留成年家支的独立身份。
 	if rank > previous_rank and bool(member.get("title_children_generated", false)):
-		var members: Dictionary = FamilyTree.tree_for_nation(state, payer).get("members", {})
+		var members: Dictionary = FamilyTree.tree_for_person(state,int(member.id),payer).get("members", {})
 		for id in children(members, int(member.id)):
 			var child: Dictionary = members[id]
 			if bool(child.get("title_adult", false)) or not bool(child.get("alive", true)) or int(child.get("enfeoffed_nation_id", -1)) >= 0 or int(child.get("title_payer_id", -1)) != payer or int(child.get("title_origin_nation_id", -1)) not in [-1, payer]:
@@ -159,7 +159,7 @@ static func _generate_children(state: GameState, member: Dictionary) -> void:
 		set_member(state, member, "children_initialized", true)
 		return
 	var payer := int(member.title_payer_id)
-	var members: Dictionary = FamilyTree.tree_for_nation(state, payer).members
+	var members: Dictionary = FamilyTree.tree_for_person(state,int(member.id),payer).members
 	var existing := PrincePolitics.initialize_children(state, payer, int(member.id), int(member.id) * 7919)
 	set_member(state, member, "title_children_generated", true)
 	for id in existing:
@@ -193,7 +193,7 @@ static func census(state: GameState) -> Dictionary:
 		return cached.reports
 	var reports := {}
 	for nation in state.nations:
-		reports[nation.id] = {"counts": [0, 0, 0, 0], "basis_points": 0, "people": [[], [], [], []]}
+		reports[nation.id] = {"counts": [0, 0, 0, 0], "basis_points": 0, "people": [[], [], [], []], "households": {}}
 	for tree in state.family_trees.values():
 		for member in tree.members.values():
 			var rank := effective_rank(state, member)
@@ -203,6 +203,7 @@ static func census(state: GameState) -> Dictionary:
 			entry.counts[rank] += 1
 			entry.basis_points += rank * 10
 			entry.people[rank].append(int(member.id))
+			entry.households[int(tree.id)]=true
 	state.set_meta("royal_census", {"revision": [state.family_revision, state.ownership_revision], "reports": reports})
 	return reports
 
@@ -233,7 +234,19 @@ static func _nearest_collateral(members: Dictionary, links: Dictionary, deceased
 	return -1
 
 static func _inherit(state: GameState, nation_id: int, deaths: Array[Dictionary]) -> void:
-	var members: Dictionary = FamilyTree.tree_for_nation(state, nation_id).members
+	var households := {}
+	for deceased in deaths:
+		var tree := FamilyTree.tree_for_person(state,int(deceased.id),nation_id)
+		if tree.is_empty(): continue
+		if not households.has(tree.id):
+			var group: Array[Dictionary]=[]
+			households[tree.id]=group
+		households[tree.id].append(deceased)
+	var tree_ids := households.keys(); tree_ids.sort()
+	for tree_id in tree_ids:
+		_inherit_in_tree(state,nation_id,state.family_trees[tree_id].members,households[tree_id])
+
+static func _inherit_in_tree(state: GameState, nation_id: int, members: Dictionary, deaths: Array[Dictionary]) -> void:
 	var claimed := {}
 	var pools := {}
 	var links := {}
@@ -273,7 +286,6 @@ static func _inherit(state: GameState, nation_id: int, deaths: Array[Dictionary]
 
 static func advance_generation(state: GameState, nation_id: int, incoming_ruler: int, protected_people: Array[int] = []) -> void:
 	var nation := state.nations[nation_id]
-	var members: Dictionary = FamilyTree.tree_for_nation(state, nation_id).members
 	var deaths: Array[Dictionary] = []
 	var dead_ids: Array[int] = []
 	# 异宗兼并仍保留原谱；失爵家支的生命周期随接收国换代。
@@ -305,7 +317,7 @@ static func advance_generation(state: GameState, nation_id: int, incoming_ruler:
 	state.family_revision += 1
 
 static func settle_death(state: GameState, nation_id: int, person_id: int) -> void:
-	var member := PrincePolitics.person(state, nation_id, person_id)
+	var member: Dictionary=FamilyTree.tree_for_person(state,person_id,nation_id).get("members",{}).get(person_id,{})
 	if bool(member.get("title_settled", false)) or not member.has("title_payer_id"):
 		return
 	set_member(state, member, "title_settled", true)
@@ -368,6 +380,10 @@ static func annex(state: GameState, absorber: int, absorbed_ids: Dictionary) -> 
 			# 同谱跨国人物只按实际所属迁移，历史帝位不决定当前归属。
 			if int(member.get("title_payer_id", -1)) != int(absorbed) and int(member.id) != former.ruler_person_id:
 				continue
+			if int(member.id)==former.ruler_person_id and bool(member.get("alive",true)):
+				# The first ruler's active profile may have existed only on Nation.
+				set_member(state,member,"archetype",former.ruler_archetype)
+				set_member(state,member,"traits",former.ruler_traits.duplicate())
 			if int(member.get("office_nation_id", -1)) == int(absorbed):
 				set_member(state, member, "title_adult", true)
 				set_member(state, member, "office_nation_id", -1)
@@ -377,14 +393,13 @@ static func annex(state: GameState, absorber: int, absorbed_ids: Dictionary) -> 
 			set_member(state, member, "current_title", NAMES[COMMON])
 		state.family_revision += 1
 
-## Peacefully recalled same-lineage rulers receive a new grant after the land commit.
-## Foreign annexations retain their independent, untitled household archives.
+## Peaceful recall grants a new domestic title while retaining the original genealogy.
 static func recall_vassal(state: GameState, overlord: int, subject: int, returning_people: Dictionary) -> void:
 	var nation := state.nations[overlord]
 	var former := state.nations[subject]
-	if not nation.alive or former.absorbed_into_nation_id!=overlord or nation.family_tree_id<0 or nation.family_tree_id!=former.family_tree_id:
+	if not nation.alive or former.absorbed_into_nation_id!=overlord or former.family_tree_id<0:
 		return
-	var members: Dictionary=FamilyTree.tree_for_nation(state,overlord).members
+	var members: Dictionary=FamilyTree.tree_for_nation(state,subject).members
 	var root := former.ruler_person_id
 	if not members.has(root) or not bool(members[root].get("alive",true)):
 		return
@@ -392,7 +407,8 @@ static func recall_vassal(state: GameState, overlord: int, subject: int, returni
 	if not nation.royal_titles_initialized:
 		nation.royal_titles_initialized=true
 		state.family_revision+=1
-	var pending: Array[Vector2i]=[Vector2i(root,PRINCE)]
+	var rank := PRINCE if nation.family_tree_id==former.family_tree_id else COMMANDERY
+	var pending: Array[Vector2i]=[Vector2i(root,rank)]
 	while not pending.is_empty():
 		var entry: Vector2i=pending.pop_back()
 		var member: Dictionary=members[entry.x]

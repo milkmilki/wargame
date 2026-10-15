@@ -206,8 +206,10 @@ static func royal_validation_error(nations: Dictionary, trees: Dictionary) -> St
 			var origin := int(member.get("title_origin_nation_id", -1))
 			if origin < -1 or origin >= count:
 				return "Invalid title origin"
-			if rank > 0 and (origin != payer or payer < 0 or not bool(nations.alive[payer]) or not bool(nations.royal_titles_initialized[payer]) or int(nations.family_tree_ids[payer]) != int(tree_id)):
-				return "Virtual title origin and payer must agree in a living domestic institution"
+			if rank > 0 and (origin != payer or payer < 0 or not bool(nations.alive[payer]) or not bool(nations.royal_titles_initialized[payer])):
+				return "Virtual title origin and payer must agree in a living title institution"
+			if rank > RoyalTitles.COMMANDERY and int(nations.family_tree_ids[payer]) != int(tree_id):
+				return "Foreign household title cannot exceed commandery rank"
 			var title_history = member.get("title_history", [])
 			if not title_history is Array: return "Invalid title history"
 			var open_records := 0

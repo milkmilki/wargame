@@ -41,6 +41,26 @@ static func capture(state: GameState, nation_id: int) -> Dictionary:
 		"heir":nation.crown_prince_person_id,"members":members,"countries":countries,"events":events,
 		"root":int(tree.get("root_person_id",-1))}
 
+## Supply and noble rank can connect courts without merging any bloodlines.
+static func related_families(state: GameState, nation_id: int) -> Array[Dictionary]:
+	var result: Array[Dictionary]=[]
+	var tree := FamilyTree.tree_for_nation(state,nation_id)
+	if tree.is_empty(): return result
+	var reports := RoyalTitles.census(state)
+	var courts := {nation_id:true}
+	for payer in reports:
+		if (reports[payer].get("households",{}) as Dictionary).has(tree.id): courts[payer]=true
+	var related := {}
+	for payer in courts:
+		related[state.nations[payer].family_tree_id]=true
+		related.merge(reports.get(payer,{}).get("households",{}))
+	related.erase(int(tree.id))
+	for nation in state.nations:
+		if not related.has(nation.family_tree_id): continue
+		related.erase(nation.family_tree_id)
+		result.append({"id":nation.id,"name":FamilyTree.surname_for_nation(state,nation.id)+"氏家谱"})
+	return result
+
 static func structural_key(model: Dictionary) -> int:
 	var shape: Array = []
 	var ids: Array = model.members.keys(); ids.sort()
