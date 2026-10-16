@@ -11365,9 +11365,10 @@ func _campaign_camp_threatened(nation_id: int, camp_id: int) -> bool:
 		return true
 	for army in state.armies:
 		if (
-			state.army_effective_for_field_campaign(army)
-			and state.is_enemy(nation_id, army.owner_nation)
+			army != null
 			and army.location_city == camp_id
+			and state.army_effective_for_field_campaign(army)
+			and state.is_enemy(nation_id, army.owner_nation)
 		):
 			return true
 	for battle in state.battles:

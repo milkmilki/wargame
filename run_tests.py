@@ -19,7 +19,7 @@ CORE = [
 	"administrative_state_integrity", "regional_rebel_capital_capture", "campaign_forward_camp_access", "campaign_neutral_route", "vassal_occupation_routes",
     "state_campaign_lifecycle", "coalition_campaign_pairs", "coalition_campaign_frame_slice_equivalence",
     "native_city_partitions", "city_output_batch", "objective_path_input_scope", "war_pool_release_batch", "province_color_neighbors",
-    "campaign_frozen_reinforcement",
+    "campaign_frozen_reinforcement", "local_campaign_threat",
     "native_logistics_access",
     "administrative_member_index",
     "native_extension_contract", "native_graph_equivalence", "native_edge_inputs", "native_administrative_fields", "native_key_order", "native_trade_city_inputs", "native_frozen_batch", "native_world_lifecycle", "native_runtime_equivalence",

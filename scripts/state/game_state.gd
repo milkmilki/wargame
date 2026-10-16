@@ -1012,7 +1012,7 @@ func campaign_prewar_reinforcement_threat(
 	var result := 0
 	for army in armies:
 		if (
-			not army_effective_for_field_campaign(army)
+			army == null
 			or army.is_city_garrison
 			or not defender_bloc.has(army.owner_nation)
 			or attacker_bloc.has(army.owner_nation)
@@ -1028,7 +1028,7 @@ func campaign_prewar_reinforcement_threat(
 			touches_region = (
 				administrative_center_of(army.location_city) == center_city_id
 			)
-		if touches_region:
+		if touches_region and army_effective_for_field_campaign(army):
 			result += army.size
 	return result
 
@@ -1056,11 +1056,7 @@ func campaign_reinforcement_threat(
 		return 0
 	var regional_manpower := 0
 	for army in armies:
-		if (
-			not army_effective_for_field_campaign(army)
-			or army.is_city_garrison
-			or not is_enemy(attacker_id, army.owner_nation)
-		):
+		if army == null or army.is_city_garrison:
 			continue
 		var in_region := false
 		if army.on_edge:
@@ -1072,7 +1068,7 @@ func campaign_reinforcement_threat(
 			in_region = (
 				administrative_center_of(army.location_city) == center_city_id
 			)
-		if in_region:
+		if in_region and army_effective_for_field_campaign(army) and is_enemy(attacker_id, army.owner_nation):
 			regional_manpower += army.size
 	return regional_manpower
 

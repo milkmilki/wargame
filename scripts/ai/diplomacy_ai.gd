@@ -6066,15 +6066,12 @@ static func _cached_campaign_reinforcement_threat(
 	# Relations are fixed during this read-only build; armies share their owner.
 	var enemy_by_owner := {}
 	for army in state.armies:
-		if (
-			not state.army_effective_for_field_campaign(army)
-			or army.is_city_garrison
-		):
+		if army == null or army.is_city_garrison:
 			continue
 		var owner := army.owner_nation
 		if not enemy_by_owner.has(owner):
 			enemy_by_owner[owner] = state.is_enemy(attacker_id, owner)
-		if not bool(enemy_by_owner[owner]):
+		if not bool(enemy_by_owner[owner]) or not state.army_effective_for_field_campaign(army):
 			continue
 		var centers := {}
 		if army.on_edge:
