@@ -24,7 +24,7 @@ func _init() -> void:
 	button(tools,"查找",search_next); button(tools,"全谱",canvas.fit_all)
 	button(tools,"当前",func(): canvas.locate(model.get("current",-1)))
 	button(tools,"人物",func(): inspector.visible=not inspector.visible; canvas.visible=not inspector.visible if compact else true)
-	var legend := Label.new(); legend.text="世代自上而下 · 名字竖排 · 爵号依箭头先后 · 朱色双框「帝」为历任皇帝"
+	var legend := Label.new(); legend.text="世代自上而下 · 姓名下接爵号 · 身份小字竖排 · 朱色双框「帝」为历任皇帝"
 	legend.add_theme_color_override("font_color",Color("726959")); legend.add_theme_font_size_override("font_size",12)
 	legend.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART; body.add_child(legend)
 	body.add_child(selector); selector.item_selected.connect(func(index): open(selector.get_item_id(index)))

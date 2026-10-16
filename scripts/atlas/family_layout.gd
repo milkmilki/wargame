@@ -1,18 +1,35 @@
 extends RefCounted
 ## Adapted from civ-atlas 103afd3 lineageInfo.ts (AGPL-3.0-only).
 ## Iterative contour compaction; parent aligns to latest reigning descendant.
-const STEP := Vector2(140,224)
-const BOX := Vector2(112,164)
+const STEP := Vector2(80,224)
+const BOX := Vector2(60,164)
 const GENERATION_GAP := 56.0
+const NAME_X := 36.0
+
+static func name_box(member: Dictionary) -> Rect2:
+	var name_text := str(member.get("tree_name",member.get("name","？")))
+	return Rect2(Vector2(NAME_X-15,40),Vector2(30,name_text.length()*24+12))
+
+static func title_steps(member: Dictionary) -> Array:
+	return member.get("title_steps",[{"title":member.get("display_title","无爵"),"label":""}])
+
+static func title_top(member: Dictionary) -> float:
+	return name_box(member).end.y+16.0
 
 static func step_height(step: Dictionary) -> float:
 	return maxf(str(step.get("title","")).length()*18.0,str(step.get("label","")).length()*13.0)+28.0
 
+static func note_top(member: Dictionary) -> float:
+	var height := title_top(member)
+	var steps := title_steps(member)
+	for step in steps: height += step_height(step)
+	# The last title needs no transition arrow; leave space before the note.
+	return height-12.0 if not steps.is_empty() else height
+
 static func node_size(member: Dictionary) -> Vector2:
-	var height := 42.0
-	for step in member.get("title_steps",[]): height += step_height(step)
-	var name_height := str(member.get("tree_name",member.get("name","？"))).length()*24.0+104.0
-	return Vector2(BOX.x,maxf(BOX.y,maxf(height,name_height)))
+	var height := note_top(member)
+	if member.get("history_partial",false): height += 48.0
+	return Vector2(BOX.x,maxf(BOX.y,height+8.0))
 static func build(model: Dictionary) -> Dictionary:
 	var members: Dictionary = model.members
 	var ids: Array = members.keys(); ids.sort()

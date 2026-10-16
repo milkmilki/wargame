@@ -1,5 +1,5 @@
 extends Control
-## Vertical genealogy: right-hand names, ordered title columns, cinnabar emperors.
+## Vertical genealogy: names above ordered titles, cinnabar emperors.
 signal selected(id: int)
 const Layout = preload("res://scripts/atlas/family_layout.gd")
 const PAPER := Color("f4efdf")
@@ -7,7 +7,7 @@ const INK := Color("302b24")
 const MUTED := Color("726959")
 const SEAL := Color("a23b30")
 const SELECTED := Color("996525")
-const NAME_X := 82.0
+const NAME_X := Layout.NAME_X
 var genealogy_font: Font = preload("res://assets/atlas/lxgw-wenkai-gb-500.ttf")
 var model := {}; var layout := {}; var focus_id := -1
 var scale_value := 1.; var offset := Vector2(40,40)
@@ -91,39 +91,40 @@ func draw_person(id: int) -> void:
 		draw_rect(rect,Color("ece1c5"))
 		draw_rect(rect,SELECTED,false,maxf(1.,1./scale_value))
 	if scale_value<.32:
-		draw_rect(Rect2(point+Vector2(70,6),Vector2(24,40)),SEAL if emperor else INK)
+		draw_rect(Rect2(point+Vector2(NAME_X-12,6),Vector2(24,40)),SEAL if emperor else INK)
 		return
 	var name_text:=str(member.get("tree_name",member.get("name","？")))
-	var name_box:=Rect2(point+Vector2(65,32),Vector2(35,name_text.length()*24+16))
+	var name_box:=Layout.name_box(member)
+	name_box.position+=point
 	if emperor:
 		draw_rect(name_box,SEAL,false,1.6)
 		draw_rect(name_box.grow(-4),SEAL,false,.8)
-		draw_rect(Rect2(point+Vector2(73,4),Vector2(22,22)),SEAL)
-		draw_string(genealogy_font,point+Vector2(76,21),"帝",HORIZONTAL_ALIGNMENT_LEFT,-1,16,PAPER)
+		draw_rect(Rect2(point+Vector2(NAME_X-11,4),Vector2(22,22)),SEAL)
+		draw_string(genealogy_font,point+Vector2(NAME_X-8,21),"帝",HORIZONTAL_ALIGNMENT_LEFT,-1,16,PAPER)
 	elif member.get("was_ruler",false): draw_rect(name_box,Color("a39780"),false,.8)
-	vertical_text(name_text,point+Vector2(NAME_X,40),20,24,SEAL if emperor else INK)
+	vertical_text(name_text,point+Vector2(NAME_X,44),20,24,SEAL if emperor else INK)
 	var marker := person_marker(id,member)
 	if id==model.get("root",-1): marker="先祖"
-	draw_string(genealogy_font,point+Vector2(9,21),marker,HORIZONTAL_ALIGNMENT_LEFT,-1,12,SELECTED if id==model.get("current",-1) else MUTED)
-	if member.get("taizu",false): vertical_text("太祖",Vector2(point.x+NAME_X,name_box.end.y+10),12,15,SEAL)
-	var steps: Array=member.get("title_steps",[{"title":member.get("display_title","无爵"),"label":""}])
-	var top:=40.0
+	vertical_text(marker,point+Vector2(10,8),11,13,SELECTED if id==model.get("current",-1) else MUTED)
+	if member.get("taizu",false): vertical_text("太祖",point+Vector2(10,46),12,15,SEAL)
+	var steps:=Layout.title_steps(member)
+	var top:=Layout.title_top(member)
 	for index in range(steps.size()):
 		var step: Dictionary=steps[index]
 		var height:=Layout.step_height(step)-28.
 		var color:=INK if index==steps.size()-1 else MUTED
-		vertical_text(str(step.get("title","")),point+Vector2(40,top),16,18,color)
-		vertical_text(str(step.get("label","")),point+Vector2(17,top+2),11,13,color)
-		# Brackets distinguish the designation from the adjacent name column.
-		draw_polyline(PackedVector2Array([point+Vector2(32,top-3),point+Vector2(29,top-3),point+Vector2(29,top+height+2),point+Vector2(32,top+height+2)]),color,.8,true)
-		draw_polyline(PackedVector2Array([point+Vector2(48,top-3),point+Vector2(51,top-3),point+Vector2(51,top+height+2),point+Vector2(48,top+height+2)]),color,.8,true)
+		vertical_text(str(step.get("title","")),point+Vector2(NAME_X,top),16,18,color)
+		vertical_text(str(step.get("label","")),point+Vector2(10,top+2),11,13,color)
+		# Brackets separate each designation from its small vertical identity label.
+		draw_polyline(PackedVector2Array([point+Vector2(NAME_X-8,top-3),point+Vector2(NAME_X-11,top-3),point+Vector2(NAME_X-11,top+height+2),point+Vector2(NAME_X-8,top+height+2)]),color,.8,true)
+		draw_polyline(PackedVector2Array([point+Vector2(NAME_X+8,top-3),point+Vector2(NAME_X+11,top-3),point+Vector2(NAME_X+11,top+height+2),point+Vector2(NAME_X+8,top+height+2)]),color,.8,true)
 		if index<steps.size()-1:
-			var a:=point+Vector2(40,top+height+7); var b:=a+Vector2(0,12)
+			var a:=point+Vector2(NAME_X,top+height+7); var b:=a+Vector2(0,12)
 			draw_line(a,b,MUTED,1.,true)
 			draw_polyline(PackedVector2Array([b+Vector2(-3,-4),b,b+Vector2(3,-4)]),MUTED,1.,true)
 		top+=Layout.step_height(step)
 	if member.get("history_partial",false):
-		draw_string(genealogy_font,point+Vector2(8,rect.size.y-7),"履历未全",HORIZONTAL_ALIGNMENT_LEFT,-1,10,MUTED)
+		vertical_text("履历未全",point+Vector2(NAME_X,Layout.note_top(member)),10,12,MUTED)
 
 func person_marker(id: int, member: Dictionary) -> String:
 	if id==model.get("current",-1): return "现任"

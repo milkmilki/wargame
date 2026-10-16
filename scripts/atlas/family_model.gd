@@ -75,8 +75,9 @@ static func structural_key(model: Dictionary) -> int:
 	for id in ids:
 		var m: Dictionary=model.members[id]
 		var text_lengths: Array = []
-		for step in m.get("title_steps",[]): text_lengths.append([str(step.title).length(),str(step.label).length()])
-		shape.append([id,m.get("parent_id",-1),m.get("birth_order",0),m.get("last_reign",-1),str(m.get("tree_name",m.get("name",""))).length(),text_lengths])
+		for step in m.get("title_steps",[{"title":m.get("display_title","无爵"),"label":""}]):
+			text_lengths.append([str(step.get("title","")).length(),str(step.get("label","")).length()])
+		shape.append([id,m.get("parent_id",-1),m.get("birth_order",0),m.get("last_reign",-1),str(m.get("tree_name",m.get("name","？"))).length(),text_lengths,bool(m.get("history_partial",false))])
 	return hash([model.get("root",-1),shape])
 
 static func identity_label(record: Dictionary, previous_fief: int = -1) -> String:
