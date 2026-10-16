@@ -1891,11 +1891,17 @@ func _campaign_has_live_route(army: Army, target_city: int) -> bool:
 	if route.is_empty() or route[-1] != target_city:
 		return false
 	var previous := army.move_from if army.on_edge else army.location_city
+	var exit_city := army.route_origin_city_id
+	if exit_city < 0 and previous >= 0 and not cities[previous].is_traffic:
+		exit_city = previous
 	for city_id in route:
 		var edge := edge_of(previous, city_id)
 		if edge == null or edge.max_manpower <= 0:
 			return false
-		if city_id != target_city and not has_military_access(
+		if not atlas_layout.is_empty():
+			if not atlas_edge_access(edge, army.owner_nation, target_city, false, exit_city):
+				return false
+		elif city_id != target_city and not has_military_access(
 			army.owner_nation, cities[city_id].owner_nation
 		):
 			if not cities[city_id].is_dock:

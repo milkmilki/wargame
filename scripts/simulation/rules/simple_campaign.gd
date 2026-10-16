@@ -110,6 +110,7 @@ static func restore_raid_tasks(sim,front: CoalitionCampaignFront) -> void:
 				front.army_assignments[id]=int(task.target) if int(task.status)==Front.DetachmentStatus.OUTBOUND else front.center_city_id
 
 static func poll(sim) -> void:
+	var defenses: Array[CoalitionCampaignFront] = []
 	for value in sim.state.campaign_fronts.values().duplicate():
 		var front: CoalitionCampaignFront=value
 		if front.retiring or front.center_city_id<0 or front.center_city_id>=sim.state.cities.size() or sim._succession_front_context(front)!=null:continue
@@ -123,14 +124,35 @@ static func poll(sim) -> void:
 					if not sim.state.campaign_raid_used(front):start_raids(sim,front,battle)
 					front.phase=Front.Phase.BLOCKADE_RAID if has_active_raids(front) else Front.Phase.BLOCKADE_ONLY
 				elif status==SiegeState.ASSAULT:front.phase=Front.Phase.ASSAULT_CENTER
-		else:ensure_rally(sim,front)
+		else: defenses.append(front)
+	if not defenses.is_empty():
+		# One physical activity index for the day, shared with rally validation.
+		var activity: Dictionary = sim.state.campaign_defense_activity_index()
+		var contexts := {}
+		for front in defenses:
+			contexts[front.front_id] = sim.state.campaign_defense_context(front.anchor_nation_id,front.center_city_id,front.war_id,activity)
+			ensure_rally(sim,front,contexts[front.front_id])
+		var ready := {}
+		for army in sim.state.armies:
+			if army.state != Army.State.IDLE or army.on_edge or not sim.state.army_effective_for_field_campaign(army): continue
+			var front: CoalitionCampaignFront = sim.state.campaign_front(army.campaign_front_id)
+			if front == null or not contexts.has(front.front_id) or front.phase != Front.Phase.DEFENSE_REGROUP or not army.is_at_city_node(front.camp_city_id): continue
+			if not ready.has(front.front_id): ready[front.front_id] = {"ids":[],"manpower":0}
+			ready[front.front_id].ids.append(army.id)
+			ready[front.front_id].manpower += army.size
+		for front in defenses:
+			sim._wake_campaign_defense(front,contexts[front.front_id],ready.get(front.front_id,{}))
+	for id in sim._coalition_defense_reaction_tokens.keys():
+		if sim.state.campaign_front(id) == null: sim._coalition_defense_reaction_tokens.erase(id)
 	sim.state.prune_campaign_raid_records()
 
-static func ensure_rally(sim,front: CoalitionCampaignFront) -> void:
+static func ensure_rally(sim,front: CoalitionCampaignFront,context: Dictionary = {}) -> void:
 	var state: GameState=sim.state
 	# Declared defense holds the center immediately. A rear rally is needed only
 	# once a real threat or regrouping exists; use the normal path rules then.
-	if state.StateCampaigns.has_active_reference(state,front) and front.phase==Front.Phase.HOLD_AND_REINFORCE and not state.city_under_siege(front.center_city_id) and not bool(state.campaign_defense_context(front.anchor_nation_id,front.center_city_id,front.war_id,sim._coalition_defense_activity).active): return
+	if state.StateCampaigns.has_active_reference(state,front) and front.phase==Front.Phase.HOLD_AND_REINFORCE and not state.city_under_siege(front.center_city_id):
+		if context.is_empty(): context = state.campaign_defense_context(front.anchor_nation_id,front.center_city_id,front.war_id,sim._coalition_defense_activity)
+		if not bool(context.active): return
 	var key: Array=[state.ownership_revision,state.diplomacy_revision,state.road_network_revision,hash(state.besieged_city_ids())]
 	if front.rally_revision==key:return
 	front.rally_revision=key
@@ -145,7 +167,9 @@ static func defense(sim,front: CoalitionCampaignFront) -> bool:
 	var state: GameState=sim.state
 	if not state.has_military_access(front.anchor_nation_id,state.cities[front.center_city_id].owner_nation):state.release_campaign_front(front.front_id);return false
 	var battle: Battle=sim._siege_battle_of(state.cities[front.center_city_id])
-	var regrouping:=battle!=null or front.phase in [Front.Phase.DEFENSE_REGROUP,Front.Phase.RELIEVE_CENTER]
+	# A live city field defense still accepts reinforcements. A blockade or an
+	# actual regroup order sends the next cohort to the rear camp instead.
+	var regrouping:=(battle!=null and not battle.uses_field_combat_rules()) or front.phase in [Front.Phase.DEFENSE_REGROUP,Front.Phase.RELIEVE_CENTER]
 	if battle==null and front.phase==Front.Phase.RELIEVE_CENTER:
 		regrouping=false
 	var rally:=front.camp_city_id if regrouping else front.center_city_id

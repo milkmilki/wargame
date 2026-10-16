@@ -165,9 +165,10 @@ var _diplomacy_topology_cache: Dictionary = {}
 ## nation_id -> 最后一次完成州级战役管理的日期。战役期间每日复核 C/R/V，
 ## 不得在同一日常规 AI 已评估后再无上下文重复构建快照或威胁场。
 var _campaign_evaluated_day_by_nation: Dictionary = {}
-## 战争集团连通分量独立错峰；同一分量在十日周期内只做一次目标与分兵规划。
+## 战争集团连通分量常规按十日错峰；新威胁、解围就绪和战报可提前唤醒。
 var _coalition_campaign_next_due_day: Dictionary = {}
 var _coalition_campaign_wake_day: int = 2147483647
+var _coalition_defense_reaction_tokens: Dictionary = {} # Transient, edge-triggered daily defense observations.
 var _coalition_armies_by_id: Dictionary = {}
 var _coalition_armies_by_nation: Dictionary = {}
 var _coalition_defense_activity: Dictionary = {}
@@ -400,6 +401,7 @@ func setup(game_state: GameState) -> void:
 	_campaign_evaluated_day_by_nation.clear()
 	_coalition_campaign_next_due_day.clear()
 	_coalition_campaign_wake_day = 2147483647
+	_coalition_defense_reaction_tokens.clear()
 	_coalition_armies_by_id.clear()
 	_coalition_armies_by_nation.clear()
 	_coalition_defense_activity.clear()
@@ -9934,6 +9936,21 @@ func _force_front_report_replan(front: CoalitionCampaignFront) -> void:
 			_coalition_campaign_wake_day = mini(_coalition_campaign_wake_day, state.day + 1)
 
 
+func _wake_campaign_defense(front: CoalitionCampaignFront, context: Dictionary, ready: Dictionary) -> void:
+	var requirement := int(context["requirement"])
+	var token := [requirement, bool(context["besieged"]), front.camp_city_id,
+		ready.get("ids", []), int(ready.get("manpower", 0)),
+		state.ownership_revision, state.diplomacy_revision, state.road_network_revision]
+	var previous: Array = _coalition_defense_reaction_tokens.get(front.front_id, [])
+	_coalition_defense_reaction_tokens[front.front_id] = token
+	if front.combat_report_locked or token == previous: return
+	var assembled := (front.phase == CoalitionCampaignFront.Phase.DEFENSE_REGROUP
+		and bool(context["besieged"]) and int(ready.get("manpower", 0)) > 0
+		and int(ready.get("manpower", 0)) >= requirement)
+	if requirement > front.reported_requirement or assembled:
+		_force_front_report_replan(front)
+
+
 func _finish_campaign_reports_for_battle(_battle: Battle) -> void:
 	# 结束分支可能已清空败方 side，因此遍历已锁定战线，
 	# 并由其他活跃野战判定是否真正收到最后一份战报。
@@ -14679,7 +14696,8 @@ func _retreat(army: Army) -> void:
 	var defense_front:=state.campaign_front(army.campaign_front_id)
 	if defense_front!=null and defense_front.mode==CoalitionCampaignFront.Mode.DEFENSE:
 		SimpleCampaign.ensure_rally(self,defense_front)
-		defense_front.phase=CoalitionCampaignFront.Phase.DEFENSE_REGROUP
+		if not _front_has_active_field_engagement(defense_front):
+			defense_front.phase=CoalitionCampaignFront.Phase.DEFENSE_REGROUP
 	if not state.atlas_layout.is_empty():
 		var origin_edge := state.edge_of(army.move_from,army.move_to) if army.on_edge else null
 		army.route_origin_city_id = origin_edge.control_city_id if origin_edge!=null else army.location_city
@@ -14759,7 +14777,8 @@ func _start_morale_retreat_from_city(
 	var defense_front:=state.campaign_front(army.campaign_front_id)
 	if defense_front!=null and defense_front.mode==CoalitionCampaignFront.Mode.DEFENSE:
 		SimpleCampaign.ensure_rally(self,defense_front)
-		defense_front.phase=CoalitionCampaignFront.Phase.DEFENSE_REGROUP
+		if not _front_has_active_field_engagement(defense_front):
+			defense_front.phase=CoalitionCampaignFront.Phase.DEFENSE_REGROUP
 	_release_edge(army)
 	army.battle_id = -1
 	army.state = Army.State.RETREATING

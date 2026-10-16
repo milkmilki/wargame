@@ -49,7 +49,7 @@ func _check(condition: bool, message: String) -> void:
 		print("ATLAS_ACCESS_FAIL: ", message)
 
 
-func _fixture(roads: Array[Vector3i]) -> GameState:
+static func _fixture(roads: Array[Vector3i]) -> GameState:
 	var state := preload("res://tests/support/grid_world.gd").new()
 	state._reset_world(94161)
 	state._generate_nations(GameState.DiplomaticRelation.NEUTRAL, 4, false)

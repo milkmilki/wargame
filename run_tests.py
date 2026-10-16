@@ -25,7 +25,7 @@ CORE = [
     "native_extension_contract", "native_graph_equivalence", "native_edge_inputs", "native_administrative_fields", "native_key_order", "native_trade_city_inputs", "native_frozen_batch", "native_world_lifecycle", "native_runtime_equivalence",
     "game_calendar", "project_compile", "test_suite", "field_establishment_costs", "trade_fingerprint_reuse", "capital_tax_batch", "resource_capacity_batch", "ruler_modifier_table", "threat_field_lazy", "forecast_token_packing", "supply_field_lazy_order", "reinforcement_fiscal_cache", "forecast_selected_rows", "trade_packed_fingerprint", "campaign_enemy_memo", "atlas_capital_hops", "movement_capacity_index_equivalence", "battle_group_index_equivalence",
     "army_precontact_hold", "war_count_and_conqueror", "zhou_defection", "field_manpower_requirements", "supply_combat_attributes", "field_battle_supply", "city_field_defender_supply", "morale_rout_only", "field_shared_morale", "military_funding", "battle_opening_dice",
-    "campaign_simple_retreat", "campaign_single_wave", "campaign_defense_regroup", "campaign_defense_center_activity", "campaign_mobilization_costs",
+    "campaign_simple_retreat", "campaign_single_wave", "campaign_defense_regroup", "campaign_defense_response", "campaign_defense_center_activity", "campaign_mobilization_costs",
     "campaign_action_readiness", "campaign_staging_legality", "coalition_dispatch_lifecycle", "coalition_siege_participation",
     "campaign_reinforcement_ownership", "chronicle_smoke", "political_history_test", "political_history_rulers",
     "regional_strategy", "regional_access_recovery", "family_tree_smoke",
@@ -64,7 +64,7 @@ ATLAS = [
     "atlas_entry_contract", "atlas_preview_lifecycle", "atlas_render_invalidation", "atlas_view_caches", "atlas_camera_feedback", "atlas_war_fronts", "atlas_vassal_borders", "atlas_military_contract", "atlas_hierarchy_cases",
     "atlas_traffic_graph", "atlas_zhoufu_roads", "atlas_road_smoothing",
     "atlas_segmented_movement", "atlas_junction_encounters",
-    "atlas_access_and_repatriation", "atlas_territory_transactions",
+    "atlas_access_and_repatriation", "atlas_campaign_reachability", "atlas_territory_transactions",
     "atlas_path_cache_lifecycle", "atlas_template_invalid",
     "atlas_military_persistence", "atlas_visual_land_audit", "atlas_military_smoke",
 ]
