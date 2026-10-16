@@ -62,7 +62,7 @@ ATLAS = [
     "atlas_render_index", "atlas_persistent_strokes", "atlas_shared_stroke_cache",
     "atlas_symbol_mesh", "atlas_symbol_tiles", "atlas_incremental_text", "atlas_wrapped_text", "atlas_city_markers",
     "atlas_entry_contract", "atlas_preview_lifecycle", "atlas_render_invalidation", "atlas_view_caches", "atlas_camera_feedback", "atlas_war_fronts", "atlas_vassal_borders", "atlas_military_contract", "atlas_hierarchy_cases",
-    "atlas_traffic_graph", "atlas_zhoufu_roads", "atlas_road_smoothing",
+    "atlas_traffic_graph", "atlas_zhoufu_roads", "atlas_jurisdiction_roads", "atlas_jurisdiction_world", "atlas_road_smoothing",
     "atlas_segmented_movement", "atlas_junction_encounters",
     "atlas_access_and_repatriation", "atlas_campaign_reachability", "atlas_territory_transactions",
     "atlas_path_cache_lifecycle", "atlas_template_invalid",
