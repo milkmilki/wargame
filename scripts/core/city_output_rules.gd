@@ -23,39 +23,32 @@ static func capital_tax_bases(game_state: GameState) -> Dictionary:
 
 
 static func city_gold_outputs(game_state: GameState) -> PackedInt32Array:
-	var result := PackedInt32Array()
-	if game_state == null:
-		return result
-	result.resize(game_state.cities.size())
-	var national_base_gold := _national_base_gold(game_state, true)
-	for city in game_state.cities:
-		if city.id < 0 or city.id >= result.size():
-			continue
-		var owner_base := (
-			national_base_gold[city.owner_nation]
-			if city.owner_nation >= 0
-				and city.owner_nation < national_base_gold.size()
-			else 0
-		)
-		result[city.id] = city_gold_output(
-			game_state, city, {}, owner_base
-		)
-	return result
+	return _gold_outputs(game_state, true)
 
 
 static func city_potential_gold_outputs(game_state: GameState) -> PackedInt32Array:
+	return _gold_outputs(game_state, false)
+
+
+## One fresh batch shares owner-only governance. The scalar before-governance
+## rule already checks administration, so no second city-level guard is needed.
+static func _gold_outputs(game_state: GameState, respect_administration: bool) -> PackedInt32Array:
 	var result := PackedInt32Array()
 	if game_state == null:
 		return result
 	result.resize(game_state.cities.size())
-	var national_base_gold := _national_base_gold(game_state, false)
+	var national_base_gold := _national_base_gold(game_state, respect_administration)
+	var governance := {}
 	for city in game_state.cities:
 		if city.id < 0 or city.id >= result.size():
 			continue
-		result[city.id] = city_potential_gold_output(
+		var owner := city.owner_nation
+		if not governance.has(owner):
+			governance[owner] = city_governance_output_multiplier(game_state, city)
+		var output := city_gold_output_before_governance(
 			game_state,
 			city,
-			{},
+			respect_administration,
 			(
 				national_base_gold[city.owner_nation]
 				if city.owner_nation >= 0
@@ -63,6 +56,7 @@ static func city_potential_gold_outputs(game_state: GameState) -> PackedInt32Arr
 				else 0
 			)
 		)
+		result[city.id] = maxi(int(floor(float(output) * float(governance[owner]))), 0)
 	return result
 
 

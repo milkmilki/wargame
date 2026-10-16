@@ -3989,6 +3989,28 @@ static func select_war_objective(
 	camp_counterattack: bool = false,
 	context: ObjectiveContext = ObjectiveContext.PREWAR
 ) -> Dictionary:
+	# This synchronous query only derives candidates. Costs and permissions
+	# remain fixed; goal/exit patches still belong to each individual search.
+	var owns_inputs := NativeCompute.begin_path_input_scope(state)
+	var result := _select_war_objective_from_inputs(
+		state, nation_id, target_id, evaluation_cache, excluded_city,
+		legal_reclamation_only, excluded_centers, camp_counterattack, context
+	)
+	if owns_inputs: NativeCompute.end_path_input_scope(state)
+	return result
+
+
+static func _select_war_objective_from_inputs(
+	state: GameState,
+	nation_id: int,
+	target_id: int,
+	evaluation_cache: Dictionary,
+	excluded_city: int,
+	legal_reclamation_only: bool,
+	excluded_centers: Dictionary,
+	camp_counterattack: bool,
+	context: ObjectiveContext
+) -> Dictionary:
 	_ensure_evaluation_cache_current(state, evaluation_cache)
 	var target_cities := (
 		_cached_cities_of(

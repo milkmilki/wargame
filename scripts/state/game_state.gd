@@ -2893,9 +2893,27 @@ func merge_war_ids(keep_war_id: int, merged_war_id: int) -> void:
 func release_war_pool(war_id: int) -> void:
 	if war_id < 0:
 		return
-	for nation in nations:
-		release_nation_war_pool(nation.id, war_id)
+	# New political identities can close provisional wars without ever binding
+	# troops or campaigns. One scan avoids a full army scan for every nation.
+	# Custom states retain their virtual per-nation lifecycle callbacks.
+	if get_script().resource_path == "res://scripts/state/game_state.gd" and not _war_pool_has_bindings(war_id):
+		if not nations.is_empty(): _campaign_pair_revision.clear()
+	else:
+		for nation in nations:
+			release_nation_war_pool(nation.id, war_id)
 	ChronicleRules.mark_pending(self, war_id)
+
+
+func _war_pool_has_bindings(war_id: int) -> bool:
+	for record in state_campaigns.values():
+		if record.war_id == war_id: return true
+	for pair in campaign_pairs.values():
+		if pair.war_id == war_id: return true
+	for front in campaign_fronts.values():
+		if front != null and front.war_id == war_id: return true
+	for army in armies:
+		if army.campaign_war_id == war_id: return true
+	return false
 
 
 func release_nation_war_pool(nation_id: int, war_id: int) -> void:
@@ -5314,13 +5332,13 @@ func _province_neighbors_for_sovereign_colors() -> Array[Vector2i]:
 				if city_id < 0 or city_id >= cities.size():
 					continue
 				if x + 1 < width:
-					_add_province_neighbor_pair(
-						city_id, province_ids[y * width + x + 1], seen
-					)
+					var right := province_ids[y * width + x + 1]
+					if right != city_id:
+						_add_province_neighbor_pair(city_id, right, seen)
 				if y + 1 < height:
-					_add_province_neighbor_pair(
-						city_id, province_ids[(y + 1) * width + x], seen
-					)
+					var below := province_ids[(y + 1) * width + x]
+					if below != city_id:
+						_add_province_neighbor_pair(city_id, below, seen)
 	else:
 		# 无省份栅格的轻量测试/旧地图退回交通图，正式地图不走此分支。
 		for edge in edges:
