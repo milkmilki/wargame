@@ -130,7 +130,8 @@ def msvc_environment(build_tools: Path) -> dict[str, str]:
 
 def source_hashes() -> dict[str, str]:
     sources = [LOCK_PATH, NATIVE / "SConstruct", NATIVE / "build_profile.json",
-               NATIVE / "runtime_graph.gdextension", Path(__file__).resolve(), *sorted((NATIVE / "src").glob("*"))]
+               NATIVE / "runtime_graph.gdextension", Path(__file__).resolve(), *sorted((NATIVE / "src").glob("*")),
+               *sorted((NATIVE / "third_party").rglob("*"))]
     return {path.relative_to(PROJECT).as_posix(): sha256(path) for path in sources if path.is_file()}
 
 

@@ -10,6 +10,7 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("native_build", Path(__file__).resolve().parents[1] / "scripts/tools/build_native_compute.py")
 build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
+real_source_hashes = build.source_hashes
 
 
 class NativeBuildMetadataTests(unittest.TestCase):
@@ -55,6 +56,20 @@ class NativeBuildMetadataTests(unittest.TestCase):
         with patch.object(build, "source_hashes", return_value={"fixture.cpp": "changed-source"}):
             with self.assertRaisesRegex(RuntimeError, "DLL or its sources changed"):
                 build.verify(["debug"], self.engine)
+
+    def test_vendored_coastline_headers_are_part_of_source_fingerprint(self):
+        header = self.native / "third_party/cdt/CDT.h"
+        header.parent.mkdir(parents=True)
+        header.write_bytes(b"original-vendored-header")
+        with patch.object(build, "PROJECT", self.root), \
+                patch.object(build, "LOCK_PATH", self.native / "dependencies.lock.json"), \
+                patch.object(build, "__file__", str(self.root / "scripts/tools/build_native_compute.py")):
+            before = real_source_hashes()
+            header.write_bytes(b"changed-vendored-header")
+            after = real_source_hashes()
+        key = "native/third_party/cdt/CDT.h"
+        self.assertIn(key, before)
+        self.assertNotEqual(before[key], after[key])
 
     def test_modified_engine_or_api_rejected(self):
         self.engine.write_bytes(b"changed-engine")
