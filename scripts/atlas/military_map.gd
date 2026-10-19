@@ -60,6 +60,9 @@ static func prepare(base: Dictionary,target_nations: int = 40) -> Dictionary:
 		"settlement_adjacency":strategic,"strategic_routes":strategic_routes,"territorial_pairs":territorial,"timing":{"environment_usec":environment_usec,"hierarchy_ms":hierarchy_ms,"roads_ms":roads_ms,"total_ms":Time.get_ticks_msec()-total_started,"smoothing":smoothing},"distance_km":250.0}
 
 static func seat_land_raster(source: Dictionary,data: Dictionary,h: Dictionary) -> Dictionary:
+	# New Earth meshes already preserve the source coastline. Painting a disk
+	# around a boundary seat can close the very strait protected by that mesh.
+	if data.mesh.has("coast_edges"): return source
 	var result: Dictionary = source.duplicate()
 	for field in ["water","cell","elev","biome"]: result[field] = source[field].duplicate()
 	for city in h.cities:

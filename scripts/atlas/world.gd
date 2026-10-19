@@ -10,6 +10,7 @@ const Climate = preload("res://scripts/atlas/climate.gd")
 const Currents = preload("res://scripts/atlas/currents.gd")
 const Ice = preload("res://scripts/atlas/sea_ice.gd")
 const Earth = preload("res://scripts/atlas/earth_surface.gd")
+const Coastline = preload("res://scripts/atlas/coastline_mesh.gd")
 const Monsoon = preload("res://scripts/atlas/monsoon_rainfall.gd")
 const Circulation = preload("res://scripts/atlas/circulation_rainfall.gd")
 const SettlementClimate = preload("res://scripts/atlas/climate_settlement.gd")
@@ -144,17 +145,23 @@ static func generate_earth(params: Dictionary,progress: Callable) -> Dictionary:
 	if progress.is_valid(): progress.call("真实地球高程与海岸")
 	var surface := Earth.load_surface()
 	if surface.is_empty(): return {"error":"真实地球数据缺失或 SHA256 校验失败"}
+	if progress.is_valid(): progress.call("海陆分割与海岸边界")
+	var coast := Coastline.partition(surface)
+	if coast.has("error"): return coast
 	params = params.duplicate()
 	# These random-planet controls do not participate in the Earth preset.
 	for key in ["plates","mountains","landFraction"]: params.erase(key)
 	params.terrain_source = surface.metadata
-	if progress.is_valid(): progress.call("球面网格与真实高程取样")
-	var mesh := MeshBuilder.build(int(params.seed),int(params.cells)); var n: int = mesh.n; var geo := Geometry.new(mesh)
+	params.terrain_mesh = Coastline.MODEL
+	if progress.is_valid(): progress.call("沿海岸采样与约束三角网")
+	var mesh := Coastline.build(int(params.seed),int(params.cells),coast)
+	if mesh.has("error"): return mesh
+	var n: int = mesh.n; var geo := Geometry.new(mesh)
 	var elevation := Tectonics.floats(n); var water := PackedByteArray(); water.resize(n)
 	var land := water.duplicate(); var level := Tectonics.floats(n); var maximum := 0.
 	for i in range(n):
 		var lon: float = mesh.x[i]/mesh.width*360.-180.; var lat: float = 90.-mesh.y[i]/mesh.height*180.
-		elevation[i] = Earth.elevation_at(surface,lon,lat); water[i] = Earth.water_at(surface,lon,lat)
+		elevation[i] = Earth.elevation_at(surface,lon,lat); water[i] = mesh.water[i]
 		land[i] = 1 if water[i]==0 else 0
 		if water[i]==1: elevation[i] = minf(-1,elevation[i])
 		elif water[i]==2: level[i] = elevation[i]
@@ -185,12 +192,16 @@ static func generate_earth(params: Dictionary,progress: Callable) -> Dictionary:
 	# flood below-sea-level land, or invent visible lakes/river transport.
 	var route := Erosion.drainage(mesh,land,elevation,.001,geo.lengths); var runoff := Tectonics.floats(n)
 	var biomes := PackedByteArray(); biomes.resize(n)
+	var base_samples: int = mesh.base_sample_count
+	var runoff_area_scale := base_samples/(4.*PI*pow(mesh.width/TAU,2))
 	for i in range(n):
-		if land[i]: runoff[i] = maxf(.03,(climate.precipitation[i]-.45*(250+22*maxf(0,climate.temperature[i])))/1000.)
+		# Nonuniform coastal cells contribute by physical area, rather than each
+		# tiny support cell inventing another full coarse cell's freshwater.
+		if land[i]: runoff[i] = maxf(.03,(climate.precipitation[i]-.45*(250+22*maxf(0,climate.temperature[i])))/1000.)*mesh.areas[i]*runoff_area_scale
 		biomes[i] = biome(climate.temperature[i],climate.precipitation[i],water[i],ice[i])
 	var result := {"params":params,"width":mesh.width,"height":mesh.height,"mesh":mesh,"elevation":elevation,"water":water,
 		"waterLevel":level,"temperature":climate.temperature,"precipitation":climate.precipitation,"seaIce":ice,"currents":currents,
-		"biome":biomes,"flux":Erosion.accumulate(route,land,runoff),"riverThreshold":14.*n/36000.,"rivers":[],"volcanoes":[],"maxElevation":maximum}
+		"biome":biomes,"flux":Erosion.accumulate(route,land,runoff),"riverThreshold":14.*base_samples/36000.,"rivers":[],"volcanoes":[],"maxElevation":maximum}
 	if not rain_detail.is_empty():
 		result.annual_precipitation = rain_detail.annual_precipitation; result.seasonal_precipitation = rain_detail.seasonal_precipitation
 		if rain_detail.has("quarter_precipitation"):

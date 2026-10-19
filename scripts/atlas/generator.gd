@@ -1,5 +1,5 @@
 extends RefCounted
-## Independent atlas data pipeline; all computation is native GDScript.
+## Godot data pipeline; GDScript world rules and native constrained meshing.
 const World = preload("res://scripts/atlas/world.gd")
 const Habitat = preload("res://scripts/atlas/habitat.gd")
 const Regions = preload("res://scripts/atlas/regions.gd")
@@ -23,6 +23,9 @@ static func generate(seed_value: int = 1,city_threshold: float = 1.0,progress: C
 	var started := Time.get_ticks_msec()
 	if progress.is_valid(): progress.call("宜居度与省份")
 	var habitat := Habitat.build(world.mesh,world); world.suitability = habitat.suitability; world.capacity = habitat.capacity
+	if habitat.has("settlement_sample"):
+		world.mesh.base_settlement_sample=world.mesh.settlement_sample
+		world.mesh.settlement_sample=habitat.settlement_sample
 	if habitat.has("agricultural_potential"): world.agricultural_potential = habitat.agricultural_potential
 	for field in ["climate_suitability","potential_evaporation","aridity_index","growing_months"]:
 		if habitat.has(field): world[field] = habitat[field]

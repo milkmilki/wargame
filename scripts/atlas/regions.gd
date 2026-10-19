@@ -23,12 +23,15 @@ static func build(mesh: Dictionary,env: Dictionary,seed_value: int,region_area: 
 			cost[k] = lengths[k]+terrain; seed_cost[k] = lengths[k]
 	var land := landmasses(mesh,water)
 	var base := Maths.sub_seed(seed_value,"civ-regions")
+	var sampled: PackedByteArray = mesh.get("settlement_sample",PackedByteArray())
 	var cells: Array[int] = []
 	var tie := PackedFloat64Array(); tie.resize(n)
 	for i in range(n):
 		if water[i] == 0: cells.append(i); tie[i] = Maths.keyed(base,i)
-	cells.sort_custom(func(a,b): return tie[a] < tie[b] if suit[a] == suit[b] else suit[a] > suit[b])
-	var r0 := sqrt(region_area*0.85)*0.8*Maths.fpow(float(n)/(36000.0*0.944),0.07)
+	cells.sort_custom(func(a,b):
+		if not sampled.is_empty() and sampled[a]!=sampled[b]: return sampled[a]>sampled[b]
+		return tie[a] < tie[b] if suit[a] == suit[b] else suit[a] > suit[b])
+	var r0 := sqrt(region_area*0.85)*0.8*Maths.fpow(float(mesh.get("base_sample_count",n))/(36000.0*0.944),0.07)
 	var covered := PackedByteArray(); covered.resize(n)
 	var stamp := PackedInt32Array(); stamp.resize(n); stamp.fill(-1)
 	var dist := PackedFloat64Array(); dist.resize(n)
@@ -37,6 +40,9 @@ static func build(mesh: Dictionary,env: Dictionary,seed_value: int,region_area: 
 	var climate_density: bool = env.get("params",{}).get("settlement_model","") in [SettlementClimate.VERSION,"climate_capacity_v5","climate_capacity_v4","climate_capacity_v3","climate_capacity_v2"]
 	for pass_index in range(2):
 		for s in cells:
+			# Coast support nodes preserve geometry, not the density requested by
+			# the sampling setting. The second pass still labels tiny landmasses.
+			if pass_index==0 and not sampled.is_empty() and sampled[s]==0: continue
 			if pass_index == 0 and (covered[s] != 0 or flux[s] >= 6.0*river_threshold): continue
 			if pass_index == 1 and seeded[land.of[s]] != 0: continue
 			var id := seeds.size(); seeds.append(s); seeded[land.of[s]] = 1

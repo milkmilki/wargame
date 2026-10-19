@@ -36,6 +36,7 @@ CORE = [
     "ultimatum_forecast_cache_equivalence",
 ]
 ATLAS = [
+	"atlas_coastline_mesh", "atlas_coastline_channels", "atlas_coastline_world",
 	"environment_nations_atlas", "atlas_shipping", "atlas_shipping_world", "trade_corridors", "atlas_trade_declutter", "atlas_trade_corridor_world", "atlas_geographic_names", "atlas_formal_nation_labels",
     "atlas_diplomacy_wakes",
     "atlas_alliance_cache", "atlas_alliance_runtime",

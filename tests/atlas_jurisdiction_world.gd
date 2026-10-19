@@ -9,7 +9,25 @@ func check(ok: bool, message: String) -> void:
 	checks += 1
 	if not ok: failures += 1; printerr("JURISDICTION_WORLD_FAIL ",message)
 func original_payload() -> Dictionary:
-	return preload("res://tests/atlas_military_inputs.gd").eurasia_military()
+	# This regression names exact cities/roads from the pre-coastline world.
+	# Never replace it with a freshly generated map whose IDs can change.
+	var metadata:Dictionary=JSON.parse_string(FileAccess.get_file_as_string("res://tests/fixtures/atlas_borokhul_roads.json"))
+	var path:="res://tests/fixtures/atlas_borokhul_roads.bin"
+	assert(FileAccess.get_sha256(path)==metadata.fixture_sha256,"historical road fixture hash")
+	var file:=FileAccess.open_compressed(path,FileAccess.READ)
+	var payload:Dictionary=file.get_var(false);file.close()
+	# Road rebuilding uses the retained water/district pixels. Decorative
+	# noise columns are unnecessary for this scenario; restore valid display
+	# columns from its unchanged cell environment for template roundtrips.
+	var raster:Dictionary=payload.raster;var env:Dictionary=payload.data.environment
+	for pair in [["elev","elevation"],["temp","temperature"],["precip","precipitation"],["ice","seaIce"]]:
+		var values:=PackedFloat32Array();values.resize(raster.cell.size())
+		for pixel in range(values.size()):values[pixel]=env[pair[1]][raster.cell[pixel]]
+		raster[pair[0]]=values
+	var biome:=PackedByteArray();biome.resize(raster.cell.size())
+	for pixel in range(biome.size()):biome[pixel]=env.biome[raster.cell[pixel]]
+	raster.biome=biome
+	return payload
 func run() -> void:
 	var original := original_payload(); var source_hash := hash(original)
 	var payload := original.duplicate()

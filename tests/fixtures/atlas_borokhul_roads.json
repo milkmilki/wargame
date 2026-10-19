@@ -1,0 +1,29 @@
+{
+  "anchors": {
+    "172": "博尔忽",
+    "379": "广谷",
+    "461": "泰兀"
+  },
+  "cells": 33940,
+  "checkpoint_commit": "2fc6beb14128316c6e42d6ed3b274fe5f05dd8ae",
+  "countries": 40,
+  "engine": "4.7.1.stable.official.a13da4feb",
+  "fixture_sha256": "8b816e4f085f89c60b1ac83e2306a4f1c015b7e2702eb19e10bf2187e740399c",
+  "mask": {
+    "east": 145.0,
+    "enabled": true,
+    "north": 55.0,
+    "south": 20.0,
+    "version": "atlas-geographic-mask-v1",
+    "west": -15.0
+  },
+  "omitted": "Raster decoration columns only. Exact terrain, climate, costs, road slots, graph paths, water pixels and district pixels retained. Loader reconstructs raster presentation columns from cell environment for template schema validation.",
+  "physical_road_segments": 1308,
+  "purpose": "Frozen original Borokhul public-road regression; correctness only, not a performance baseline.",
+  "seed": 1,
+  "settlements": 484,
+  "source_code_head": "c32a1b226e59c420152383714e18dd5913109177",
+  "source_session": "run-2026-10-19T02-44-24-36680-4487213",
+  "source_template_sha256": "be3e08f6569e4fd490454b82f0eabb5d0dfb9ef512826cb4418ce720696e4b1e",
+  "storage": "Godot compressed variant / ZSTD; object decoding disabled"
+}

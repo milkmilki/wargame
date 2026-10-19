@@ -92,14 +92,16 @@ static func position(mesh: Dictionary,cell: int) -> Vector3:
 
 static func prefectures(mesh: Dictionary,env: Dictionary,regions: Dictionary,parent: int,center: int,seed_value: int,threshold: float) -> PackedInt32Array:
 	var component := grow(mesh,env,regions.of,[{"cell":center,"id":center}],parent,true)
+	var sampled: PackedByteArray = mesh.get("settlement_sample",PackedByteArray())
 	var candidates: Array[int] = []; var total_length := 0.; var edge_count := 0
 	for offset in range(regions.cellStart[parent],regions.cellStart[parent+1]):
 		var cell: int = regions.cells[offset]
-		if cell!=center and component[cell]>=0 and Roads.passable(env,cell) and env.suitability[cell]>threshold: candidates.append(cell)
+		if cell!=center and component[cell]>=0 and Roads.passable(env,cell) and env.suitability[cell]>threshold and (sampled.is_empty() or sampled[cell]!=0): candidates.append(cell)
 		for slot in range(mesh.adj_start[cell],mesh.adj_start[cell+1]):
 			if regions.of[mesh.adj[slot]]==parent: total_length += mesh.lengths[slot]; edge_count += 1
 	if candidates.is_empty(): return PackedInt32Array()
 	var separation := total_length/maxi(1,edge_count)
+	if not sampled.is_empty(): separation=maxf(separation,mesh.spacing)
 	var sphere_radius := float(mesh.width)/TAU
 	var radius := sqrt(float(regions.area[parent])/PI)/sphere_radius
 	var origin := position(mesh,center).normalized()
