@@ -18,6 +18,10 @@ objects = [
                      "src/" + source + ".cpp")
     for source in ["register_types", "runtime_graph", "atlas_display"]
 ]
+# CDT reports invalid constraints with local standard exceptions.
+mesh_env = env.Clone()
+mesh_env.Append(CCFLAGS=["/EHsc"])
+objects.append(mesh_env.SharedObject(".cache/obj/" + env["target"] + "/atlas_mesh", "src/atlas_mesh.cpp"))
 library = env.SharedLibrary("bin/runtime_graph" + env["suffix"] + env["SHLIBSUFFIX"], objects)
 env.NoCache(library)
 SConsignFile(".cache/sconsign")

@@ -43,11 +43,14 @@ func move_cell(i: int,e1: float,s1: float,e2: float = 0,s2: float = 0,e3: float 
 func nearest(x: float,y: float,hint: int) -> int:
 	var p := point_frame(x,y); var c := clampi(hint,0,mesh.n-1)
 	var bd := point_distance_squared(c,p)
-	# Delaunay neighbor descent reaches the nearest point; use strict source tie rule.
+	# Coastal fans have separate travel adjacency but share geometric lookup
+	# neighbors, so a coincident shoreline cannot trap environmental sampling.
+	var starts: PackedInt32Array = mesh.get("lookup_adj_start",mesh.adj_start)
+	var neighbors: PackedInt32Array = mesh.get("lookup_adj",mesh.adj)
 	while true:
 		var next := -1
-		for k in range(mesh.adj_start[c],mesh.adj_start[c+1]):
-			var j: int = mesh.adj[k]; var d := point_distance_squared(j,p)
+		for k in range(starts[c],starts[c+1]):
+			var j: int = neighbors[k]; var d := point_distance_squared(j,p)
 			if d<bd: bd = d; next = j
 		if next<0: return c
 		c = next
@@ -102,7 +105,9 @@ func _init(value: Dictionary) -> void:
 		ex[i] = -py/rho; ey[i] = px/rho; sx[i] = pz*px/rho; sy[i] = pz*py/rho; sz[i] = -rho
 	lengths.resize(mesh.adj.size())
 	for i in range(mesh.n):
-		for k in range(mesh.adj_start[i],mesh.adj_start[i+1]): lengths[k] = Sphere.distance(mesh,i,mesh.adj[k])
+		for k in range(mesh.adj_start[i],mesh.adj_start[i+1]):
+			var length := Sphere.distance(mesh,i,mesh.adj[k])
+			lengths[k] = maxf(.000001,length) if mesh.has("coast_edges") else length
 
 func latitude(i: int) -> float: return 90.0-180.0*mesh.y[i]/mesh.height
 

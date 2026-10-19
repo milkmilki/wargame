@@ -52,6 +52,12 @@ Reference runs disable river boundary/road costs and visible rivers, use
 strict suitability > 1 for city eligibility, and do not generate sea routes.
 # Additional native dependency ports
 
+Earth coastline-constrained meshing uses the unmodified CDT 1.4.4 headers
+from https://github.com/artem-ogre/CDT under MPL-2.0. The original license,
+file notices and pinned archive hash are retained in
+`native/runtime_graph/third_party/cdt/`. The game-specific adapter is
+`native/runtime_graph/src/atlas_mesh.cpp`; no network access is required at runtime.
+
 `scripts/atlas/attack_arrow_geometry.gd` ports OL Plot's `AttackArrow` and
 quadratic B-spline helpers at commit `c919e60b4edeaeca53c08f9552f793b2ae9537f0`.
 Upstream: https://github.com/sakitam-fdd/ol-plot, Copyright (c) 2017 sakitam-fdd

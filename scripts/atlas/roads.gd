@@ -7,8 +7,10 @@ const BIOME_COST = [1,1,1,1,1.25,1.2,1.15,1.15,1,1.1,1.25,1.3,1,1.1,1.4,1.5]
 
 static func seat_cities(mesh: Dictionary,env: Dictionary,regions: Dictionary,threshold: float) -> Array:
 	var cities: Array = []; var caps: Array = []
+	var sampled: PackedByteArray = mesh.get("settlement_sample",PackedByteArray())
 	for r in range(regions.count):
 		var s := int(regions.seat[r])
+		if not sampled.is_empty() and sampled[s]==0: continue
 		if float(env.suitability[s]) <= threshold or not passable(env,s): continue
 		cities.append({"cell":s,"region":r,"major":false,"port":false,"founded":0})
 		caps.append(float(regions.capacity[r]))

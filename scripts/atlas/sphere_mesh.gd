@@ -157,7 +157,9 @@ static func distance(mesh: Dictionary,i: int,j: int) -> float:
 static func edge_lengths(mesh: Dictionary) -> PackedFloat32Array:
 	var out := PackedFloat32Array(); out.resize(mesh.adj.size())
 	for i in range(mesh.n):
-		for k in range(mesh.adj_start[i],mesh.adj_start[i+1]): out[k] = distance(mesh,i,mesh.adj[k])
+		for k in range(mesh.adj_start[i],mesh.adj_start[i+1]):
+			var length := distance(mesh,i,mesh.adj[k])
+			out[k] = maxf(.000001,length) if mesh.has("coast_edges") else length
 	return out
 
 static func cell_areas(mesh: Dictionary) -> PackedFloat32Array:

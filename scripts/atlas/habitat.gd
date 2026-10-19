@@ -10,6 +10,35 @@ const LegacySettlementClimate = preload("res://scripts/atlas/climate_settlement_
 const BASE = [0,0,0,0,4,12,10,7,30,100,90,4,22,50,80,12]
 const SettlementMask = preload("res://scripts/atlas/settlement_mask.gd")
 
+## One candidate per original sampling catchment. Boundary support may move
+## that candidate onto the shore, but cannot add another settlement slot.
+static func settlement_candidates(mesh: Dictionary,suitability: PackedFloat32Array,water: PackedByteArray) -> PackedByteArray:
+	var sampled: PackedByteArray = mesh.get("base_settlement_sample",mesh.get("settlement_sample",PackedByteArray()))
+	if sampled.is_empty(): return PackedByteArray()
+	var owner:=PackedInt32Array();owner.resize(mesh.n);owner.fill(-1)
+	var distance:=PackedFloat64Array();distance.resize(mesh.n);distance.fill(INF)
+	var heap:=Maths.Heap.new()
+	for cell in range(mesh.n):
+		if sampled[cell] and water[cell]==0:
+			owner[cell]=cell;distance[cell]=0.;heap.push(cell,0.)
+	while not heap.empty():
+		var cell:=heap.pop();var d:float=heap.last_priority
+		if d>distance[cell]:continue
+		for slot in range(mesh.adj_start[cell],mesh.adj_start[cell+1]):
+			var next:int=mesh.adj[slot]
+			if water[next]!=0:continue
+			var value:float=d+mesh.lengths[slot]
+			if value<distance[next] or (value==distance[next] and owner[cell]<owner[next]):
+				distance[next]=value;owner[next]=owner[cell];heap.push(next,value)
+	var best:={}
+	for cell in range(mesh.n):
+		if owner[cell]<0:continue
+		var previous:int=best.get(owner[cell],-1)
+		if previous<0 or suitability[cell]>suitability[previous] or (suitability[cell]==suitability[previous] and (distance[cell]<distance[previous] or (distance[cell]==distance[previous] and cell<previous))):best[owner[cell]]=cell
+	var result:=PackedByteArray();result.resize(mesh.n)
+	for cell in best.values():result[cell]=1
+	return result
+
 static func build(mesh: Dictionary,env: Dictionary) -> Dictionary:
 	var n: int = mesh.n
 	var start: PackedInt32Array = mesh.adj_start; var adj: PackedInt32Array = mesh.adj
@@ -86,6 +115,7 @@ static func build(mesh: Dictionary,env: Dictionary) -> Dictionary:
 	if not farmland.is_empty(): result.agricultural_potential = farmland
 	result.merge(climate_fields,true)
 	SettlementMask.apply(mesh,result,env.get("params",{}).get("settlement_mask",{}))
+	if mesh.has("settlement_sample"):result.settlement_sample=settlement_candidates(mesh,result.suitability,water)
 	return result
 
 static func fresh(value: float) -> float:

@@ -51,6 +51,14 @@ API 6 adds `query_logistics_access(travelers, owners, identities, relations, all
 
 API 7 adds `query_city_partitions(cities, ids, owners, traffic, nation, relations, visible, limited)`. The AI view phase captures city IDs, owners and traffic flags once, with int64 fields, and discards this snapshot with its shared army index. Diplomacy classification remains in GDScript. The native scan returns typed city arrays in original order, excludes traffic nodes, always includes own cities and applies visibility only to foreign cities. Existing partition caching and city sorting remain unchanged. Legacy worlds, standalone views and custom state callbacks retain their script path; development compare mode checks all four groups.
 
+## Native coastline mesh (API 1)
+
+`NativeAtlasMesh` is a separate generation service. Earth first calls `partition_water` on the verified ocean/land/lake mask, then `build_mesh` with the original spherical Poisson samples. CDT 1.4.4 inserts coastline constraints; face classes are seeded from their two sides. Separate same-class vertex fans keep cells pure and prevent diagonal point contacts from becoming bridges. Coastal contact edges remain available to climate and ports. A separate ordinary Delaunay lookup graph supports environmental sampling without opening travel shortcuts.
+
+The owned vendored headers and their original license are under `third_party/cdt`; `UPSTREAM.md` pins the archive hash. Build manifests include all vendored files. Both debug and release DLLs must be rebuilt after updates. Meshing rejects nearshore interior samples that would invert the spherical embedding, with a bounded retry; it never removes coast constraints or falls back to unconstrained generation. No runtime download is used.
+
+See `docs/atlas/COASTLINE_MESH.md` for the complete pipeline and tests. The current 6-arcminute source remains the precision limit: this change preserves channels present in the mask, and does not reconstruct subpixel straits absent from that mask. Original sampling catchments control settlement candidates; physical cell area controls runoff contributions.
+
 ## Native atlas display (API 1)
 
 `NativeAtlasDisplay` is registered alongside the unchanged `NativeGraphSnapshot` API 7. The presentation service has no GameState, node, image, texture, mutable world singleton or RNG. Each call owns its numerical scratch buffers; packed input arrays use Godot copy-on-write. Pixel owner IDs, boundary distance, name distance fields, ray profiles, text fitting, region-to-tile indexing and tile RF bytes are computed on the worker. Scene updates and GPU resource calls stay on the main thread.

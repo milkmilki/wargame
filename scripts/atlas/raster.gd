@@ -126,6 +126,7 @@ static func pixel_band(world: Dictionary,b: Dictionary,detail: PackedFloat32Arra
 		for k in range(first_row*w-1,-1,-1):
 			if b.tri[k]>0: last_triangle=b.tri[k]-1; break
 	var planes: PackedFloat32Array = b.planes
+	var fixed_coast := mesh.has("coast_edges")
 	for y in range(first_row,last_row):
 		var cl: float = b.grid.cosLat[y]; var sl: float = b.grid.sinLat[y]; sampler.z = sl*radius
 		var a2 := absf(sl)-.45; var w2r := a2*a2 if a2>0 else 0.0; var stretch := 1.0/maxf(cl,.05)
@@ -139,7 +140,9 @@ static func pixel_band(world: Dictionary,b: Dictionary,detail: PackedFloat32Arra
 			sampler.w0 = a0*a0 if a0>0 else 0.0; sampler.w1 = a1*a1 if a1>0 else 0.0; sampler.w2 = w2r
 			var norm := 1.0/sqrt(sampler.w0*sampler.w0+sampler.w1*sampler.w1+sampler.w2*sampler.w2)
 			sampler.w0 *= norm; sampler.w1 *= norm; sampler.w2 *= norm
-			var e: float = b.elev[k]; var d := sampler.sample(detail,512,1,0); var is_lake := lake+.12*d>.5; var ee := e
+			var authoritative_water: int = world.water[b.cell[k]] if fixed_coast else -1
+			var e: float = b.elev[k]; var d := sampler.sample(detail,512,1,0)
+			var is_lake := authoritative_water==2 if fixed_coast else lake+.12*d>.5; var ee := e
 			if not is_lake:
 				var eb := e
 				if cw>.01:
@@ -151,7 +154,11 @@ static func pixel_band(world: Dictionary,b: Dictionary,detail: PackedFloat32Arra
 				if amp>60 and e>0: dd += .5*Maths.smoothstep(60,250,amp)*sampler.sample(detail,512,2.37,33.1)
 				ee = eb+amp*dd
 				if cw==0 and ee<2: ee = 2
-			elev[local_pixel] = ee; var wtr := 2 if is_lake else 1 if ee<0 else 0; water[local_pixel] = wtr
+			if authoritative_water==1: ee=minf(-1.,ee)
+			elif authoritative_water==0: ee=maxf(2.,ee)
+			elev[local_pixel] = ee
+			var wtr := authoritative_water if fixed_coast else 2 if is_lake else 1 if ee<0 else 0
+			water[local_pixel] = wtr
 			var j := sampler.sample(jitter,256,256.0/18/40,3.7)
 			var t := planes[o+9]*fx+planes[o+10]*fy+planes[o+11]-.0065*maxf(0,0.0 if wtr==1 else ee)+1.2*j
 			var pr := (planes[o+12]*fx+planes[o+13]*fy+planes[o+14])*(1+.22*j)
