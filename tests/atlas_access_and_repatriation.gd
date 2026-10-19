@@ -31,7 +31,7 @@ func _run() -> void:
 	if OS.get_cmdline_user_args().has("--unguarded-repat"):
 		_test_diplomatic_repatriation(true)
 	else:
-		_test_attack_respects_control_jurisdictions()
+		_test_attack_uses_public_roads()
 		_test_runtime_refuses_forbidden_attack_leg()
 		_test_retreat_can_exit_lost_jurisdiction()
 		_test_retreat_cannot_transit_another_enemy()
@@ -126,47 +126,48 @@ func _finish_leg(sim: Simulation, army: Army) -> void:
 	sim._arrive_at_node(army)
 
 
-func _test_attack_respects_control_jurisdictions() -> void:
-	print("ATLAS_ACCESS_CASE attack jurisdiction boundaries")
+func _test_attack_uses_public_roads() -> void:
+	print("ATLAS_ACCESS_CASE public roads and city boundaries")
 	var state := _fixture([
 		Vector3i(0, 5, 0), Vector3i(5, 1, 1),
 		Vector3i(0, 6, 0), Vector3i(6, 7, 2), Vector3i(7, 1, 1),
 		Vector3i(0, 8, 3), Vector3i(8, 1, 1),
 		Vector3i(0, 4, 4), Vector3i(4, 1, 1),
 	] as Array[Vector3i])
-	# Make forbidden corridors cheaper so the route assertion proves permissions.
+	# Make the public shortcuts cheaper; the enemy-city shortcut stays blocked.
 	for edge in state.edges:
 		if edge != state.edge_of(0, 5) and edge != state.edge_of(5, 1):
 			edge.precise_distance = 0.1
-	_check(_attack_path(state, 0, 1) == [5, 1],
-		"attack may enter only final enemy jurisdiction, ignoring shorter forbidden routes")
+	_check(_attack_path(state, 0, 1) == [8, 1],
+		"attack follows the shortest public road while blocking transit through another enemy city")
 	var ordinary := Pathfinding.dijkstra_field(state, 0, 0)
-	_check(is_inf(ordinary.dist[1]), "ordinary movement cannot enter enemy jurisdiction without attack goal")
-	_check(not state.atlas_edge_access(state.edge_of(6, 7), 0, 1),
-		"neutral third-country jurisdiction is not attack transit")
-	_check(not state.atlas_edge_access(state.edge_of(0, 8), 0, 1),
-		"another enemy nation's jurisdiction is not attack transit")
-	_check(not state.atlas_edge_access(state.edge_of(0, 4), 0, 1),
-		"same enemy nation's different settlement jurisdiction is not attack transit")
-	_check(state.atlas_edge_access(state.edge_of(5, 1), 0, 1),
+	_check(is_inf(ordinary.dist[1]), "ordinary movement cannot enter an enemy city without an attack goal")
+	_check(state.atlas_edge_access(state.edge_of(6, 7)),
+		"neutral countryside is public road transit")
+	_check(state.atlas_edge_access(state.edge_of(0, 8)),
+		"another enemy nation's countryside is public road transit")
+	_check(state.atlas_edge_access(state.edge_of(0, 4))
+		and not state.atlas_movement_node_access(4,0,1),
+		"same opponent's rural road is accessible but its city cannot be transit")
+	_check(state.atlas_edge_access(state.edge_of(5, 1)),
 		"final enemy settlement jurisdiction remains a legal attack leg")
 	state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
-	_check(state.atlas_edge_access(state.edge_of(6, 7), 0, 1),
+	_check(state.atlas_edge_access(state.edge_of(6, 7)),
 		"allied third-country jurisdiction retains ordinary military access")
 
 
 func _test_runtime_refuses_forbidden_attack_leg() -> void:
 	print("ATLAS_ACCESS_CASE stale runtime attack route")
-	var state := _fixture([Vector3i(0, 8, 3), Vector3i(8, 1, 1)] as Array[Vector3i])
+	var state := _fixture([Vector3i(0, 2, 3), Vector3i(2, 1, 1)] as Array[Vector3i])
 	var army := _army(state, 0)
 	army.state = Army.State.MOVING
-	army.path.assign([8, 1])
+	army.path.assign([2, 1])
 	var sim := BoundedSimulation.new()
 	sim.setup(state)
 	sim._begin_next_leg(army)
 	_check(not army.on_edge and army.move_to == -1 and army.path.is_empty(),
-		"runtime rejects stale route into another enemy jurisdiction")
-	_check(state.edge_of(0, 8).passing_count == 0 and army.size == 15000,
+		"runtime rejects stale route through an inaccessible neutral city")
+	_check(state.edge_of(0, 2).passing_count == 0 and army.size == 15000,
 		"rejected normal attack never acquires road occupancy or invents losses")
 	_check(not sim.recursive_cycle, "rejected attack from home settles without recursion")
 	sim.free()
@@ -182,20 +183,20 @@ func _test_retreat_can_exit_lost_jurisdiction() -> void:
 		state.edge_of(pair.x, pair.y).precise_distance = 0.1
 	var army := _army(state, 1)
 	var route := Pathfinding.strategic_retreat_city(state, army, 1)
-	_check(route == [5, 6, 0],
-		"retreat exits several road segments of starting hostile jurisdiction without crossing another enemy: %s" % str(route))
+	_check(route == [7, 8, 0],
+		"retreat uses the shorter public road without crossing another enemy city: %s" % str(route))
 	var sim := BoundedSimulation.new()
 	sim.setup(state)
 	sim._start_morale_retreat_from_city(army, 1, 1)
 	_check(army.size == 15000 and army.state == Army.State.RETREATING
-		and army.on_edge and army.move_from == 1 and army.move_to == 5,
+		and army.on_edge and army.move_from == 1 and army.move_to == 7,
 		"army in freshly lost city starts a real evacuation through current jurisdiction")
-	if army.on_edge and army.move_to == 5:
+	if army.on_edge and army.move_to == 7:
 		_finish_leg(sim, army)
-		_check(army.on_edge and army.move_from == 5 and army.move_to == 6,
+		_check(army.on_edge and army.move_from == 7 and army.move_to == 8,
 			"evacuation permission persists through traffic segments of original lost jurisdiction")
 		_finish_leg(sim, army)
-		_check(army.on_edge and army.move_from == 6 and army.move_to == 0,
+		_check(army.on_edge and army.move_from == 8 and army.move_to == 0,
 			"evacuation leaves original jurisdiction into home territory")
 		_finish_leg(sim, army)
 		_check(army.size == 15000 and army.location_city == 0 and not army.on_edge
@@ -208,16 +209,16 @@ func _test_retreat_can_exit_lost_jurisdiction() -> void:
 func _test_retreat_cannot_transit_another_enemy() -> void:
 	print("ATLAS_ACCESS_CASE no retreat bridge through other enemy")
 	var state := _fixture([
-		Vector3i(1, 7, 1), Vector3i(7, 8, 3), Vector3i(8, 0, 0),
+		Vector3i(1, 7, 1), Vector3i(7, 3, 3), Vector3i(3, 8, 3), Vector3i(8, 0, 0),
 	] as Array[Vector3i])
 	var army := _army(state, 1)
 	_check(Pathfinding.strategic_retreat_city(state, army, 1).is_empty(),
-		"current-jurisdiction escape exception cannot manufacture a route through another enemy")
+		"current-jurisdiction escape exception cannot manufacture a route through another enemy city")
 	var sim := BoundedSimulation.new()
 	sim.setup(state)
 	sim._start_morale_retreat_from_city(army, 1, 1)
-	_check(not army.on_edge and state.edge_of(7, 8).passing_count == 0,
-		"blocked ordinary retreat never occupies another enemy's jurisdiction")
+	_check(not army.on_edge and state.edge_of(7, 3).passing_count == 0,
+		"blocked ordinary retreat never enters another enemy city")
 	_check(not sim.recursive_cycle, "unreachable ordinary retreat terminates without recursive retries")
 	sim.free()
 

@@ -1,6 +1,6 @@
 extends SceneTree
 ## Compare full predecessor topology, not merely route length, against the
-## cf80691 ranked-heap implementation on real access/contested-edge rules.
+## cf80691 ranked heap with the current countryside/city access contract.
 const Legacy = preload("res://tests/support/legacy_pathfinding.gd")
 var failures: Array[String] = []
 var checks := 0
@@ -27,8 +27,8 @@ func run() -> void:
 		for blocked in [{4: true}, {6: true}, {1: true}, {0: true}]:
 			compare(state, 0, 0, false, true, -1, blocked)
 			compare(state, 0, 0, false, false, 1, blocked)
-		# The initial occupied-city controller may be crossed only when that
-		# lost settlement is the explicit exit district, never as general access.
+		# Public roads allow withdrawal independently of old district labels;
+		# the lost settlement itself never becomes a transit node.
 		state.cities[0].owner_nation = 1
 		state.ownership_revision += 1
 		compare(state, 0, 0, false, true)
@@ -36,8 +36,8 @@ func run() -> void:
 		compare(state, 4, 0, false, true, -1, {}, -1)
 		var exit_allowed := Pathfinding.dijkstra_field(state, 4, 0, false, false, -1, 0, {}, 0)
 		var exit_forbidden := Pathfinding.dijkstra_field(state, 4, 0, false, false)
-		check(float(exit_allowed.dist[0]) < INF and float(exit_forbidden.dist[0]) == INF,
-			"lost-city withdrawal does not grant access to other enemy districts")
+		check(float(exit_allowed.dist[3]) < INF and float(exit_forbidden.dist[3]) < INF and float(exit_allowed.dist[0])==INF,
+			"withdrawal leaves hostile countryside without using the lost enemy city as transit")
 	var fixture_state := fixture(false)
 	var third := Pathfinding.dijkstra_field(fixture_state, 0, 0)
 	check(float(third.dist[2]) == INF, "neutral third country is actually blocked")

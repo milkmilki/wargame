@@ -252,13 +252,13 @@ func _capture(game_state: GameState) -> void:
 		var political := {}
 		for key in ["name", "short_name", "name_kind", "environment_kind", "vassal_single_char", "vassal_title_base", "ruler_name", "ruler_archetype", "ruler_traits", "ruler_person_id", "ruler_revision", "ruler_started_day", "trade_policy", "family_tree_id", "prince_person_ids", "crown_prince_person_id", "succession_competition_closed", "succession_identity", "capital_city_id", "state_level", "empire_founder_person_id", "empire_recognized_day", "royal_titles_initialized", "royal_generation", "absorbed_into_nation_id", "last_royal_expense_basis_points", "last_royal_title_counts"]:
 			var value = nation.get(key)
-			political[key] = value.duplicate(true) if value is Array or value is Dictionary else value
+			political[key] = value
 		nation_politics[nation_id] = political
 		prince_reports[nation_id] = PrincePolitics.report(game_state, nation_id, military.get(nation_id, {}))
-	_snapshots.append({
+	var snapshot := {
 		"atlas_layout":_capture_atlas_layout(game_state) if not game_state.atlas_layout.is_empty() else {},
 		"day": game_state.day,
-		"family_trees": game_state.family_trees.duplicate(true),
+		"family_trees": game_state.family_trees,
 		"family_revision": game_state.family_revision,
 		"next_family_person_id": game_state.next_family_person_id,
 		"next_family_tree_id": game_state.next_family_tree_id,
@@ -279,21 +279,51 @@ func _capture(game_state: GameState) -> void:
 		"city_owners": owners,
 		"recognized_city_owners": game_state.recognized_city_owners.duplicate(),
 		"nation_alive": alive,
-		"diplomatic_relations": game_state.diplomatic_relations.duplicate(true),
-		"diplomatic_since_day": game_state.diplomatic_since_day.duplicate(true),
-		"truce_until_day": game_state.truce_until_day.duplicate(true),
-		"war_objectives": game_state.war_objectives.duplicate(true),
-		"war_relation_ids": game_state.war_relation_ids.duplicate(true),
-		"vassal_conflicts": game_state.vassal_conflicts.duplicate(true),
+		"diplomatic_relations": game_state.diplomatic_relations,
+		"diplomatic_since_day": game_state.diplomatic_since_day,
+		"truce_until_day": game_state.truce_until_day,
+		"war_objectives": game_state.war_objectives,
+		"war_relation_ids": game_state.war_relation_ids,
+		"vassal_conflicts": game_state.vassal_conflicts,
 		"next_war_id": game_state.next_war_id,
-		"suzerainty": game_state.suzerainty.duplicate(true),
-		"rebellions": game_state.rebellions.duplicate(true),
+		"suzerainty": game_state.suzerainty,
+		"rebellions": game_state.rebellions,
 		# 编年史是只追加事实；快照只保存前缀长度，避免每月复制完整历史。
 		"chronicle_event_count": game_state.chronicle_events.size(),
-		"war_chronicle_contexts": game_state.war_chronicle_contexts.duplicate(true),
+		"war_chronicle_contexts": game_state.war_chronicle_contexts,
 		"chronicle_pending_war_ids": game_state.chronicle_pending_war_ids.duplicate(),
 		"winner": game_state.winner,
-	})
+	}
+	var previous: Dictionary = {} if _snapshots.is_empty() else _snapshots.back()
+	for key in snapshot:
+		# The layout cache already owns a detached immutable world. Do not
+		# copy its large geometry containers into another snapshot cache.
+		if key != "atlas_layout":
+			snapshot[key] = _freeze_history_value(snapshot[key], previous.get(key))
+	_snapshots.append(snapshot)
+
+
+## Snapshot containers own their mutable records. Equal records from the prior
+## date can be shared; changed dictionaries/arrays are rebuilt recursively.
+## Packed arrays retain their copy-on-write semantics. Detached view creation
+## still deep-copies these records, so neither live edits nor UI edits can alter
+## an earlier date. The separately frozen Atlas layout bypasses this routine.
+static func _freeze_history_value(value: Variant, previous: Variant) -> Variant:
+	if typeof(value) == typeof(previous) and value == previous:
+		return previous
+	if value is Dictionary:
+		var old: Dictionary = previous if previous is Dictionary else {}
+		var frozen := {}
+		for key in value:
+			frozen[key] = _freeze_history_value(value[key], old.get(key))
+		return frozen
+	if value is Array:
+		var old: Array = previous if previous is Array else []
+		var frozen: Array = value.duplicate()
+		for index in range(frozen.size()):
+			frozen[index] = _freeze_history_value(value[index], old[index] if index < old.size() else null)
+		return frozen
+	return value
 
 
 static func _copy_script_object(source: Object) -> Object:

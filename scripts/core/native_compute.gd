@@ -80,25 +80,20 @@ static func begin_frozen_batch(state: GameState, nations: Array[int], travel: bo
 	var started := _profile_start()
 	var data := _state_graph(state)
 	if data.is_empty(): return false
-	var count: int = data.edges.size()
 	var packed := _edge_inputs(data, (11 if travel else 0) | (4 if supply else 0))
 	var ownership := _ownership_inputs(state, data)
 	var access_profiles := {}
-	var all_access := PackedByteArray()
-	all_access.resize(count)
-	all_access.fill(1)
-	access_profiles[Vector2i(-1, 0)] = all_access
+	access_profiles[Vector2i(-1, 0)] = PackedByteArray()
 	for nation in nations:
 		if nation < 0: continue
 		for logistics in ([false, true] if supply else [false]):
 			var key := Vector2i(nation, int(logistics))
 			if not access_profiles.has(key):
-				access_profiles[key] = _base_access(state, data, nation, logistics, ownership, packed.controls)
+				access_profiles[key] = _node_access_mask(state, nation, logistics, ownership)
 	access_profiles.make_read_only()
 	var batch := {"state": weakref(state), "data": data, "enabled": packed.enabled,
 		"travel_costs": packed.travel, "path_costs": packed.path, "danger_costs": packed.danger,
 		"supply_costs": packed.supply, "access_profiles": access_profiles,
-		"controls": packed.controls,
 		"owners": ownership.owners, "strategic_enabled": _strategic_enabled(data)}
 	batch.make_read_only()
 	_mutex.lock()
@@ -225,7 +220,10 @@ static func _new_graph(state: GameState, adjacency: Variant, edges: Array, looku
 	if not bool(graph.call("configure", offsets, targets, edge_ids, controls, geometry)):
 		_fatal("Cannot configure native graph snapshot")
 		return {}
-	return {"graph": graph, "edges": edges, "controls": controls, "control_edges": control_edges, "edge_indices": edge_indices}
+	var public_roads := PackedByteArray()
+	public_roads.resize(edges.size())
+	public_roads.fill(1)
+	return {"graph": graph, "edges": edges, "controls": controls, "control_edges": control_edges, "edge_indices": edge_indices, "public_roads": public_roads}
 
 static func _state_graph(state: GameState) -> Dictionary:
 	# Only topology is cached. Costs and permissions below are read for each query,
@@ -339,8 +337,7 @@ static func _path_query(state: GameState, start: int, nation: int, goal: int, ex
 	if data.is_empty(): return {}
 	var costs := PackedFloat64Array()
 	var enabled := PackedByteArray()
-	var accessible := PackedByteArray()
-	var live_controls := PackedInt32Array()
+	var allowed_nodes := PackedByteArray()
 	var profile_key := Vector2i(nation if nation >= 0 else -1, int(logistics) if nation >= 0 else 0)
 	var cost_key := "supply_costs" if supply else ("danger_costs" if danger else "path_costs")
 	var cached_inputs: bool = not batch.is_empty() and not (batch[cost_key] as PackedFloat64Array).is_empty() and batch.access_profiles.has(profile_key)
@@ -351,8 +348,7 @@ static func _path_query(state: GameState, start: int, nation: int, goal: int, ex
 			enabled = enabled.duplicate()
 			for key in blocked_edges:
 				if data.edge_indices.has(key): enabled[int(data.edge_indices[key])] = 0
-		accessible = batch.access_profiles[profile_key]
-		live_controls = batch.controls
+		allowed_nodes = batch.access_profiles[profile_key]
 	elif not scope.is_empty():
 		var mode := 4 if supply else (2 if danger else 1)
 		var packed: Dictionary = scope.edge_inputs.get(mode, {})
@@ -361,45 +357,38 @@ static func _path_query(state: GameState, start: int, nation: int, goal: int, ex
 			scope.edge_inputs[mode] = packed
 		costs = packed.supply if supply else (packed.danger if danger else packed.path)
 		enabled = packed.enabled
-		live_controls = packed.controls
 		if not blocked_edges.is_empty():
 			enabled = enabled.duplicate()
 		for key in blocked_edges:
 			if data.edge_indices.has(key): enabled[int(data.edge_indices[key])] = 0
 		if scope.access_profiles.has(profile_key):
-			accessible = scope.access_profiles[profile_key]
+			allowed_nodes = scope.access_profiles[profile_key]
 		elif nation < 0:
-			accessible.resize(data.edges.size())
-			accessible.fill(1)
+			allowed_nodes = PackedByteArray()
 		else:
 			var ownership: Dictionary = scope.get("ownership", {})
 			if ownership.is_empty():
 				ownership = _ownership_inputs(state, data)
 				scope["ownership"] = ownership
-			accessible = _base_access(state, data, nation, logistics, ownership, live_controls)
-		scope.access_profiles[profile_key] = accessible
+			allowed_nodes = _node_access_mask(state, nation, logistics, ownership)
+		scope.access_profiles[profile_key] = allowed_nodes
 	else:
 		# Standalone searches read live values: direct Edge/owner edits remain
 		# observable without relying on the public revision update helpers.
 		var packed := _edge_inputs(data, 4 if supply else (2 if danger else 1))
 		costs = packed.supply if supply else (packed.danger if danger else packed.path)
 		enabled = packed.enabled
-		live_controls = packed.controls
 		for key in blocked_edges:
 			if data.edge_indices.has(key): enabled[int(data.edge_indices[key])] = 0
 		if nation < 0:
-			accessible.resize(data.edges.size())
-			accessible.fill(1)
+			allowed_nodes = PackedByteArray()
 		else:
-			accessible = _base_access(state, data, nation, logistics, _ownership_inputs(state, data), live_controls)
-	if nation >= 0:
-		var enemy_goal := goal >= 0 and goal < state.cities.size() and state.is_enemy(nation, state.cities[goal].owner_nation)
-		if enemy_goal or (not logistics and exit_city >= 0):
-			# Use the exact control snapshot that built the base permissions.
-			# Native ptrw detaches its packed copy before patching for this worker.
-			var patched: Dictionary = _checked(data.graph.call("patch_access_mask", accessible, live_controls,
-				goal if enemy_goal else -1, exit_city if not logistics else -1), "access mask patch")
-			accessible = patched.mask
+			allowed_nodes = _node_access_mask(state, nation, logistics, _ownership_inputs(state, data))
+	# Only an actual hostile city can be the exceptional attack endpoint.
+	# A caller cannot turn a neutral destination into implicit transit access.
+	var query_goal := goal
+	if nation >= 0 and goal >= 0 and not state.atlas_movement_node_access(goal, nation, goal):
+		query_goal = -1
 	var order_nation := nation if nation >= 0 else state.cities[start].owner_nation
 	var sign_value := EquivariantOrder._nation_forward_sign(state, order_nation)
 	var blocked_mask := _mask(state.cities.size(), blocked)
@@ -407,7 +396,7 @@ static func _path_query(state: GameState, start: int, nation: int, goal: int, ex
 	var label := "supply" if supply else "path"
 	_record_profile(label, "pack", started)
 	started = _profile_start()
-	var result: Dictionary = data.graph.call("query_path", start, packed_origins, costs, enabled, accessible, blocked_mask, PackedByteArray(), goal, exit_city, false, sign_value, PackedInt32Array(), supply)
+	var result: Dictionary = data.graph.call("query_path", start, packed_origins, costs, enabled, data.public_roads, blocked_mask, allowed_nodes, query_goal, exit_city, false, sign_value, PackedInt32Array(), supply)
 	return _finish_result(result, label, started)
 
 static func _ownership_inputs(state: GameState, data: Dictionary) -> Dictionary:
@@ -440,12 +429,15 @@ static func enemy_occupied_edge_keys(state: GameState, nation: int) -> Dictionar
 			result[GameState.edge_key(army.move_from, army.move_to)] = true
 	return result
 
-static func _base_access(state: GameState, data: Dictionary, nation: int, logistics: bool, ownership: Dictionary, live_controls: PackedInt32Array) -> PackedByteArray:
+static func _node_access_mask(state: GameState, nation: int, logistics: bool, ownership: Dictionary) -> PackedByteArray:
 	var permissions := {}
 	for owner in ownership.unique:
 		permissions[owner] = state.has_logistics_access(nation, owner) if logistics else state.has_military_access(nation, owner)
-	var result: Dictionary = _checked(data.graph.call("make_access_mask", ownership.owners, permissions, live_controls), "access mask")
-	return result.get("mask", PackedByteArray())
+	var nodes := PackedByteArray()
+	nodes.resize(ownership.owners.size())
+	for id in range(ownership.owners.size()):
+		nodes[id] = int(state.cities[id].is_traffic or permissions.get(ownership.owners[id], false))
+	return nodes
 
 static func _strategic_enabled(data: Dictionary) -> PackedByteArray:
 	var enabled := PackedByteArray()

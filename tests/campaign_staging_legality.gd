@@ -14,18 +14,18 @@ func _init():
 		state.cities.append(city);state.adjacency[id]=[] as Array[int]
 	state.atlas_layout={"territorial_pairs":[Vector2i(0,1)] as Array[Vector2i],"settlement_adjacency":{0:[1] as Array[int],1:[0] as Array[int]}}
 	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.WAR)
-	for pair in [Vector2i(0,3),Vector2i(3,1)]:
+	for pair in [Vector2i(0,2),Vector2i(2,3),Vector2i(3,1)]:
 		var edge:=Edge.new();edge.city_a=pair.x;edge.city_b=pair.y;edge.control_city_id=0 if pair.x==0 else 2;edge.max_manpower=15000
 		state.edges.append(edge);state.edge_lookup[GameState.edge_key(pair.x,pair.y)]=edge;state.adjacency[pair.x].append(pair.y);state.adjacency[pair.y].append(pair.x)
 	var sim:Simulation=LegacySimulation.new() if OS.get_cmdline_user_args().has("--baseline-repro") else Simulation.new();sim.state=state
 	check(DiplomacyAI.staging_cities_for_objective(state,0,1).has(0),"coarse territorial border presents the friendly staging point")
 	check(DiplomacyAI.war_staging_cities_for_objective(state,0,1).is_empty(),"objective selection shares the actual military road check")
-	check(sim._campaign_staging_cities(0,1).is_empty(),"actual road through neutral jurisdiction cannot be a campaign entrance")
+	check(sim._campaign_staging_cities(0,1).is_empty(),"actual road through an inaccessible neutral city cannot be a campaign entrance")
 	var prewar_cache := {}
 	check(DiplomacyAI.war_preparation_staging_cities(state,0,1,prewar_cache).is_empty(),"prewar qualification must reject the same unusable attack road before declaring")
-	state.edges[1].control_city_id=1;state.road_network_revision+=1
-	check(sim._campaign_staging_cities(0,1).has(0),"legal target-jurisdiction road allows the same entrance after invalidation")
-	check(DiplomacyAI.war_preparation_staging_cities(state,0,1,prewar_cache).has(0),"road recovery invalidates cached prewar attack access")
+	state.set_diplomatic_relation(0,2,GameState.DiplomaticRelation.ALLIED)
+	check(sim._campaign_staging_cities(0,1).has(0),"granting city access opens the same entrance after invalidation")
+	check(DiplomacyAI.war_preparation_staging_cities(state,0,1,prewar_cache).has(0),"city access invalidates cached prewar attack access")
 	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.NEUTRAL)
 	var before_rng := state.rng.state
 	check(DiplomacyAI.war_preparation_staging_cities(state,0,1,prewar_cache).has(0),"neutral preparation previews the terminal hostile jurisdiction without requiring an existing war")

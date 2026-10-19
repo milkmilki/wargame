@@ -113,7 +113,7 @@ func guard_routes() -> void:
 	attacker.battle_id = field.id
 	check(query(state,attacker).size()==1,"contact on the terminal attack road retains the committed destination and rear supply")
 	attacker.path.clear()
-	check(query(state,attacker).is_empty(),"a field battle alone does not grant hostile logistics transit")
+	check(query(state,attacker).size()==1,"a field army on a public road retains rear supply without an attack goal")
 	attacker.path = [4,1] as Array[int]
 	attacker.state = Army.State.MOVING
 	attacker.battle_id = -1
@@ -132,10 +132,10 @@ func guard_routes() -> void:
 	state.cities[3].node_kind = City.NodeKind.TRAFFIC
 	state.cities[3].owner_nation = -1
 	attacker.path = [4] as Array[int]
-	check(query(state,attacker).is_empty(),"an arbitrary hostile junction is not an attack goal")
+	check(query(state,attacker).size()==1,"traffic junctions use public rear supply independently of an attack goal")
 	attacker.path = [4,1] as Array[int]
 	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.NEUTRAL)
-	check(query(state,attacker).is_empty(),"peace removes the hostile terminal exception")
+	check(query(state,attacker).size()==1,"peace does not close public rural roads")
 	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.WAR)
 	state.cities[0].food_storage = 0
 	state.cities[1].food_storage = 10000
@@ -150,7 +150,26 @@ func guard_routes() -> void:
 	state.edge_of(2,3).control_city_id = 5
 	for relation in [GameState.DiplomaticRelation.NEUTRAL,GameState.DiplomaticRelation.WAR]:
 		state.set_diplomatic_relation(0,2,relation)
-		check(query(state,attacker).is_empty(),"unrelated foreign jurisdiction is never opened by the target exception")
+		check(query(state,attacker).size()==1,"unrelated rural jurisdiction does not cut public supply roads")
+
+func terminal_city_supply() -> void:
+	var data := battle_fixture()
+	var state: GameState = data.state
+	var attacker: Army = data.attacker
+	attacker.location_city = 1; attacker.move_from = 1; attacker.move_to = -1
+	check(query(state,attacker).size()==1,"actual besieger at hostile city node receives rear food without city transit")
+	check(Pathfinding.supply_sources(state,attacker)==query(state,attacker),"direct hostile-city supply agrees with the rear network")
+	var idle: Army = data.idle
+	idle.location_city = 1; idle.move_from = 1
+	check(query(state,idle).is_empty(),"idle troops cannot borrow a besieger's hostile endpoint permission")
+	var network := Pathfinding.build_supply_network(state,0)
+	check(not network.is_empty() and is_inf(network[0].dist[1]),"terminal supply does not open the hostile city in the shared field")
+	state.edge_of(4,1).max_manpower = 0
+	check(query(state,attacker).is_empty(),"closing the actual last siege road cuts hostile-city supply")
+	state.edge_of(4,1).max_manpower = 50000
+	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.NEUTRAL)
+	check(query(state,attacker).is_empty(),"a stale siege cannot grant logistics access to a neutral city")
+	data.sim.free()
 
 func run() -> void:
 	var plain := fixture(false)
@@ -170,10 +189,11 @@ func run() -> void:
 				check(actual[0].city_id==0 and is_equal_approx(actual[0].loss,physical*loss),"transport loss remains additive across hostile traffic segments")
 			check(var_to_bytes(Pathfinding.supply_sources(split,army))==var_to_bytes(actual),"direct and batched attack supply agree")
 	guard_routes()
+	terminal_city_supply()
 	var sync := battle_fixture()
 	var sliced := battle_fixture()
 	check(query(sync.state,sync.attacker).size()==1,"arrived besieger retains its connected rear beyond the final junction")
-	check(query(sync.state,sync.idle).is_empty(),"idle troops at the same junction have no hostile transit permission")
+	check(query(sync.state,sync.idle).size()==1,"idle troops on the same public road have the same rear supply")
 	# Warm the old owner/city cache with the idle formation first.
 	for data in [sync,sliced]:
 		data.sim._cached_supply_sources(data.idle,data.sim._daily_supply_source_cache,data.sim._daily_supply_network_cache,data.sim._stable_supply_city_source_cache)
@@ -192,7 +212,7 @@ func run() -> void:
 		for data in [sync,sliced]:
 			var expected := 0.0 if phase == "interdicted" else 1.0
 			check(data.attacker.supply_ratio==expected,phase+": attacker refreshes corridor access despite the persistent rear field")
-			check(data.idle.supply_ratio==0.0,phase+": same-position idle cache remains isolated")
+			check(data.idle.supply_ratio==expected,phase+": same-position idle cache follows the same public rear route")
 			check(data.defender.supply_ratio==0.0,phase+": resident defender keeps local siege isolation")
 			check(data.state.cities[1].food_storage==0,phase+": enemy city is never a food source")
 	check(sync.state.cities[0].food_storage<10000,"food comes from the real rear warehouse")

@@ -29,6 +29,7 @@ var max_manpower: int = STANDARD_MANPOWER
 var distance: int = 1                      ## 距离
 ## Atlas units are 250 km. A negative value retains the legacy integer metric.
 var precise_distance: float = -1.0
+## 地理辖区与贸易税收引用；Atlas行军和补给权限只检查实际城市节点。
 var control_city_id: int = -1
 var spherical_path: bool = false
 func distance_units() -> float:

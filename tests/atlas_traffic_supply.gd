@@ -1,5 +1,5 @@
 extends SceneTree
-## Ownerless Atlas junctions must use the jurisdiction-aware warehouse field.
+## Ownerless Atlas junctions must use the city-node warehouse field.
 var failures: Array[String] = []
 var checks := 0
 
@@ -91,8 +91,8 @@ func run() -> void:
 		state.cities[0].owner_nation=0
 		state.nations[0].warehouse_city_ids=[0] as Array[int]
 		state.edge_of(0,3).control_city_id=owner
-		check(query(state,army).is_empty(),"enemy or neutral rear road cannot connect warehouse to junction")
-		check(Pathfinding.supply_sources(state,army).is_empty(),"uncached search also rejects hostile or neutral rear jurisdiction")
+		check(query(state,army).size()==1,"enemy or neutral rural road remains connected to the warehouse")
+		check(Pathfinding.supply_sources(state,army).size()==1,"uncached supply uses the same public rear road")
 		state.edge_of(0,3).control_city_id=0
 	state.set_diplomatic_relation(0,2,GameState.DiplomaticRelation.ALLIED)
 	state.edge_of(0,3).control_city_id=2
@@ -113,7 +113,7 @@ func run() -> void:
 	sim.state=state
 	sim._withdraw_supply_for_plan({"army":army,"sources":query(state,army),"demand":3})
 	check(not army.starving and army.supply_ratio==1.0 and state.cities[0].food_storage==997,"legal marching supply consumes real warehouse stock exactly once")
-	state.edge_of(0,3).control_city_id=2
+	state.edge_of(0,3).max_manpower=0
 	sim._withdraw_supply_for_plan({"army":army,"sources":query(state,army),"demand":3})
 	check(army.starving and army.supply_ratio==0.0 and state.cities[0].food_storage==997,"cut rear route causes real shortage without draining inaccessible warehouse")
 	sim.free()

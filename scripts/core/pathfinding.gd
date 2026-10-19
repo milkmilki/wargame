@@ -45,7 +45,6 @@ static func _dijkstra_field_gdscript(
 	var dist := {}
 	var prev := {}
 	var visited := {}
-	var exit_city := allowed_exit_city if allowed_exit_city>=0 else (start if not state.cities[start].is_traffic else -1)
 	for city in state.cities:
 		dist[city.id] = INF
 	dist[start] = 0.0
@@ -108,7 +107,8 @@ static func _dijkstra_field_gdscript(
 			):
 				continue
 			if allowed_nation != -1:
-				if not state.atlas_layout.is_empty() and not state.atlas_edge_access(e,allowed_nation,allowed_goal,false,exit_city): continue
+				if not state.atlas_layout.is_empty():
+					if not state.atlas_movement_node_access(v,allowed_nation,allowed_goal) or not state.atlas_movement_node_access(u,allowed_nation,-1,start):continue
 				var v_is_local_crossing_transit := (
 					local_crossing_transit_docks.has(v)
 				)
@@ -541,6 +541,10 @@ static func strategic_retreat_route_from_edge(
 	var best: Dictionary = {}
 	for option in options:
 		var endpoint := int(option["endpoint"])
+		# An endpoint ahead of the army is not an occupied starting city.
+		# Retreat must not turn that city into an unchecked transit origin.
+		if not state.atlas_layout.is_empty() and not state.atlas_node_access(endpoint, army.owner_nation):
+			continue
 		var traversal_blocked := blocked.duplicate()
 		traversal_blocked.erase(endpoint)
 		var field := dijkstra_field(
@@ -734,6 +738,8 @@ static func _nearest_retreat_route_from_edge(
 	var best: Dictionary = {}
 	for option in options:
 		var endpoint: int = option["endpoint"]
+		if not unrestricted_transit and not state.atlas_layout.is_empty() and not state.atlas_node_access(endpoint, army.owner_nation):
+			continue
 		var field := dijkstra_field(
 			state,
 			endpoint,
@@ -853,55 +859,11 @@ static func nearest_supply_city(state: GameState, army: Army) -> Array:
 
 ## 返回全部可达本国/盟国粮仓，按运输损耗、势力局部物理序排序。
 static func supply_sources(state: GameState, army: Army) -> Array[Dictionary]:
-	if supply_context_target(state, army) >= 0:
-		return supply_sources_from_network(state, army, build_supply_network(state, army.owner_nation))
-	var start := _origin_of(army)
-	if start < 0 or start >= state.cities.size():
-		return []
-	var start_city := state.cities[start]
-	# 虚拟城防仍使用本地围城规则；真实野战军统一查询正常粮仓网络。
-	if (
-		not army.on_edge
-		and army.is_city_garrison
-		and state.city_under_siege(start)
-		and state.has_military_access(army.owner_nation, start_city.owner_nation)
-	):
-		if (
-			start_city.has_warehouse and start_city.food_storage > 0
-			and state.nations[start_city.owner_nation].warehouse_city_ids.has(start)
-		):
-			return [{
-				"city_id": start,
-				"owner_nation": start_city.owner_nation,
-				"loss": 0.0,
-			}]
-		return []
-	var source_loss := (
-		_supply_sources_from_edge(state, army)
-		if army.on_edge and army.move_to != -1
-		else _supply_sources_from_city(state, start, army.owner_nation)
+	# Keep direct queries on the same rules as daily settlement, including
+	# zero-loss vassal capital relays, city access and blockaded warehouses.
+	return supply_sources_from_network(
+		state, army, build_supply_network(state, army.owner_nation)
 	)
-	var result: Array[Dictionary] = []
-	for city_id_value in source_loss:
-		var city_id := int(city_id_value)
-		var city := state.cities[city_id]
-		result.append({
-			"city_id": city_id,
-			"owner_nation": city.owner_nation,
-			"loss": float(source_loss[city_id]),
-		})
-	result.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		if not is_equal_approx(float(a["loss"]), float(b["loss"])):
-			return float(a["loss"]) < float(b["loss"])
-		return EquivariantOrder.city_id_less(
-			state,
-			army.owner_nation,
-			int(a["city_id"]),
-			int(b["city_id"]),
-			start
-		)
-	)
-	return result
 
 
 ## 以粮仓为源反向构建国家补给网络。道路为无向图，因此结果与逐军从当前位置
@@ -1023,16 +985,15 @@ static func supply_sources_from_network(
 		to_access = _supply_endpoint_access(
 			state, army.owner_nation, army.move_to, true
 		)
-	# The final attack road can contain several ownerless junctions inside the
-	# target's jurisdiction. Join those segments to the ordinary rear field;
-	# do not grant the warehouse field transit through hostile settlements.
+	# A besieger at the actual hostile goal may join its public rear road.
+	# The shared warehouse field never traverses hostile city nodes.
 	var attack_links := {}
 	var attack_target := attack_supply_target(state, army)
 	if attack_target >= 0 and not network.is_empty():
 		var blocked := _enemy_occupied_edge_keys(state, army.owner_nation)
 		var origins: Array = [start] if edge == null else [army.move_from, army.move_to]
 		for origin in origins:
-			if not _supply_endpoint_access(state, army.owner_nation, origin, true): continue
+			if origin != attack_target: continue
 			attack_links[origin] = _attack_supply_links(state, origin, attack_target, army.owner_nation, blocked)
 	var result: Array[Dictionary] = []
 	for source in network:
@@ -1122,7 +1083,7 @@ static func attack_supply_target(state: GameState, army: Army) -> int:
 
 ## Query-local terminal corridor offsets. The shared rear network remains
 ## unchanged; enemy presence and zero-capacity roads still sever this link.
-static func _attack_supply_links(state: GameState, start: int, goal: int, nation: int, blocked: Dictionary) -> Dictionary:
+static func _attack_supply_links(state: GameState, start: int, _goal: int, nation: int, blocked: Dictionary) -> Dictionary:
 	var offsets := {start: 0.0}
 	var queue: Array[Dictionary] = [{"city":start,"distance":0.0,"rank":0}]
 	while not queue.is_empty():
@@ -1133,7 +1094,7 @@ static func _attack_supply_links(state: GameState, start: int, goal: int, nation
 		if city != start and not state.cities[city].is_traffic: continue
 		for neighbor in state.neighbors(city):
 			var edge := state.edge_of(city,neighbor)
-			if edge == null or edge.control_city_id != goal or edge.max_manpower <= 0 or blocked.has(GameState.edge_key(city,neighbor)): continue
+			if edge == null or edge.max_manpower <= 0 or blocked.has(GameState.edge_key(city,neighbor)):continue
 			if not _supply_endpoint_access(state,nation,neighbor,true): continue
 			var distance := float(entry.distance) + _supply_edge_loss(edge)
 			if distance < float(offsets.get(neighbor,INF)):
@@ -1149,7 +1110,7 @@ static func _attack_supply_loss(dist: PackedFloat64Array, start: int, links: Dic
 	return loss
 
 
-## 人口补员通路：与粮食补给共用控制区/争夺边规则，但不要求粮仓当前有粮。
+## 人口补员通路：与粮食补给共用城市通行/争夺边规则，但不要求粮仓当前有粮。
 static func can_reach_manpower_hub(state: GameState, army: Army) -> bool:
 	if army.owner_nation < 0 or army.owner_nation >= state.nations.size():
 		return false
@@ -1162,9 +1123,7 @@ static func can_reach_manpower_hub(state: GameState, army: Army) -> bool:
 		):
 			return false
 		for endpoint in [army.move_from, army.move_to]:
-			if not state.has_military_access(
-				army.owner_nation, state.cities[endpoint].owner_nation
-			):
+			if not _supply_endpoint_access(state, army.owner_nation, endpoint, false):
 				continue
 			if _field_reaches_warehouse(state, endpoint, army.owner_nation):
 				return true
@@ -1172,9 +1131,7 @@ static func can_reach_manpower_hub(state: GameState, army: Army) -> bool:
 	var start := _origin_of(army)
 	if (
 		start < 0 or start >= state.cities.size()
-		or not state.has_military_access(
-			army.owner_nation, state.cities[start].owner_nation
-		)
+		or not _supply_endpoint_access(state, army.owner_nation, start, false)
 		or state.city_under_siege(start)
 	):
 		return false
@@ -1280,10 +1237,7 @@ static func can_reach_manpower_hub_from_network(
 				endpoint >= 0
 				and endpoint < reachable.size()
 				and reachable[endpoint] != 0
-				and state.has_military_access(
-					army.owner_nation,
-					state.cities[endpoint].owner_nation
-				)
+				and _supply_endpoint_access(state, army.owner_nation, endpoint, false)
 			):
 				return true
 		return false
@@ -1292,10 +1246,7 @@ static func can_reach_manpower_hub_from_network(
 		start >= 0
 		and start < reachable.size()
 		and reachable[start] != 0
-		and state.has_military_access(
-			army.owner_nation,
-			state.cities[start].owner_nation
-		)
+		and _supply_endpoint_access(state, army.owner_nation, start, false)
 		and not state.city_under_siege(start)
 	)
 
@@ -1309,17 +1260,8 @@ static func _field_reaches_warehouse(state: GameState, start: int, nation_id: in
 	return false
 
 
-static func _supply_sources_from_city(
-	state: GameState,
-	start: int,
-	nation_id: int
-) -> Dictionary:
-	var field := _supply_loss_field(state, start, nation_id)
-	return _reachable_supply_losses(state, nation_id, field["dist"])
-
-
 ## Atlas junctions have no political owner. Their access is established by
-## the jurisdiction-aware distance field, which must still reach a warehouse.
+## the city-access distance field, which must still reach a warehouse.
 ## Settlement/dock endpoints retain their original ownership permission.
 static func _supply_endpoint_access(
 	state: GameState,
@@ -1334,56 +1276,6 @@ static func _supply_endpoint_access(
 		state.has_logistics_access(nation_id, city.owner_nation)
 		if logistics else state.has_military_access(nation_id, city.owner_nation)
 	)
-
-
-## 边上军队从真实位置分别接入两个可通行端点，再沿本国/盟国道路寻找粮仓。
-static func _supply_sources_from_edge(state: GameState, army: Army) -> Dictionary:
-	var edge := state.edge_of(army.move_from, army.move_to)
-	if edge == null:
-		return {}
-	var edge_loss := _supply_edge_loss(edge)
-	var progress := clampf(army.move_progress, 0.0, 1.0)
-	var options := [
-		{"endpoint": army.move_from, "offset": progress * edge_loss},
-		{"endpoint": army.move_to, "offset": (1.0 - progress) * edge_loss},
-	]
-	var result := {}
-	for option in options:
-		var endpoint: int = option["endpoint"]
-		if not _supply_endpoint_access(
-			state, army.owner_nation, endpoint, false
-		):
-			continue
-		var field := _supply_loss_field(state, endpoint, army.owner_nation)
-		var dist: PackedFloat64Array = field["dist"]
-		var reachable := _reachable_supply_losses(
-			state, army.owner_nation, dist
-		)
-		for city_id in reachable:
-			var total := float(option["offset"]) + float(reachable[city_id])
-			if total < float(result.get(city_id, INF)):
-				result[city_id] = total
-	return result
-
-
-static func _reachable_supply_losses(
-	state: GameState,
-	nation_id: int,
-	dist: PackedFloat64Array
-) -> Dictionary:
-	var result := {}
-	for owner in state.nations:
-		if not state.has_military_access(nation_id, owner.id):
-			continue
-		for city in state.warehouse_cities_of(owner.id):
-			if (
-				city.food_storage <= 0
-				or state.city_under_siege(city.id)
-				or float(dist[city.id]) == INF
-			):
-				continue
-			result[city.id] = float(dist[city.id])
-	return result
 
 
 ## extra_zero_origins：除主源 start 外的其他「零损耗起点」（如同一宗藩体系的藩王
@@ -1537,7 +1429,7 @@ static func _local_crossing_or_accessible_step(
 	transit_docks: Dictionary,
 	logistics: bool = false
 ) -> bool:
-	if not state.atlas_layout.is_empty(): return state.atlas_edge_access(edge,nation_id,-1,logistics)
+	if not state.atlas_layout.is_empty():return state.atlas_node_access(city_a,nation_id,logistics) and state.atlas_node_access(city_b,nation_id,logistics)
 	var a_is_transit := transit_docks.has(city_a)
 	var b_is_transit := transit_docks.has(city_b)
 	if logistics and not a_is_transit and not b_is_transit:

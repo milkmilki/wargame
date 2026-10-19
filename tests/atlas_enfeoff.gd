@@ -42,6 +42,8 @@ func run() -> void:
 		check(state.suzerainty_structure_error().is_empty(), "natural vassal structure day %d" % state.day)
 		check(state._battle_group_structure_valid(), "natural army commands day %d" % state.day)
 		if not failures.is_empty(): break
+		if state.day % 30 == 0:
+			capture_vassal_utility(state)
 		if state.day % 120 == 0:
 			print("ATLAS_ENFEOFF_PROGRESS day=",state.day)
 			await process_frame
@@ -85,6 +87,7 @@ func test_transaction(payload: Dictionary) -> void:
 		sim.free()
 		return
 	var prince := PrincePolitics.enfeoff_candidate(state,selected,false)
+	var before_region := region_metrics(state, selected, region)
 	var original_capital := state.nations[selected].capital_city_id
 	var original_nations := state.nations.size()
 	var gold := state.nations[selected].treasury_gold
@@ -115,5 +118,69 @@ func test_transaction(payload: Dictionary) -> void:
 	check(state.suzerainty_structure_error().is_empty() and state.territory_structure_valid() and state._battle_group_structure_valid(), "grant maintains all structural invariants")
 	check(not state.diplomatic_history.is_empty() and int(state.diplomatic_history.back().get("subject_nation",-1)) == subject, "real diplomacy event records new subject")
 	report.requested_grant = {"overlord":selected,"overlord_name":state.nation_display_name(selected),"subject":subject,"subject_name":state.nation_display_name(subject),"prince":prince,"region_cities":region,"subject_capital":state.nations[subject].capital_city_id,"natural":false}
+	report.requested_grant.before_region = before_region
+	report.requested_grant.after_region = region_metrics(state, subject, region)
+	var member := PrincePolitics.person(state, subject, prince)
+	check(RoyalTitles.effective_rank(state, member) == RoyalTitles.PRINCE, "actual landed prince retains prince rank")
+	check(int(member.title_funding_nation_id) == selected and int(member.title_generation_nation_id) == subject, "overlord funds titles while fief retains its own succession cohort")
+	check(int(RoyalTitles.report(state,subject).basis_points) == 0, "fief does not pay the overlord-funded household twice")
+	var probe := Army.new()
+	probe.owner_nation = subject
+	probe.location_city = state.nations[subject].capital_city_id
+	var sources := Pathfinding.supply_sources(state,probe)
+	check(sources.any(func(source): return int(source.owner_nation) == selected and is_zero_approx(float(source.loss))), "new capital actually relays the root granary with zero distance loss")
+	check(not state.cities[probe.location_city].has_warehouse and state.cities[probe.location_city].food_storage == 0, "relay neither duplicates stored food nor creates a local warehouse")
+	# Execute a real monthly settlement, independently checking both treasuries.
+	# No AI or battles run in this isolated transaction world.
+	state.day = 30
+	var forecast := sim._forecast_trade_and_gold_flows()
+	var flows: Array[Dictionary] = forecast.gold_flows
+	var treasuries := {selected:state.nations[selected].treasury_gold, subject:state.nations[subject].treasury_gold}
+	check(int(flows[subject].tribute_paid) > 0 and int(flows[subject].tribute_paid) == int(flows[selected].tribute_received), "monthly forecast includes a positive conserved tribute transfer")
+	sim._resolve_economy(forecast)
+	for home in [selected, subject]:
+		var flow: Dictionary = flows[home]
+		var available := maxi(int(treasuries[home]) + int(flow.net_income), 0)
+		var court_paid := mini(available, int(flow.court_expense_due))
+		var military_paid := mini(available-court_paid, int(flow.military_upkeep))
+		check(state.nations[home].treasury_gold == available-court_paid-military_paid, "real treasury matches city, trade, tribute, court and military settlement for %d" % home)
+		check(state.nations[home].last_royal_expense_basis_points == int(RoyalTitles.report(state,home).basis_points), "actual court charge uses the correct household funding domain for %d" % home)
+	report.requested_grant.monthly_flows = {"overlord":flows[selected].duplicate(true),"subject":flows[subject].duplicate(true)}
 	print("ATLAS_REQUESTED_GRANT ",report.requested_grant)
 	sim.free()
+
+func region_metrics(state: GameState, home: int, region: Array[int]) -> Dictionary:
+	var result := {"gold":0,"food_per_half_year":0,"garrison_gold":0,"garrison_food":0,"target_loyalty_sum":0.0,"cities":region.size()}
+	var hops := state.capital_hop_distances(home)
+	for city_id in region:
+		var city := state.cities[city_id]
+		result.gold += Simulation.city_gold_output(state,city)
+		result.food_per_half_year += Simulation.city_food_output(state,city)
+		var cost := Simulation.city_garrison_cost_report(state,home,city_id,city.garrison_manpower,hops)
+		result.garrison_gold += int(cost.gold_upkeep)
+		result.garrison_food += int(cost.food_demand)
+		result.target_loyalty_sum += float(RebellionSystem.loyalty_target(state,city_id,hops).value)
+	return result
+
+func capture_vassal_utility(state: GameState) -> void:
+	if not report.has("natural_utility"): report.natural_utility = []
+	var flows := Simulation.monthly_gold_flows(state)
+	var census := RoyalTitles.census(state)
+	for subject_value in state.suzerainty:
+		var subject := int(subject_value)
+		if not state.nations[subject].alive: continue
+		var overlord := state.overlord_of(subject)
+		var troops := 0
+		var assigned := 0
+		var moving := 0
+		var minimum_supply := 1.0
+		for army in state.armies:
+			if army.owner_nation != subject or army.size <= 0: continue
+			troops += army.size
+			if army.campaign_front_id >= 0: assigned += 1
+			if army.on_edge: moving += 1
+			minimum_supply = minf(minimum_supply,army.supply_ratio)
+		var king := PrincePolitics.person(state,subject,state.nations[subject].ruler_person_id)
+		check(int(king.get("title_funding_nation_id",-1)) == overlord, "natural landed ruler's stipend remains assigned to its actual overlord day %d subject %d" % [state.day,subject])
+		check(state.food_pool_holder(subject) == state.food_pool_holder(overlord) or state.is_in_civil_war(subject), "natural peaceful fief shares its overlord's actual food pool")
+		report.natural_utility.append({"day":state.day,"subject":subject,"name":state.nation_display_name(subject),"overlord":overlord,"cities":state.land_cities_of(subject).size(),"troops":troops,"assigned_armies":assigned,"moving_armies":moving,"minimum_supply":minimum_supply,"treasury":state.nations[subject].treasury_gold,"tribute":flows[subject].tribute_paid,"military_due":state.nations[subject].last_military_upkeep,"unpaid_military":state.nations[subject].unpaid_military_upkeep,"own_stipend_basis_points":census[subject].basis_points,"force_reason":state.nations[subject].ai_last_force_reason})

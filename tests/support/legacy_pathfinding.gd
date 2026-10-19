@@ -67,7 +67,10 @@ static func dijkstra_field(
 			):
 				continue
 			if allowed_nation != -1:
-				if not state.atlas_layout.is_empty() and not state.atlas_edge_access(e,allowed_nation,allowed_goal,false,exit_city): continue
+				if not state.atlas_layout.is_empty():
+					var target_owner:=state.cities[v].owner_nation
+					if not state.cities[v].is_traffic and not state.has_military_access(allowed_nation,target_owner) and not (v==allowed_goal and state.is_enemy(allowed_nation,target_owner)):continue
+					if u!=start and not state.cities[u].is_traffic and not state.has_military_access(allowed_nation,state.cities[u].owner_nation):continue
 				var v_is_local_crossing_transit := (
 					local_crossing_transit_docks.has(v)
 				)

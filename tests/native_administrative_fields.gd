@@ -38,8 +38,6 @@ func oracle(state: GameState,owner: int) -> Dictionary:
 			for to_id in state.adjacency[from_id]:
 				var edge := state.edge_of(from_id,to_id)
 				if edge == null or edge.max_manpower <= 0 or not distances.has(from_id): continue
-				var control := edge.control_city_id
-				if control < 0 or control >= state.cities.size() or state.cities[control].is_traffic or state.cities[control].owner_nation != owner: continue
 				var target := state.cities[to_id]
 				if not target.is_traffic and target.owner_nation != owner: continue
 				var candidate := int(distances[from_id])+(0 if target.is_traffic else 1)

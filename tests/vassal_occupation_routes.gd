@@ -7,6 +7,7 @@ func _init() -> void:
 func run_routes() -> void:
 	_test_origin(3,0,0)
 	_test_origin(0,3,3)
+	_test_public_road_claim()
 	_test_disconnected_claim(Edge.Kind.LAND,0)
 	_test_disconnected_claim(Edge.Kind.SEA,3)
 	_test_legal_recovery()
@@ -124,7 +125,15 @@ func _test_vassal_capital_victory(counterattack: bool) -> void:
 
 func _test_disconnected_claim(kind: int,control: int) -> void:
 	var state := _political_fixture()
-	_add_branch(state,kind,control)
+	if kind == Edge.Kind.LAND:
+		# A foreign city, rather than a road's jurisdiction label, separates
+		# the prince's capital from this projected conquest.
+		state._add_edge(3,2); state._add_edge(2,TRAFFIC_ID)
+		for edge in [state.edge_of(3,2),state.edge_of(2,TRAFFIC_ID)]:
+			edge.control_city_id = control
+		state.road_network_revision += 1
+	else:
+		_add_branch(state,kind,control)
 	var sim := Simulation.new(); sim.setup(state)
 	var army := _army(state,3,4)
 	army.occupation_claimant_nation=3
@@ -136,6 +145,18 @@ func _test_disconnected_claim(kind: int,control: int) -> void:
 	_check(state.cities[4].occupation_sponsor_nation==3,"redirected control preserves combat sponsor")
 	_check(state.territory_structure_valid(),"redirected claim preserves territory")
 	sim.free()
+
+func _test_public_road_claim() -> void:
+	for control in [0,1,2]:
+		var state := _political_fixture()
+		_add_branch(state,Edge.Kind.LAND,control)
+		var sim := Simulation.new(); sim.setup(state)
+		var army := _army(state,3,4); army.occupation_claimant_nation=3
+		var battle := _capture(state,sim,army,4)
+		_check(battle.finished and state.cities[4].owner_nation==3 and battle.siege_claimant_nation==3,
+			"public countryside connects the prince's actual capital without creating an enclave")
+		_check(state.territory_structure_valid(),"public-road capture preserves territory invariants")
+		sim.free()
 
 func _test_state_unification() -> void:
 	var state := _political_fixture()

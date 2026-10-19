@@ -215,12 +215,16 @@ var atlas_trade_mutex := Mutex.new()
 func generate_from_atlas(payload: Dictionary) -> Dictionary:
 	return load("res://scripts/atlas/military_import.gd").install(self,payload)
 
-func atlas_edge_access(edge: Edge,nation_id: int,goal: int = -1,logistics: bool = false,exit_city: int = -1) -> bool:
-	if edge.control_city_id<0 or edge.control_city_id>=cities.size(): return false
-	var control := cities[edge.control_city_id]
-	if not logistics and edge.control_city_id==exit_city: return true
-	if edge.control_city_id==goal and is_enemy(nation_id,control.owner_nation): return true
-	return has_logistics_access(nation_id,control.owner_nation) if logistics else has_military_access(nation_id,control.owner_nation)
+## Roads are public; jurisdiction labels remain geographical/tax metadata.
+func atlas_edge_access(edge: Edge) -> bool:
+	return edge != null and edge.max_manpower > 0
+
+func atlas_node_access(city_id: int,nation_id: int,logistics: bool = false) -> bool:
+	var city := cities[city_id]
+	return city.is_traffic or (has_logistics_access(nation_id,city.owner_nation) if logistics else has_military_access(nation_id,city.owner_nation))
+
+func atlas_movement_node_access(city_id: int,nation_id: int,goal: int = -1,start: int = -1) -> bool:
+	return city_id==start or atlas_node_access(city_id,nation_id) or (city_id==goal and is_enemy(nation_id,cities[city_id].owner_nation))
 var last_generation_error: String = ""
 ## 每个有效栅格像素保存所属 city_id；-1 表示地图轮廓外。
 var province_map_size: Vector2i = Vector2i.ZERO
@@ -1887,15 +1891,12 @@ func _campaign_has_live_route(army: Army, target_city: int) -> bool:
 	if route.is_empty() or route[-1] != target_city:
 		return false
 	var previous := army.move_from if army.on_edge else army.location_city
-	var exit_city := army.route_origin_city_id
-	if exit_city < 0 and previous >= 0 and not cities[previous].is_traffic:
-		exit_city = previous
 	for city_id in route:
 		var edge := edge_of(previous, city_id)
 		if edge == null or edge.max_manpower <= 0:
 			return false
 		if not atlas_layout.is_empty():
-			if not atlas_edge_access(edge, army.owner_nation, target_city, false, exit_city):
+			if not atlas_movement_node_access(city_id,army.owner_nation,target_city):
 				return false
 		elif city_id != target_city and not has_military_access(
 			army.owner_nation, cities[city_id].owner_nation
@@ -2478,10 +2479,10 @@ func strategic_route_access(a: int,b: int,nation_id: int) -> bool:
 		var edge := edge_of(a,b); return edge!=null and edge.max_manpower>0
 	var path: Array = atlas_layout.get("strategic_routes",{}).get("%d:%d"%[mini(a,b),maxi(a,b)],[])
 	if path.is_empty():
-		var edge := edge_of(a,b); return edge!=null and edge.max_manpower>0 and atlas_edge_access(edge,nation_id)
+		var edge := edge_of(a,b); return edge!=null and edge.max_manpower>0 and atlas_node_access(a,nation_id) and atlas_node_access(b,nation_id)
 	for index in range(1,path.size()):
 		var edge := edge_of(path[index-1],path[index])
-		if edge==null or edge.max_manpower<=0 or not atlas_edge_access(edge,nation_id): return false
+		if edge==null or edge.max_manpower<=0 or not atlas_node_access(path[index-1],nation_id) or not atlas_node_access(path[index],nation_id): return false
 	return true
 
 
@@ -4056,7 +4057,7 @@ func external_territory_recipient(nation_id: int) -> int:
 
 
 ## Preview the actual capture without borrowing an ally's land, docks or sea links.
-## Junctions are traversable only on roads controlled by this country or the new land.
+## Public roads connect own cities and projected captures, never foreign cities.
 func occupation_connects_to_capital(nation_id: int, target: City) -> bool:
 	if (nation_id < 0 or nation_id >= nations.size() or target == null
 		or target.id < 0 or target.id >= cities.size() or cities[target.id] != target
@@ -4096,10 +4097,6 @@ func occupation_connects_to_capital(nation_id: int, target: City) -> bool:
 			var node := cities[neighbor]
 			if node.is_dock or (not node.is_traffic and node.owner_nation != nation_id and not projected.has(neighbor)):
 				continue
-			if not atlas_layout.is_empty():
-				var control := edge.control_city_id
-				if control < 0 or control >= cities.size(): continue
-				if cities[control].owner_nation != nation_id and not projected.has(control): continue
 			reached[neighbor] = true
 			queue.append(neighbor)
 	return false
@@ -5123,12 +5120,9 @@ func enfeoff_region_closure(
 			):
 				continue
 			if not atlas_layout.is_empty():
-				# Junctions have no owner. Remaining direct territory connects through
-				# roads controlled by this overlord, never through the proposed fief.
+				# Public junctions connect only retained direct cities. The proposed
+				# fief's cities still cannot serve as administrative transit.
 				if not cities[neighbor].is_traffic and cities[neighbor].owner_nation != overlord_id:
-					continue
-				var control := edge.control_city_id
-				if control < 0 or control >= cities.size() or region.has(control) or cities[control].owner_nation != overlord_id:
 					continue
 			elif cities[neighbor].owner_nation != overlord_id:
 				continue

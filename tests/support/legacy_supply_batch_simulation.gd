@@ -139,7 +139,7 @@ func _supply_relevant_blocked_edges(nation_id: int, enemy_edges: Dictionary) -> 
 	var relevant := {}
 	for key in enemy_edges:
 		var edge: Edge = state.edge_lookup.get(key)
-		if edge != null and edge.max_manpower > 0 and state.atlas_edge_access(edge,nation_id,-1,true):
+		if edge != null and edge.max_manpower > 0 and state.atlas_node_access(edge.city_a, nation_id, true) and state.atlas_node_access(edge.city_b, nation_id, true):
 			relevant[key] = true
 	return relevant
 

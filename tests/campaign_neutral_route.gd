@@ -24,7 +24,7 @@ func fixture(setup_simulation: bool = true) -> Dictionary:
 		state.administrative_center_by_city.append([0, 2, 2, 2, 4, -1, 6, 0][id])
 	state.administrative_center_city_ids = PackedInt32Array([0, 2, 4, 6])
 	state.atlas_layout = {"territorial_pairs":[Vector2i(0,1),Vector2i(1,2),Vector2i(2,3),Vector2i(0,7),Vector2i(7,6)] as Array[Vector2i],"settlement_adjacency":{0:[1,7] as Array[int],1:[0,2] as Array[int],2:[1,3] as Array[int],3:[2] as Array[int],6:[7] as Array[int],7:[0,6] as Array[int]}}
-	for row in [[0,1,0],[1,5,1],[5,2,4],[2,3,2],[0,7,0],[7,6,6]]:
+	for row in [[0,1,0],[1,4,1],[4,5,4],[5,2,4],[2,3,2],[0,7,0],[7,6,6]]:
 		var edge := Edge.new(); edge.city_a = row[0]; edge.city_b = row[1]
 		edge.control_city_id = row[2]; edge.max_manpower = 15000; edge.distance = .1
 		state.edges.append(edge); state.edge_lookup[GameState.edge_key(row[0],row[1])] = edge
@@ -56,8 +56,8 @@ func fixture(setup_simulation: bool = true) -> Dictionary:
 	return {"state":state,"sim":sim,"front":front,"troops":troops}
 func test_reselection():
 	var x := fixture(); var state: GameState = x.state; var sim: Simulation = x.sim
-	check(DiplomacyAI.staging_cities_for_objective(state,0,2).has(1),"fixture has a territorial border despite neutral road control")
-	check(sim._campaign_staging_cities(0,2).is_empty(),"movement correctly blocks neutral jurisdiction")
+	check(DiplomacyAI.staging_cities_for_objective(state,0,2).has(1),"fixture has a territorial border despite an intervening neutral city")
+	check(sim._campaign_staging_cities(0,2).is_empty(),"movement correctly blocks the neutral city")
 	check(not sim._campaign_front_has_entry(x.front),"a forward camp and idle troops in the state are not a usable attack route")
 	var objective := DiplomacyAI.select_war_objective(state,0,1,{},-1,false,{},false,DiplomacyAI.ObjectiveContext.CAMPAIGN)
 	check(int(objective.get("administrative_center_city_id",-1))==6,"campaign selection skips blocked capital and chooses reachable alternative")
@@ -81,8 +81,8 @@ func test_route_recovery():
 	var x := fixture(); var state: GameState = x.state; var sim: Simulation = x.sim
 	var cache := {}; var rng_before := state.rng.state
 	check(DiplomacyAI.war_staging_cities_for_objective(state,0,2,cache).is_empty(),"negative route result is cached")
-	state.edge_of(5,2).control_city_id = 2; state.road_network_revision += 1
-	check(DiplomacyAI.war_staging_cities_for_objective(state,0,2,cache).has(1),"road-control recovery invalidates the negative result")
+	state.set_diplomatic_relation(0,2,GameState.DiplomaticRelation.ALLIED)
+	check(DiplomacyAI.war_staging_cities_for_objective(state,0,2,cache).has(1),"granting city access invalidates the negative result")
 	check(sim._campaign_front_has_entry(x.front),"a real restored route preserves the forward camp")
 	check(state.rng.state==rng_before,"route queries consume no simulation random draws")
 	state.edge_of(5,2).max_manpower = 0; state.road_network_revision += 1

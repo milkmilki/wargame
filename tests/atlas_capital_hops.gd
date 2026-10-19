@@ -33,8 +33,7 @@ func oracle(state: GameState, nation_id: int) -> Dictionary:
 	for _pass in range(state.cities.size()):
 		var changed := false
 		for edge in state.edges:
-			if edge.max_manpower <= 0 or edge.control_city_id < 0 or edge.control_city_id >= state.cities.size(): continue
-			if state.cities[edge.control_city_id].is_traffic or state.cities[edge.control_city_id].owner_nation != nation_id: continue
+			if edge.max_manpower <= 0: continue
 			for pair in [Vector2i(edge.city_a,edge.city_b),Vector2i(edge.city_b,edge.city_a)]:
 				var target := state.cities[pair.y]
 				if not distances.has(pair.x) or (not target.is_traffic and target.owner_nation != nation_id): continue
@@ -60,13 +59,13 @@ func run():
 	check(state.capital_hop_distances(0) == {0:0,3:1,2:2}, "allied town is not own administrative transit")
 	state.cities[1].owner_nation = 0
 	state.edge_of(0,6).control_city_id = 1; state.cities[1].owner_nation = 1
-	check(state.capital_hop_distances(0) == {0:0}, "foreign jurisdiction blocks unowned traffic even with alliance")
+	check(state.capital_hop_distances(0) == {0:0,3:1,2:2}, "foreign road jurisdiction is ignored while a foreign city still blocks administrative transit")
 	state.cities[1].owner_nation = 0
 	state.edge_of(0,6).control_city_id = -1
-	check(state.capital_hop_distances(0) == {0:0,1:1,2:2,3:3}, "unknown control cannot bypass own administrative gate")
+	check(state.capital_hop_distances(0) == {0:0,1:1,2:2,3:1}, "unknown road control does not change own-city connectivity")
 	state.edge_of(0,6).control_city_id = 0
 	state.edge_of(0,4).control_city_id = 4
-	check(state.capital_hop_distances(0) == {0:0,3:1,2:2,1:3}, "traffic cannot act as controlling jurisdiction")
+	check(state.capital_hop_distances(0) == {0:0,1:1,2:2,3:1}, "traffic metadata does not control administrative roads")
 	state.edge_of(0,4).control_city_id = 0
 	state.nations[0].capital_city_id = 2
 	check(state.capital_hop_distances(0) == {2:0,1:1,3:1,0:2}, "capital relocation recalculates distances")

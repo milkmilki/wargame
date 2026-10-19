@@ -64,6 +64,12 @@ relations without rewinding the simulation.
 ## Boundaries
 
 - History is memory-only and is not written to map-definition files.
+- Monthly points share unchanged immutable dictionary/array records. Changed
+  branches are copied recursively, including nested family and war records;
+  detached views still receive deep copies. This avoids copying every ancestor
+  and territorial baseline each month without deleting dates or changing capture
+  cadence. The Atlas layout cache already owns detached geometry and is reused
+  directly instead of freezing a second copy of its containers.
 - A historical point cannot become a new simulation branch.
 - Nation IDs and colors retain their stable identity; recorded names, ruler
   profiles, political state and territory come from the selected snapshot.
@@ -80,6 +86,17 @@ relations without rewinding the simulation.
 - `political_history_rulers.gd` covers historical profile edits, real ruler
   death/accession, trade policy isolation, reign duration, person links,
   future-country isolation and live-state/RNG immutability.
+- `political_history_memory.gd` adds 1200 ancestor records, retains 60 unchanged
+  monthly points and then 720 changed ruler records. It checks memory growth,
+  structural reuse, nested live/view isolation, casualty updates, packed arrays
+  and RNG preservation. The same 61-point fixture uses 332762760 extra bytes
+  with the old deep-copy capture and 224880 bytes with shared records.
+- `atlas_render_stability_visual.gd -- --longrun-memory` exercises 720 distinct
+  occupation/restoration publications and monthly history captures through day
+  21600. Set `WARGAME_RENDER_REPRO_MAP` to an existing initial template to use
+  the reported world. It verifies visible map pixels, cache ownership/budgets
+  and retained monthly dates, and writes results to `.dbg/longrun-oom/`.
+  This renderer/history workload is not a complete daily battle replay.
 - `atlas_family_person_types.gd` exercises real mouse clicks on ruler, relative
   and unknown ancestor nodes, stale/missing ruler entries, historical isolation
   and wide/compact layouts. Run without `--headless` and add

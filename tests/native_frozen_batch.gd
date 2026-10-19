@@ -46,7 +46,7 @@ func queries(state: GameState) -> void:
 	compare_travel(state)
 	compare_supply(state, false)
 	compare_supply(state, true)
-	# Enemy goal may override its control district; neutral goal cannot.
+	# Enemy goal may override its city-node permission; neutral goal cannot.
 	for goal in [-1, 1, 2]:
 		for contested in [false, true]:
 			compare_path(state, 0, 0, contested, goal)
@@ -126,14 +126,13 @@ func direct_control_edits(mirror: bool) -> void:
 		for edge in rear_edges: edge.control_city_id = control
 		var expected := Pathfinding._supply_loss_field_gdscript(state, 0, 0, {}, true, [] as Array[int], true)
 		var actual := Pathfinding._supply_loss_field(state, 0, 0, {}, true, [] as Array[int], true)
-		same(expected, actual, "standalone supply observes direct rear control=%d mirror=%s" % [control, mirror])
-		check(is_finite(actual.dist[3]) == (control == 0), "enemy/neutral/invalid rear jurisdiction cannot feed reachable junctions")
-		# Goal and explicit-exit overrides must patch the same live control IDs
-		# used by the base access mask, rather than the first CSR's old mapping.
+		same(expected, actual, "standalone supply ignores rear control=%d mirror=%s" % [control, mirror])
+		check(is_finite(actual.dist[3]), "public rural roads carry supply regardless of jurisdiction metadata")
+		# Public road metadata must not affect goal or withdrawal node access.
 		for goal in [1, 2]: compare_path(state, 0, 0, false, goal)
 		compare_path(state, 3, 0, false, -1, {}, 1)
 		check(NativeCompute.begin_frozen_batch(state, [0] as Array[int], true, true), "direct-control batch starts")
-		same(expected, Pathfinding._supply_loss_field(state, 0, 0, {}, true, [] as Array[int], true), "fresh frozen supply captures direct control edit")
+		same(expected, Pathfinding._supply_loss_field(state, 0, 0, {}, true, [] as Array[int], true), "fresh frozen supply ignores control metadata")
 		for goal in [1, 2]: compare_path(state, 0, 0, false, goal)
 		compare_path(state, 3, 0, false, -1, {}, 1)
 		NativeCompute.end_frozen_batch(state)
@@ -143,13 +142,13 @@ func direct_control_edits(mirror: bool) -> void:
 	var frozen_path := Pathfinding._dijkstra_field_gdscript(state, 0, 0, false, true, 2)
 	check(NativeCompute.begin_frozen_batch(state, [0] as Array[int], true, true), "control snapshot publishes before direct mutation")
 	for edge in rear_edges: edge.control_city_id = 0
-	same(frozen_supply, Pathfinding._supply_loss_field(state, 0, 0, {}, true, [] as Array[int], true), "published control mask is immutable until batch retirement")
-	same(frozen_path, Pathfinding.dijkstra_field(state, 0, 0, false, true, 2), "goal patch uses the published control snapshot")
+	same(frozen_supply, Pathfinding._supply_loss_field(state, 0, 0, {}, true, [] as Array[int], true), "public-road supply is unchanged by control metadata during a batch")
+	same(frozen_path, Pathfinding.dijkstra_field(state, 0, 0, false, true, 2), "attack endpoint still uses the published node mask")
 	NativeCompute.end_frozen_batch(state)
-	same(Pathfinding._supply_loss_field_gdscript(state, 0, 0, {}, true, [] as Array[int], true), Pathfinding._supply_loss_field(state, 0, 0, {}, true, [] as Array[int], true), "retired supply batch observes the direct control edit")
+	same(Pathfinding._supply_loss_field_gdscript(state, 0, 0, {}, true, [] as Array[int], true), Pathfinding._supply_loss_field(state, 0, 0, {}, true, [] as Array[int], true), "retired supply batch still ignores control metadata")
 	compare_path(state, 0, 0, false, 2)
 	check(NativeCompute.begin_frozen_batch(state, [0] as Array[int], true, true), "next control batch starts with updated jurisdiction")
-	same(Pathfinding._supply_loss_field_gdscript(state, 0, 0, {}, true, [] as Array[int], true), Pathfinding._supply_loss_field(state, 0, 0, {}, true, [] as Array[int], true), "next frozen supply captures the updated jurisdiction")
+	same(Pathfinding._supply_loss_field_gdscript(state, 0, 0, {}, true, [] as Array[int], true), Pathfinding._supply_loss_field(state, 0, 0, {}, true, [] as Array[int], true), "next frozen supply still ignores jurisdiction metadata")
 	NativeCompute.end_frozen_batch(state)
 
 func parallel_query(index: int) -> void:

@@ -1,65 +1,137 @@
 extends SceneTree
-const Builder = preload("res://scripts/atlas/zhoufu_roads.gd")
-const Traffic = preload("res://scripts/atlas/traffic_graph.gd")
-const Access = preload("res://tests/atlas_access_and_repatriation.gd")
-var checks := 0
-var failures := 0
-func _initialize() -> void: call_deferred("run")
-func check(ok: bool, message: String) -> void:
-	checks += 1
-	if not ok: failures += 1; printerr("JURISDICTION_ROADS_FAIL ",message)
-static func fixture(block_border: bool = false) -> Dictionary:
-	# A and B share a long border road; the cheap shortcut crosses neutral C.
-	var points := [Vector2(100,500),Vector2(100,480),Vector2(105,510),Vector2(110,500),Vector2(110,480),Vector2(105,500)]
-	var mesh := {"n":6,"width":2048.,"height":1024.,"x":PackedFloat32Array(),"y":PackedFloat32Array(),"xyz":PackedFloat32Array(),"adj":PackedInt32Array(),"adj_start":PackedInt32Array(),"lengths":PackedFloat32Array()}
-	var neighbors := [[1,5],[0,4],[5],[4,5],[1,3],[0,2,3]]
-	for id in range(6):
-		mesh.x.append(points[id].x); mesh.y.append(points[id].y)
-		var lon: float=points[id].x/2048.*TAU-PI; var lat: float=PI*.5-points[id].y/1024.*PI
-		mesh.xyz.append_array(PackedFloat32Array([cos(lat)*cos(lon),cos(lat)*sin(lon),sin(lat)]))
-		mesh.adj_start.append(mesh.adj.size())
-		for next in neighbors[id]: mesh.adj.append(next); mesh.lengths.append(points[id].distance_to(points[next]))
-	mesh.adj_start.append(mesh.adj.size())
-	var environment := {"water":PackedByteArray([0,0,0,0,0,0]),"biome":PackedByteArray([1,1,1,1,1,1]),"elevation":PackedFloat32Array([0,0,0,0,0,0])}
-	if block_border: environment.water[4]=1
-	var labels := PackedInt32Array([0,0,2,1,1,2])
-	var hierarchy := {"cities":[{"cell":0,"role":"zhou","major":false},{"cell":3,"role":"zhou","major":false},{"cell":2,"role":"zhou","major":false}],"district_of_cell":labels,"center_by_city":PackedInt32Array([0,1,2]),"mandatory_connections":[]}
-	return {"mesh":mesh,"environment":environment,"hierarchy":hierarchy,"regions":{"of":labels}}
-static func install(graph: Dictionary) -> GameState:
-	var state := Access._fixture([] as Array[Vector3i])
-	state.edges.clear(); state.edge_lookup.clear()
-	for id in range(state.cities.size()):
-		state.adjacency[id]=[] as Array[int]
-		if id>=3:
-			state.cities[id].node_kind=City.NodeKind.TRAFFIC; state.cities[id].politically_active=false; state.cities[id].owner_nation=-1
-	for edge in graph.edges:
-		state._add_edge(edge.a,edge.b)
-		state.edge_of(edge.a,edge.b).control_city_id=edge.control_city
-	state.road_network_revision+=1
-	return state
+## Existing roads may cross hostile countryside, but no hostile city is transit.
+const Access=preload("res://tests/atlas_access_and_repatriation.gd")
+var checks:=0
+var failures:=0
+func _initialize() -> void:call_deferred("run")
+func check(ok:bool,label:String) -> void:
+	checks+=1
+	if not ok:failures+=1;printerr("ROAD_CAMPAIGN_FAIL ",label)
 func run() -> void:
-	for blocked in [false,true]:
-		var input := fixture(blocked)
-		var network := Builder.build(input.mesh,input.environment,input.regions,input.hierarchy)
-		for connection in network.connections:
-			if not connection.get("jurisdiction_entry",false):continue
-			check(connection.cells[0]==input.hierarchy.cities[connection.a].cell and connection.cells[-1]==input.hierarchy.cities[connection.b].cell,"new connection has its real settlement endpoints")
-			for cell in connection.cells:
-				check(input.hierarchy.district_of_cell[cell] in [connection.a,connection.b] and input.environment.water[cell]==0,"added road stays on land in its two real jurisdictions")
-			for index in range(1,connection.cells.size()):
-				var slot:=preload("res://scripts/atlas/roads.gd").slot_of(input.mesh,connection.cells[index-1],connection.cells[index])
-				check(network.slots[slot]>0 and network.protected_slots[slot]>0,"local entry is protected from later pruning")
-		var state := install(Traffic.build(input.mesh,input.hierarchy,network))
-		check(is_finite(float(Pathfinding.dijkstra_field(state,0,0,false,false,1).dist[1]))!=blocked,"forward attack uses only its two jurisdictions, respecting a water break")
-		check(is_finite(float(Pathfinding.dijkstra_field(state,1,1,false,false,0).dist[0]))!=blocked,"counterattack has the same lawful land connection")
-		check(state.relation_between(0,2)==GameState.DiplomaticRelation.NEUTRAL,"repair keeps the third country neutral")
-		check(not is_finite(float(Pathfinding.dijkstra_field(state,0,0,false,false,-1).dist[2])),"neutral city cannot become a transit shortcut")
-		var duplicate := Builder.build(input.mesh,input.environment,input.regions,input.hierarchy)
-		check(var_to_bytes(duplicate)==var_to_bytes(network),"road repair is deterministic")
-	for centers in [PackedInt32Array([0,0,0]),PackedInt32Array([0,1,1])]:
-		var input:=fixture()
-		input.hierarchy.center_by_city=centers
-		var network:=Builder.build(input.mesh,input.environment,input.regions,input.hierarchy)
-		check(network.jurisdiction_repair.added_connections==0,"connected state interiors and existing state-border entries do not gain redundant shortcuts")
-	print("JURISDICTION_ROADS checks=",checks," failures=",failures)
+	for backend in ["gdscript","native"]:
+		NativeCompute.set_backend_for_tests(backend)
+		var state:=Access._fixture([Vector3i(0,5,0),Vector3i(5,6,4),Vector3i(6,1,1)] as Array[Vector3i])
+		state.atlas_layout.settlement_adjacency={0:[1] as Array[int],1:[0] as Array[int]}
+		var rng:=state.rng.state
+		check(DiplomacyAI._prewar_attack_route_ready(state,0,0,1,{}),backend+": preview uses same opponent's rural road without new construction")
+		check(is_finite(float(Pathfinding.dijkstra_field(state,0,0,false,false,1).dist[1])),backend+": declared attack follows that same road")
+		check(MilitaryReachability.contact(state,[0],[1],[0,1]),backend+": planned contact agrees with actual movement")
+		check(Pathfinding._attack_supply_links(state,1,1,0,{}).has(0),backend+": the actual attack corridor can carry rear supply across the same rural road")
+		check(not is_finite(float(Pathfinding.dijkstra_field(state,0,0,false,false,-1).dist[1])),backend+": ordinary movement never borrows attack access")
+		check(is_finite(float(Pathfinding.dijkstra_field(state,1,0,false,false,-1).dist[0])),backend+": withdrawal leaves the same opponent's countryside without new roads")
+		state.cities[6].owner_nation=1
+		check(is_finite(float(Pathfinding.dijkstra_field(state,0,0,false,false,6).dist[6])),backend+": a traffic node's display owner never blocks a public road")
+		state.cities[6].owner_nation=-1
+		check(state.rng.state==rng,backend+": previews and paths consume no random draws")
+		state.edge_of(5,6).control_city_id=2;state.road_network_revision+=1
+		check(DiplomacyAI._prewar_attack_route_ready(state,0,0,1,{}),backend+": neutral rural road is public during preparation")
+		check(is_finite(float(Pathfinding.dijkstra_field(state,0,0,false,false,1).dist[1])),backend+": neutral rural road permits actual movement")
+		check(MilitaryReachability.contact(state,[0],[1],[0,1]),backend+": neutral rural road permits projected contact")
+		check(Pathfinding._attack_supply_links(state,1,1,0,{}).has(0),backend+": neutral rural road also carries supplies")
+		state.edge_of(5,6).control_city_id=3;state.road_network_revision+=1
+		check(is_finite(float(Pathfinding.dijkstra_field(state,0,0,false,false,1).dist[1])),backend+": another enemy countryside remains public transit")
+		state=Access._fixture([Vector3i(0,5,0),Vector3i(5,4,4),Vector3i(4,6,4),Vector3i(6,1,1)] as Array[Vector3i])
+		state.atlas_layout.settlement_adjacency={0:[4] as Array[int],4:[0,1] as Array[int],1:[4] as Array[int]}
+		check(not is_finite(float(Pathfinding.dijkstra_field(state,0,0,false,false,1).dist[1])),backend+": rear city cannot be attacked through an unconquered enemy city")
+		check(not DiplomacyAI._prewar_attack_route_ready(state,0,0,1,{}),backend+": preparation also rejects jumping over a city")
+		check(not Pathfinding._attack_supply_links(state,1,1,0,{}).has(0),backend+": supplies cannot bypass an unconquered enemy city either")
+		check(is_finite(float(Pathfinding.dijkstra_field(state,0,0,false,false,4).dist[4])),backend+": first enemy city remains a legal attack objective")
+		# Deliberately stale command: live execution must enforce the city barrier.
+		var army:=Army.new();army.id=0;army.owner_nation=0;army.size=15000;army.max_size=15000
+		army.location_city=5;army.move_from=5;army.route_origin_city_id=0
+		army.state=Army.State.MOVING;army.ai_action=ActionCandidate.Kind.ATTACK;army.ai_target_city=1
+		army.path=[4,6,1] as Array[int];state.armies.append(army)
+		var sim:=Simulation.new();sim.setup(state)
+		sim._begin_next_leg(army)
+		check(not army.on_edge or army.move_to!=4,backend+": runtime rejects a stale order to bypass the first enemy city")
+		sim.free()
+		progression(backend,false)
+		progression(backend,true)
+		state_target_selection(backend)
+	NativeCompute.set_backend_for_tests("native")
+	print("ROAD_CAMPAIGN checks=",checks," failures=",failures)
 	quit(1 if failures else 0)
+
+func state_target_selection(backend:String) -> void:
+	var state:=Access._fixture([Vector3i(0,5,0),Vector3i(5,4,4),Vector3i(4,6,4),Vector3i(6,1,1),Vector3i(0,2,2),Vector3i(2,8,2),Vector3i(8,7,7)] as Array[Vector3i])
+	state.cities[7].node_kind=City.NodeKind.SETTLEMENT;state.cities[7].politically_active=true;state.cities[7].owner_nation=1
+	state.recognized_city_owners[7]=1
+	state.administrative_center_by_city[7]=7
+	state.administrative_center_city_ids.append(7)
+	state.atlas_layout.settlement_adjacency={0:[4,7] as Array[int],4:[0,1] as Array[int],1:[4] as Array[int],7:[0] as Array[int]}
+	state.atlas_layout.territorial_pairs=[Vector2i(0,7),Vector2i(4,1)] as Array[Vector2i]
+	for city in state.cities:
+		if city.is_settlement():state.region_ids[city.id]=0
+	state.nations[0].strategic_region_anchor_city_id=1
+	RegionalStrategy.invalidate_geometry(state)
+	state.refresh_derived()
+	for context in [DiplomacyAI.ObjectiveContext.PREWAR,DiplomacyAI.ObjectiveContext.CAMPAIGN]:
+		var selected:=DiplomacyAI.select_war_objective(state,0,1,{},-1,false,{},false,context)
+		check(selected.get("city_id",-1)==4,backend+": blocked geographic state border cannot hide a legal road-front state")
+	state.transfer_city_control(4,0,0,GameState.TerritoryStockDisposition.CAPTURE_SPOILS,"road_fixture_capture")
+	var next:=DiplomacyAI.select_war_objective(state,0,1,{},-1,false,{},false,DiplomacyAI.ObjectiveContext.CAMPAIGN)
+	check(next.get("city_id",-1)==1,backend+": after taking the front state, target selection advances to the next state on the same road")
+
+func progression(backend:String,reverse:bool) -> void:
+	var actor:=1 if reverse else 0
+	var defender:=1-actor
+	var state:=Access._fixture([Vector3i(0,5,0),Vector3i(5,4,4),Vector3i(4,6,4),Vector3i(6,1,1),Vector3i(0,2,2),Vector3i(2,8,2),Vector3i(8,7,7)] as Array[Vector3i])
+	state.day=100
+	state.cities[7].node_kind=City.NodeKind.SETTLEMENT;state.cities[7].politically_active=true;state.cities[7].owner_nation=1
+	state.recognized_city_owners[7]=1
+	state.atlas_layout.hierarchy.members=[[0],[1,4,7],[2],[3]]
+	state.atlas_layout.hierarchy.state_parents=PackedInt32Array([0,1,2,3])
+	state.atlas_layout.settlement_adjacency={0:[4,7] as Array[int],4:[0,1] as Array[int],1:[4] as Array[int],7:[0] as Array[int]}
+	# The only geometric frontier fu is blocked by a neutral city. The existing
+	# road actually enters fu 4, which must be tried before declaring no entry.
+	state.atlas_layout.territorial_pairs=[Vector2i(0,7),Vector2i(4,1)] as Array[Vector2i]
+	state.rebuild_administrative_regions()
+	for city in state.cities:
+		if reverse and city.owner_nation in [0,1]:city.owner_nation=1-city.owner_nation;state.recognized_city_owners[city.id]=city.owner_nation
+		if city.is_settlement():state.region_ids[city.id]=0
+		city.garrison_manpower=100
+	state.nations[actor].capital_city_id=0;state.nations[defender].capital_city_id=1
+	state.nations[actor].strategic_region_anchor_city_id=1
+	RegionalStrategy.invalidate_geometry(state)
+	state.set_war_objective(0,1,0 if reverse else 1,"road progression")
+	state.refresh_derived()
+	var query:=DiplomacyAI.select_war_objective(state,actor,defender,{},-1,false,{},false,DiplomacyAI.ObjectiveContext.CAMPAIGN)
+	check(query.get("city_id",-1)==1 and query.get("tactical_city_id",-1)==4,backend+": AI selects the first actual enemy city on the existing road")
+	var front:=state.create_campaign_front(state.war_id_between(0,1),[actor] as Array[int],actor,CoalitionCampaignFront.Mode.OFFENSE,1)
+	var forces:Array[Army]=[]
+	for id in range(3):
+		var unit:=Army.new();unit.id=id;unit.owner_nation=actor;unit.size=15000;unit.max_size=15000
+		unit.location_city=0;unit.move_from=0;unit.morale=unit.max_morale
+		unit.campaign_front_id=front.front_id;unit.campaign_war_id=front.war_id;front.army_assignments[id]=1
+		state.armies.append(unit);forces.append(unit)
+	var army:=forces[0]
+	var sim:=Simulation.new();sim.setup(state)
+	check(sim._campaign_entry_fu(actor,1,[actor] as Array[int])==4,backend+": planner tries a road entry after all geometric entries fail")
+	sim._manage_administrative_campaign(front)
+	check(forces.all(func(a):return a.on_edge and a.ai_target_city==4),backend+": controller dispatches rallied formations to the front city")
+	for unit in forces:
+		for _leg in range(12):
+			if not unit.on_edge:break
+			unit.move_progress=1.;sim._arrive_at_node(unit)
+	var battle:=state.battle_by_id(army.battle_id)
+	check(battle!=null and battle.city.id==4,backend+": real movement first stops for combat at the front enemy city")
+	if battle!=null:
+		sim._complete_siege_capture(battle)
+		check(state.cities[4].owner_nation==actor and state.cities[1].owner_nation==defender,backend+": actual forward/reverse siege captures only the front fu")
+		check(sim._campaign_entry_fu(actor,1,[actor] as Array[int])<0,backend+": captured entry no longer repeats while neutral fu remains blocked")
+		var next:=Pathfinding.dijkstra_field(state,4,actor,false,false,1)
+		check(is_finite(float(next.dist[1])),backend+": center route opens after the real front capture")
+		sim._manage_administrative_campaign(front)
+		check(forces.all(func(a):return a.on_edge and a.ai_target_city==1),backend+": controller continues to the center without repeating the captured fu")
+		for unit in forces:
+			for _leg in range(12):
+				if not unit.on_edge:break
+				unit.move_progress=1.;sim._arrive_at_node(unit)
+		battle=state.battle_by_id(army.battle_id)
+		check(battle!=null and battle.city.id==1,backend+": real army continues to the rear center after capturing its entry")
+		if battle!=null:
+			sim._complete_siege_capture(battle);sim._resolve_eliminated_nation_capitulations()
+			check(state.cities[1].owner_nation==actor and not state.nations[defender].alive,backend+": actual center victory eliminates the losing country, including defender counterconquest")
+			check(not state.is_enemy(0,1) and army.campaign_war_id<0,backend+": final victory releases war and army bindings")
+	check(state.cities[2].owner_nation==2 and state.relation_between(actor,2)==GameState.DiplomaticRelation.NEUTRAL,backend+": neutral country is untouched throughout progression")
+	sim.free()

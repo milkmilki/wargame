@@ -4051,7 +4051,15 @@ static func _select_war_objective_from_inputs(
 	# a fallback when that scope has no land entry into the target states.
 	var allow_expedition := bordering_centers.is_empty()
 	if not allow_expedition:
-		center_ids = bordering_centers
+		if state.atlas_layout.is_empty():
+			center_ids = bordering_centers
+		else:
+			# Keep land-border preference, but do not discard real road-front
+			# states when every geographically adjacent state has no legal entry.
+			var remaining:=center_ids.duplicate()
+			center_ids=bordering_centers.duplicate()
+			for center_id in remaining:
+				if not center_ids.has(center_id):center_ids.append(center_id)
 	var max_gold := 1
 	var max_food := 1
 	var max_manpower := 1
@@ -4065,7 +4073,9 @@ static func _select_war_objective_from_inputs(
 	)
 	var candidates: Array[Dictionary] = []
 	var max_reachable_garrison := 1
+	var found_border_entry:=false
 	for center_id in center_ids:
+		if found_border_entry and not bordering_centers.has(center_id):break
 		var tactical_city := _administrative_proposal_target(
 			state,
 			nation_id,
@@ -4084,6 +4094,7 @@ static func _select_war_objective_from_inputs(
 		).size()
 		if own_links <= 0:
 			continue
+		found_border_entry=found_border_entry or bordering_centers.has(center_id)
 		var aggregate: Dictionary = administrative_aggregates.get(
 			center_id, {}
 		)
@@ -5939,8 +5950,8 @@ static func _prewar_attack_route_ready(state: GameState, nation_id: int, staging
 	var key := "prewar_attack_route:%d:%d:%d" % [nation_id, staging_city, objective_city]
 	if not cache.has(key):
 		# The ordinary attack field requires an existing WAR relation. Preview
-		# only the terminal objective's jurisdiction as hostile, without writing
-		# diplomacy, consuming RNG, or permitting any other foreign settlement.
+		# public roads without writing diplomacy; only the proposed target may
+		# be an otherwise inaccessible city, never an intermediate settlement.
 		var visited := {staging_city: true}
 		var queue: Array[int] = [staging_city]
 		var cursor := 0
@@ -5954,7 +5965,7 @@ static func _prewar_attack_route_ready(state: GameState, nation_id: int, staging
 				if visited.has(neighbor): continue
 				var edge := state.edge_of(city_id, neighbor)
 				if edge == null or edge.max_manpower <= 0: continue
-				if edge.control_city_id != objective_city and not state.atlas_edge_access(edge, nation_id, -1, false, staging_city): continue
+				if neighbor!=objective_city and not state.atlas_node_access(neighbor,nation_id):continue
 				visited[neighbor] = true; queue.append(neighbor)
 		cache[key] = reached
 	return bool(cache[key])

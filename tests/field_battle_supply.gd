@@ -49,7 +49,11 @@ func fixture(position: String, local_food: int, cut_route: bool = false) -> Dict
 	state.atlas_layout = {"model": "field-battle-supply-test", "territorial_pairs": [] as Array[Vector2i]}
 	state.set_diplomatic_relation(0, 1, GameState.DiplomaticRelation.WAR)
 	if cut_route:
-		state.edge_of(0, 3).control_city_id = 2
+		# Public rural roads cannot cut supply. Put a real hostile settlement
+		# on the rear route so this fixture tests the current city-node rule.
+		state.cities[3].node_kind = City.NodeKind.SETTLEMENT
+		state.cities[3].politically_active = true
+		state.cities[3].owner_nation = 1
 	var defender := Army.new()
 	defender.id = 41
 	defender.owner_nation = 0
@@ -178,7 +182,7 @@ func test_cut_route(sliced: bool) -> PackedByteArray:
 	var army: Army = data.army
 	var rng_before := state.rng.state
 	var label := "cut rear route sliced=%s" % sliced
-	check(Pathfinding.supply_sources(state, army).is_empty(), label + " hostile rear road genuinely disconnects warehouse")
+	check(Pathfinding.supply_sources(state, army).is_empty(), label + " hostile rear city genuinely disconnects warehouse")
 	await resolve_supply(sim, sliced)
 	check(army.supply_ratio == 0.0 and army.starving, label + " inaccessible national food leaves field formation unsupplied")
 	check(state.cities[0].food_storage == 10000, label + " inaccessible capital inventory is untouched")

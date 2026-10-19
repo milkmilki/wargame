@@ -1,5 +1,5 @@
 extends SceneTree
-## Traffic display ownership never grants or removes road jurisdiction access.
+## Public roads ignore jurisdiction labels; actual cities retain access checks.
 const Access = preload("res://tests/atlas_access_and_repatriation.gd")
 const Faction = preload("res://tests/vassal_faction_conflict.gd")
 var checks := 0
@@ -23,23 +23,23 @@ func run() -> void:
 	for control in [1, 2, 4]:
 		var state := Access._fixture([Vector3i(0,5,0), Vector3i(5,6,control), Vector3i(6,1,1)] as Array[Vector3i])
 		var army := moving_army(state,1,[6,1] as Array[int])
-		var expected: bool = control == 1
+		var expected := true
 		var field := Pathfinding.dijkstra_field(state,0,0,false,false,1)
 		check(is_finite(float(field.dist[1])) == expected,"formal route oracle for control %d" % control)
-		check(state._campaign_has_live_route(army,1) == expected,"live route follows road control %d" % control)
-		check(MilitaryReachability.contact(state,[0],[1],[0,1]) == expected,"projected contact follows road control %d" % control)
+		check(state._campaign_has_live_route(army,1) == expected,"live route ignores rural road control %d" % control)
+		check(MilitaryReachability.contact(state,[0],[1],[0,1]) == expected,"projected contact ignores rural road control %d" % control)
 		if expected:
 			var context := state.campaign_defense_context(1,1,state.war_id_between(0,1))
 			check(context.incoming and not context.invaded and context.enemy_manpower==0,"legal attack route creates warning without inventing arrived enemy troops")
 			state.cities[5].owner_nation=2; state.cities[6].owner_nation=3
-			check(state._campaign_has_live_route(army,1) and MilitaryReachability.contact(state,[0],[1],[0,1]),"foreign traffic display ownership does not override lawful road control")
+			check(state._campaign_has_live_route(army,1) and MilitaryReachability.contact(state,[0],[1],[0,1]),"foreign traffic display ownership does not block a public road")
 			state.edge_of(5,6).max_manpower = 0
 			check(not state._campaign_has_live_route(army,1),"closed road invalidates live route")
 			check(not MilitaryReachability.contact(state,[0],[1],[0,1]),"closed road cannot create projected contact")
-	var allied := Access._fixture([Vector3i(0,5,0),Vector3i(5,6,2),Vector3i(6,1,1)] as Array[Vector3i])
+	var allied := Access._fixture([Vector3i(0,5,0),Vector3i(5,2,2),Vector3i(2,6,2),Vector3i(6,1,1)] as Array[Vector3i])
 	allied.set_diplomatic_relation(0,2,GameState.DiplomaticRelation.ALLIED)
 	check(MilitaryReachability.contact(allied,[0],[1],[0,1]),"ordinary ally provides lawful projected transit")
-	check(not MilitaryReachability.contact(allied,[0],[1,2],[0,1,2]),"projected opponent cannot borrow old allied transit")
+	check(MilitaryReachability.planned_entries(allied, 1, 0, [0], [0,1,2], MilitaryReachability.planned_reachable(allied,0,[0],[0,1,2])).is_empty(),"projected opponent cannot borrow old allied transit")
 	var corridor := Access._fixture([Vector3i(0,5,0),Vector3i(5,6,1),Vector3i(6,7,2),Vector3i(7,8,1),Vector3i(8,1,1)] as Array[Vector3i])
 	corridor.set_diplomatic_relation(0,2,GameState.DiplomaticRelation.ALLIED)
 	check(is_finite(float(Pathfinding.dijkstra_field(corridor,0,0,false,false,1).dist[1])),"formal route can cross an allied road between final-goal jurisdiction segments")

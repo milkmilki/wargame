@@ -86,7 +86,7 @@ static func capital_hops(state: GameState, nation_id: int) -> Dictionary:
 
 
 ## 0/1 shortest paths over the actual shared road graph. Do not use the one
-## preselected strategic route: a closed/foreign segment may have an own detour.
+## preselected strategic route: a closed road or foreign city may have an own detour.
 ## Two queues process zero-cost traffic within a level before next-level towns;
 ## this avoids a heap and never counts jurisdiction splits as extra cities.
 static func _atlas_capital_hops(
@@ -112,9 +112,6 @@ static func _atlas_capital_hops(
 				if distance[neighbor] >= 0 and distance[neighbor] <= candidate: continue
 				var edge := state.edge_of(node, neighbor)
 				if edge == null or edge.max_manpower <= 0: continue
-				var control := edge.control_city_id
-				if control < 0 or control >= state.cities.size(): continue
-				if state.cities[control].is_traffic or state.cities[control].owner_nation != nation_id: continue
 				distance[neighbor] = candidate
 				if candidate == level: current.append(neighbor)
 				else: next.append(neighbor)

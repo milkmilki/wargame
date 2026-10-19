@@ -80,8 +80,8 @@ func _oracle(edges: Array, modes: int) -> Dictionary:
 	var result := {"enabled": PackedByteArray(), "controls": PackedInt32Array(), "path": PackedFloat64Array(), "danger": PackedFloat64Array(), "supply": PackedFloat64Array(), "travel": PackedFloat64Array()}
 	for edge: Edge in edges:
 		result.enabled.append(1 if edge.max_manpower > 0 else 0)
-		# This oracle fixture configures one node. Invalid jurisdiction has the
-		# same inaccessible meaning as GameState.atlas_edge_access's bound check.
+		# This oracle fixture configures one node. Invalid jurisdiction is
+		# normalized in metadata; runtime public-road access ignores that label.
 		result.controls.append(edge.control_city_id if edge.control_city_id == 0 else -1)
 		if modes & 1:
 			result.path.append(Pathfinding._edge_transport_distance(edge, 0))

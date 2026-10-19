@@ -16,6 +16,8 @@ func run() -> void:
 	var started := Time.get_ticks_usec()
 	payload.network=Builder.build(payload.data.mesh,payload.data.environment,payload.data.regions,payload.hierarchy)
 	var roads_ms := (Time.get_ticks_usec()-started)/1000.
+	check(payload.network.model=="atlas-zhoufu-roads-v1" and not payload.network.has("jurisdiction_repair"),"uses original sparse road construction without general border repair")
+	check(payload.network.slots==original.network.slots,"original cached v1 physical road slots remain byte-for-byte identical")
 	payload.graph=Traffic.build(payload.data.mesh,payload.hierarchy,payload.network)
 	preload("res://scripts/atlas/road_geometry.gd").apply(payload.graph,payload.raster,payload.district_pixels)
 	payload.settlement_adjacency=MilitaryMap.settlement_adjacency(payload.graph,payload.hierarchy.cities.size())
@@ -24,34 +26,20 @@ func run() -> void:
 	check(state.world_seed==1 and state.map_models.settlement_mask==preload("res://scripts/atlas/settlement_mask.gd").EURASIA,"reported seed and actual Eurasia mask")
 	check(state.cities[172].name=="博尔忽" and state.cities[461].name=="泰兀","regression identifies the original Borokhul state and prefecture")
 	check(MilitaryReachability.prewar_entries(state,25,461,{}).has(379),"Guanggu has a lawful prewar entry into Taiwu")
-	# New land links can change the trade partition. Query the reported goal
-	# explicitly rather than assuming its old Leiden community is unchanged.
-	state.nations[25].strategic_region_anchor_city_id=172
+	check(payload.graph.edges.size()==original.graph.edges.size(),"no new physical segments or junctions")
 	check(RegionalStrategy.allows_objective(state,25,172),"Borokhul remains an allowed regional objective")
 	var objective := DiplomacyAI.select_war_objective(state,25,30,{})
 	check(int(objective.get("city_id",-1))==172,"ordinary AI can select Borokhul without a ruler exception")
+	verify_borokhul_dispatch(payload)
 	var definition:=MapDefinition.from_state(state)
 	var validation:=MapDefinition.validate(definition)
-	check(validation.is_empty(),"repaired physical graph validates as a version-nine template: "+validation)
+	check(validation.is_empty(),"original physical graph validates as a version-nine template: "+validation)
 	if validation.is_empty():
 		var restored:=GameState.new();restored.generate_from_map_definition(definition)
-		check(MilitaryReachability.prewar_entries(restored,25,461,{}).has(379),"template roundtrip preserves the repaired entry")
-	check(hash(original)==source_hash,"building repaired roads leaves cached inputs unchanged")
-	var added_borders:={}
-	for connection in payload.network.connections:
-		if not connection.get("jurisdiction_entry",false):continue
-		var a: int=payload.hierarchy.center_by_city[connection.a]
-		var b: int=payload.hierarchy.center_by_city[connection.b]
-		if a==b:continue
-		var pair:=Vector2i(mini(a,b),maxi(a,b))
-		check(not added_borders.has(pair),"each neighboring state pair needs at most one added entry")
-		added_borders[pair]=true
-	var extra_cost := Builder.costs(payload.data.mesh,payload.data.environment)
-	var slot_hash := hash(payload.network.slots)
-	var second := Builder.ensure_jurisdiction_entries(payload.data.mesh,payload.hierarchy,payload.network,extra_cost)
-	check(second.added_connections==0 and hash(payload.network.slots)==slot_hash,"repair is idempotent on the real world")
+		check(MilitaryReachability.prewar_entries(restored,25,461,{}).has(379),"template roundtrip preserves the original road and its lawful entry")
+	check(hash(original)==source_hash,"rebuilding original roads leaves cached inputs unchanged")
 	var reverse_goal := -1
-	for adjacent in state.territorial_border_neighbors(461):
+	for adjacent in state.strategic_neighbors(461):
 		if state.cities[adjacent].owner_nation==25 and MilitaryReachability.prewar_entries(state,30,adjacent,{}).has(461):
 			reverse_goal=adjacent;break
 	check(reverse_goal>=0,"Borokhul has a lawful counterattack entry into its actual neighboring enemy jurisdiction")
@@ -83,7 +71,27 @@ func run() -> void:
 		for _leg in range(battle_state.cities.size()):
 			if not army.on_edge:break
 			army.move_progress=1.;sim._arrive_at_node(army)
-		check(battle_state.battles.any(func(b):return b.city!=null and b.city.id==direction.z and (b.side_a.has(army) or b.side_b.has(army))),"real army traverses the repaired road and starts combat at the target")
+		check(battle_state.battles.any(func(b):return b.city!=null and b.city.id==direction.z and (b.side_a.has(army) or b.side_b.has(army))),"real army traverses the original road and starts combat at the target")
+		check(Pathfinding._attack_supply_links(battle_state,direction.z,direction.z,direction.x,{}).has(direction.y),"the original attack road also connects its real rear supply corridor")
+		var retreat:=Pathfinding.dijkstra_field(battle_state,direction.z,direction.x,false,false,-1)
+		check(is_finite(float(retreat.dist[direction.y])),"original road supports withdrawal across the same rural jurisdictions")
 		sim.free()
-	print("JURISDICTION_WORLD checks=",checks," failures=",failures," roads_ms=",roads_ms," repair=",payload.network.jurisdiction_repair," physical_segments=",original.graph.edges.size(),"->",payload.graph.edges.size())
+	print("JURISDICTION_WORLD checks=",checks," failures=",failures," roads_ms=",roads_ms," physical_segments=",original.graph.edges.size(),"->",payload.graph.edges.size())
 	quit(1 if failures else 0)
+
+func verify_borokhul_dispatch(payload:Dictionary) -> void:
+	var state:=GameState.new();state.generate_from_atlas(payload)
+	state.set_diplomatic_relation(25,30,GameState.DiplomaticRelation.WAR)
+	state.set_war_objective(25,30,172,"original Borokhul road regression")
+	var front:=state.create_campaign_front(state.war_id_between(25,30),[25] as Array[int],25,CoalitionCampaignFront.Mode.OFFENSE,172)
+	var count:=0
+	for army in state.armies:
+		if army.owner_nation!=25:continue
+		army.location_city=379;army.move_from=379
+		army.campaign_front_id=front.front_id;army.campaign_war_id=front.war_id
+		front.army_assignments[army.id]=172;count+=1
+	var sim:=Simulation.new();sim.setup(state)
+	check(count>0 and sim._campaign_entry_fu(25,172,[25] as Array[int])==461,"Borokhul planner chooses Taiwu on the original road as its entry")
+	sim._manage_administrative_campaign(front)
+	check(state.armies.any(func(a):return a.owner_nation==25 and a.on_edge and a.ai_action==ActionCandidate.Kind.ATTACK and a.ai_target_city==461),"real campaign controller immediately dispatches rallied forces toward Taiwu")
+	sim.free()

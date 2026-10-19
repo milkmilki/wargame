@@ -46,11 +46,17 @@ gives you structural context (callers, dependents, test coverage) that file sear
 
 ### Workflow
 
-1. The graph auto-updates on file changes (via hooks).
+1. Explicitly update the graph before review; do not assume hooks have succeeded.
 2. Use `detect_changes_tool` for code review.
 3. Use `get_affected_flows_tool` to understand impact.
 4. Use `query_graph_tool` pattern="tests_for" to check coverage.
 <!-- /code-review-graph MCP tools -->
+
+## 代码图谱提交约定
+
+每次提交都必须更新代码图谱，文档和配置提交也不例外。提交前对当前工作区调用 `build_or_update_graph_tool`（明确传入本仓库 `repo_root`），再进行图谱审查和源码核对；不要仅依赖 Git 钩子。
+提交成功后再次增量更新，并用 `list_graph_stats_tool` 核对 `_graph.built_at_sha` 等于当前 `HEAD`、`head_matches_build=true`。图谱更新失败时先修复或明确报告失败，不得宣称已同步或直接继续推送。
+交给用户指定的“代码推送者”对话时，必须一并传达这项要求；提交方执行更新，交接方复核最终提交的图谱状态。图谱只维护当前索引，不额外保存历史图谱、版本副本或性能证据归档。
 
 ## 性能优化场景约定
 

@@ -23,11 +23,20 @@ func _init() -> void:
 	check(state.enfeoff_region_closure(0,[2] as Array[int])==[2],"ownerless junction keeps home city connected without bloating fief")
 	check(state.cities[4].owner_nation==-1,"junction remains politically ownerless")
 	rear.control_city_id=2
-	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"road crossing granted jurisdiction really cuts the home city")
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[2],"public road through granted jurisdiction preserves retained city access")
 	rear.control_city_id=3
-	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"foreign road cannot preserve direct administration")
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[2],"foreign rural jurisdiction does not block a public road")
 	rear.control_city_id=-1
-	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"unassigned Atlas road cannot provide administrative access")
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[2],"public road requires no rural controller")
+	state.cities[4].node_kind=City.NodeKind.SETTLEMENT;state.cities[4].politically_active=true
+	state.cities[4].owner_nation=1
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"an actual foreign city still cuts direct administration")
+	state.set_diplomatic_relation(0,1,GameState.DiplomaticRelation.ALLIED)
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"allied cities grant military access but cannot bridge direct administration")
+	state.cities[4].owner_nation=0
+	check(state.enfeoff_region_closure(0,[2] as Array[int])==[2],"a retained own city restores direct administrative access")
+	check(state.enfeoff_region_closure(0,[2,4] as Array[int])==[1,2,4],"granting the actual transit city includes the disconnected rear city")
+	state.cities[4].node_kind=City.NodeKind.TRAFFIC;state.cities[4].politically_active=false;state.cities[4].owner_nation=-1
 	rear.control_city_id=1;rear.max_manpower=0
 	check(state.enfeoff_region_closure(0,[2] as Array[int])==[1,2],"blocked-capacity road still creates a real enclave")
 	rear.max_manpower=15000;state.atlas_layout.clear()

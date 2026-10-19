@@ -53,8 +53,8 @@ func fixture(allied: bool, local_food: int = 0, cut_route: bool = false, rear_fo
 	state.set_diplomatic_relation(0, 2, GameState.DiplomaticRelation.ALLIED)
 	state.set_diplomatic_relation(1, 2, GameState.DiplomaticRelation.WAR)
 	if cut_route:
-		# A real hostile road separates both friendly warehouses from the city.
-		state.edge_of(3, 4).control_city_id = 2
+		# A closed road separates both friendly warehouses from the city.
+		state.edge_of(3, 4).max_manpower = 0
 	var defender := Army.new()
 	defender.id = 41
 	defender.owner_nation = 2 if allied else 0

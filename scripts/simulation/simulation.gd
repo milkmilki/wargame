@@ -2873,7 +2873,7 @@ func _supply_relevant_blocked_edges(nation_id: int, enemy_edges: Dictionary) -> 
 	var relevant := {}
 	for key in enemy_edges:
 		var edge: Edge = state.edge_lookup.get(key)
-		if edge != null and edge.max_manpower > 0 and state.atlas_edge_access(edge,nation_id,-1,true):
+		if edge != null and edge.max_manpower > 0 and state.atlas_node_access(edge.city_a, nation_id, true) and state.atlas_node_access(edge.city_b, nation_id, true):
 			relevant[key] = true
 	return relevant
 
@@ -10937,10 +10937,10 @@ func _campaign_entry_fu(
 	var candidates := _zhou_enemy_fu_targets(
 		nation_id, center_city_id, attacker_bloc, true
 	)
-	if candidates.is_empty():
-		candidates = _zhou_enemy_fu_targets(
-			nation_id, center_city_id, attacker_bloc, false
-		)
+	# Geographic frontage is a preference. A road can enter a non-border fu
+	# while every apparent border fu is blocked by an inaccessible city.
+	for candidate in _zhou_enemy_fu_targets(nation_id,center_city_id,attacker_bloc,false):
+		if not candidates.has(candidate):candidates.append(candidate)
 	for candidate in candidates:
 		if not _campaign_staging_cities(nation_id, candidate).is_empty():
 			_coalition_campaign_query_cache[key] = candidate
@@ -11104,6 +11104,8 @@ func _manage_campaign_fu_raids(
 	frontier_targets = _reachable_campaign_fu_targets(
 		nation_id, plan, frontier_targets
 	)
+	if frontier_targets.is_empty():
+		frontier_targets = _reachable_campaign_fu_targets(nation_id,plan,all_enemy_targets)
 	if frontier_targets.is_empty():
 		return _manage_blocked_campaign_fu(
 			nation_id, plan, alive_by_id, cleanup
@@ -12687,7 +12689,7 @@ func _begin_next_leg(army: Army) -> void:
 	_wake_defense_for_army(army, next_city)
 	var edge := state.edge_of(from_city, next_city)
 	if not state.atlas_layout.is_empty() and not state.cities[from_city].is_traffic: army.route_origin_city_id = from_city
-	if not state.atlas_layout.is_empty() and edge!=null and not army.diplomatic_repatriation and not state.atlas_edge_access(edge,army.owner_nation,army.path[-1],false,army.route_origin_city_id):
+	if not state.atlas_layout.is_empty() and edge!=null and not army.diplomatic_repatriation and not state.atlas_movement_node_access(next_city,army.owner_nation,army.path[-1]):
 		army.path.clear()
 		if state.cities[from_city].is_traffic:
 			army.path = Pathfinding.strategic_retreat_city(state,army)

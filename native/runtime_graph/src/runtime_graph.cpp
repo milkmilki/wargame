@@ -591,7 +591,7 @@ Dictionary NativeGraphSnapshot::query_administrative_fields(const Array &cities,
     std::vector<int64_t> owners(nodes);
     std::vector<uint8_t> traffic(nodes);
     const StringName owner_name("owner_nation"), kind_name("node_kind");
-    const StringName capacity_name("max_manpower"), control_name("control_city_id");
+    const StringName capacity_name("max_manpower");
     for (int64_t i = 0; i < nodes; ++i) {
         const Variant entry = cities[i];
         Object *city = entry.get_type() == Variant::OBJECT ? static_cast<Object *>(entry) : nullptr;
@@ -606,8 +606,7 @@ Dictionary NativeGraphSnapshot::query_administrative_fields(const Array &cities,
     // live graph also observes direct edits without relying on road revisions.
     std::vector<int64_t> row_offsets{0};
     std::vector<int32_t> row_targets;
-    std::vector<int64_t> control_owners;
-    std::unordered_map<Object *, int64_t> edge_controls;
+    std::unordered_map<Object *, bool> open_edges;
     for (int64_t from = 0; from < nodes; ++from) {
         const Variant neighbors_value = adjacency.get(from, Array());
         if (neighbors_value.get_type() != Variant::ARRAY)
@@ -623,19 +622,15 @@ Dictionary NativeGraphSnapshot::query_administrative_fields(const Array &cities,
             if (entry.get_type() == Variant::NIL) continue;
             Object *edge = entry.get_type() == Variant::OBJECT ? static_cast<Object *>(entry) : nullptr;
             if (!edge) return error_result("Nonobject administrative road.");
-            auto cached = edge_controls.find(edge);
-            if (cached == edge_controls.end()) {
-                const Variant capacity = edge->get(capacity_name), control = edge->get(control_name);
-                if (capacity.get_type() != Variant::INT || control.get_type() != Variant::INT)
-                    return error_result("Administrative road capacity and control must be integers.");
-                const int64_t control_id = int64_t(control);
-                const int64_t owner = int64_t(capacity) > 0 && control_id >= 0 && control_id < nodes
-                        && !traffic[control_id] ? owners[control_id] : -1;
-                cached = edge_controls.emplace(edge, owner).first;
+            auto cached = open_edges.find(edge);
+            if (cached == open_edges.end()) {
+                const Variant capacity = edge->get(capacity_name);
+                if (capacity.get_type() != Variant::INT)
+                    return error_result("Administrative road capacity must be an integer.");
+                cached = open_edges.emplace(edge, int64_t(capacity) > 0).first;
             }
-            if (cached->second < 0) continue;
+            if (!cached->second) continue;
             row_targets.push_back(int32_t(to));
-            control_owners.push_back(cached->second);
         }
         row_offsets.push_back(row_targets.size());
     }
@@ -657,7 +652,7 @@ Dictionary NativeGraphSnapshot::query_administrative_fields(const Array &cities,
                     if (!traffic[node]) field[node] = level;
                     for (int64_t arc = row_offsets[node]; arc < row_offsets[node + 1]; ++arc) {
                         const int32_t neighbor = row_targets[arc];
-                        if (control_owners[arc] != nation || (!traffic[neighbor] && owners[neighbor] != nation)) continue;
+                        if (!traffic[neighbor] && owners[neighbor] != nation) continue;
                         const int32_t candidate = level + (traffic[neighbor] ? 0 : 1);
                         if (distance[neighbor] >= 0 && distance[neighbor] <= candidate) continue;
                         distance[neighbor] = candidate;
