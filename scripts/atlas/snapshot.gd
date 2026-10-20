@@ -34,6 +34,8 @@ static func validate(payload: Variant) -> String:
 	for field in ["temperature","biome","seaIce"]:
 		if not NativeMap.numeric_array(data.environment.get(field)) or data.environment[field].size()!=n: return "环境字段无效："+field
 	if not is_finite(float(data.environment.get("maxElevation",NAN))): return "缺少最高高程"
+	var water_error:=validate_surface_water(data.environment,n)
+	if not water_error.is_empty():return water_error
 	for field in ["annual_precipitation","seasonal_precipitation","agricultural_potential","climate_suitability","potential_evaporation","aridity_index","growing_months"]:
 		if not data.environment.has(field): continue
 		if not NativeMap.numeric_array(data.environment[field]) or data.environment[field].size()!=n: return "气候字段维度无效："+field
@@ -107,6 +109,28 @@ static func validate(payload: Variant) -> String:
 		if int(nation.get("seat",-1))<0 or nation.seat>=count: return "国家治所越界"
 		for value in nation.color:
 			if not is_finite(float(value)) or value<0 or value>255: return "国家颜色越界"
+	return ""
+
+static func validate_surface_water(environment:Dictionary,n:int) -> String:
+	var scalars:=["forest_cover","annual_evaporation","annual_runoff","surface_water_error"]
+	var quarters:=["soil_moisture","surface_evaporation","surface_runoff","surface_potential_evaporation"]
+	var present:=false
+	for key in scalars+quarters:
+		if environment.has(key):present=true
+	if not present:return "" # Historical templates predate the root-zone model.
+	for key in scalars:
+		if not NativeMap.numeric_array(environment.get(key)) or environment[key].size()!=n:return "地表水字段维度无效："+key
+		for value in environment[key]:
+			if not is_finite(float(value)):return "地表水字段数值无效："+key
+			if key=="surface_water_error":
+				if absf(value)>.01:return "地表水收支不闭合"
+			elif value<0 or (key=="forest_cover" and value>1.):return "地表水字段超出范围："+key
+	for key in quarters:
+		if not environment.get(key) is Array or environment[key].size()!=4:return "地表水季节数量无效："+key
+		for values in environment[key]:
+			if not NativeMap.numeric_array(values) or values.size()!=n:return "地表水季节维度无效："+key
+			for value in values:
+				if not is_finite(float(value)) or value<0 or (key=="soil_moisture" and value>300.01):return "地表水季节数值无效："+key
 	return ""
 
 static func save_file(path: String,payload: Dictionary) -> String:

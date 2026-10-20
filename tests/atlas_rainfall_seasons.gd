@@ -1,5 +1,6 @@
 extends SceneTree
-const Model = preload("res://scripts/atlas/seasonal_circulation.gd")
+## Historical v5 seasonal regression; v6 observations are checked independently.
+const Model = preload("res://scripts/atlas/seasonal_circulation_v5.gd")
 const Adapter = preload("res://scripts/atlas/circulation_rainfall.gd")
 const Earth = preload("res://scripts/atlas/earth_surface.gd")
 var failures := 0

@@ -49,7 +49,7 @@ static func farming_potential(temperature: float,annual_mm: float,warm_quarter_m
 	return 110.*seasonal_suitability(temperatures,rain,25.).factor
 
 static func seed_radius(suitability: float) -> float:
-	return clampf(pow(13./(suitability+1.),.65),.55,2.3)
+	return clampf(pow(13./(suitability+1.),.65),.60,2.3)
 
 static func fields(mesh: Dictionary,env: Dictionary) -> Dictionary:
 	var result := PackedFloat32Array(); result.resize(mesh.n)

@@ -56,6 +56,17 @@ static func moisture_biome(t: float,rain: float,pet: float,water: int,ice: float
 	if aridity<.5 and original in [8,9,10,13,14]: return 7 if t<18. else 12
 	return original
 
+static func forest_biome(t:float,original:int,cover:float,dry_support:float) -> int:
+	if original<=4 or t< -2.:return original
+	if cover<.25 and original in [9,10,13,14]:return 8 if t<18. else 12
+	if original==14 and dry_support<.5:return 13
+	if original==10 and dry_support<.5:return 9
+	if cover>.55:
+		if original==8:return 9
+		if original==12:return 13
+		if original==6 and t<5.:return 5
+	return original
+
 static func generate(options: Dictionary = {},progress: Callable = Callable()) -> Dictionary:
 	var params := DEFAULTS.duplicate(); params.merge(options,true)
 	if params.get("terrain_model","planet")=="earth": return generate_earth(params,progress)
@@ -167,25 +178,27 @@ static func generate_earth(params: Dictionary,progress: Callable) -> Dictionary:
 		elif water[i]==2: level[i] = elevation[i]
 		else: maximum = maxf(maximum,elevation[i])
 	if progress.is_valid(): progress.call("地球气候、洋流与海冰（模型计算）")
-	var currents := Currents.build(mesh,water)
-	var climate := Climate.build(mesh,elevation,water,params,currents,Climate.base(mesh,geo,int(params.seed)))
 	var rainfall_model: String = params.get("rainfall_model",Circulation.VERSION); params.rainfall_model = rainfall_model
-	var default_settlement := SettlementClimate.VERSION if rainfall_model==Circulation.VERSION else FrozenSettlementClimate.VERSION if rainfall_model in ["seasonal_circulation_v4","seasonal_circulation_v3"] else "climate_capacity_v2" if rainfall_model=="seasonal_circulation_v2" else "atlas_original"
+	var currents := Currents.build(mesh,water)
+	var default_settlement := SettlementClimate.VERSION if rainfall_model in [Circulation.VERSION,"seasonal_circulation_v5"] else FrozenSettlementClimate.VERSION if rainfall_model in ["seasonal_circulation_v4","seasonal_circulation_v3"] else "climate_capacity_v2" if rainfall_model=="seasonal_circulation_v2" else "atlas_original"
 	params.settlement_model = params.get("settlement_model",default_settlement)
 	if params.settlement_model not in [SettlementClimate.VERSION,TwoSeasonBaseline.VERSION,FrozenSettlementClimate.VERSION,PreviousSettlementClimate.VERSION,"climate_capacity_v2","atlas_original"]: return {"error":"不支持的城市布局模型："+str(params.settlement_model)}
 	var rain_detail := {}
 	if rainfall_model==Monsoon.VERSION:
 		if progress.is_valid(): progress.call("复用季风模型：海洋水汽输送与高山雨影")
 		rain_detail = Monsoon.build(surface,mesh,float(params.rainfall)); params.rainfall_transport = rain_detail.metadata
-		for i in range(n):
-			if water[i]==0: climate.precipitation[i] = rain_detail.precipitation[i]
-	elif rainfall_model in [Circulation.VERSION,"seasonal_circulation_v4","seasonal_circulation_v3","seasonal_circulation_v2"]:
+	elif rainfall_model in [Circulation.VERSION,"seasonal_circulation_v5","seasonal_circulation_v4","seasonal_circulation_v3","seasonal_circulation_v2"]:
 		if progress.is_valid(): progress.call("季节大气环流：辐合雨带、陆海季风与西风水汽")
-		rain_detail = Circulation.build(surface,mesh,float(params.rainfall),currents,water,rainfall_model); params.rainfall_transport = rain_detail.metadata
-		for i in range(n):
-			if water[i]==0: climate.precipitation[i] = rain_detail.precipitation[i]
-		climate.windX = rain_detail.windX; climate.windY = rain_detail.windY
+		rain_detail = Circulation.build(surface,mesh,float(params.rainfall),currents,water,rainfall_model,float(params.temperature)); params.rainfall_transport = rain_detail.metadata
 	elif rainfall_model!="atlas_original": return {"error":"不支持的降雨模型："+rainfall_model}
+	if rain_detail.has("marine_temperature_anomaly"):
+		for i in range(n):
+			if water[i]==1:currents.sst[i]=rain_detail.marine_temperature_anomaly[i]
+	var climate := Climate.build(mesh,elevation,water,params,currents,Climate.base(mesh,geo,int(params.seed)))
+	if not rain_detail.is_empty():
+		for i in range(n):
+			if water[i]==0:climate.precipitation[i]=rain_detail.precipitation[i]
+		if rain_detail.has("windX"):climate.windX=rain_detail.windX;climate.windY=rain_detail.windY
 	var ice := Ice.build(mesh,elevation,water,climate.temperature,climate.windX,climate.windY,int(params.seed))
 	if progress.is_valid(): progress.call("真实地形排水与环境供水")
 	# Drainage fills depressions for flow only. It does not re-erode the DEM,
@@ -197,17 +210,21 @@ static func generate_earth(params: Dictionary,progress: Callable) -> Dictionary:
 	for i in range(n):
 		# Nonuniform coastal cells contribute by physical area, rather than each
 		# tiny support cell inventing another full coarse cell's freshwater.
-		if land[i]: runoff[i] = maxf(.03,(climate.precipitation[i]-.45*(250+22*maxf(0,climate.temperature[i])))/1000.)*mesh.areas[i]*runoff_area_scale
+		if land[i]:
+			var depth:float=rain_detail.annual_runoff[i]/1000. if rain_detail.has("annual_runoff") else maxf(.03,(climate.precipitation[i]-.45*(250+22*maxf(0,climate.temperature[i])))/1000.)
+			runoff[i]=depth*mesh.areas[i]*runoff_area_scale
 		biomes[i] = biome(climate.temperature[i],climate.precipitation[i],water[i],ice[i])
 	var result := {"params":params,"width":mesh.width,"height":mesh.height,"mesh":mesh,"elevation":elevation,"water":water,
 		"waterLevel":level,"temperature":climate.temperature,"precipitation":climate.precipitation,"seaIce":ice,"currents":currents,
 		"biome":biomes,"flux":Erosion.accumulate(route,land,runoff),"riverThreshold":14.*base_samples/36000.,"rivers":[],"volcanoes":[],"maxElevation":maximum}
 	if not rain_detail.is_empty():
+		for key in ["forest_cover","annual_evaporation","annual_runoff","surface_water_error","soil_moisture","surface_evaporation","surface_runoff","surface_potential_evaporation","surface_water_metadata"]:
+			if rain_detail.has(key):result[key]=rain_detail[key]
 		result.annual_precipitation = rain_detail.annual_precipitation; result.seasonal_precipitation = rain_detail.seasonal_precipitation
 		if rain_detail.has("quarter_precipitation"):
 			result.quarter_precipitation = rain_detail.quarter_precipitation; result.seasonal_winds = rain_detail.seasonal_winds
 			result.windX = rain_detail.windX; result.windY = rain_detail.windY
-	if rainfall_model in [Circulation.VERSION,"seasonal_circulation_v4","seasonal_circulation_v3"]:
+	if rainfall_model in [Circulation.VERSION,"seasonal_circulation_v5","seasonal_circulation_v4","seasonal_circulation_v3"]:
 		# The v3 diagnostics keep biome assignment independent of city scoring.
 		var biome_fields := PreviousSettlementClimate.fields(mesh,result)
 		var climate_fields := biome_fields
@@ -227,5 +244,13 @@ static func generate_earth(params: Dictionary,progress: Callable) -> Dictionary:
 			params.climate_water_balance = PreviousSettlementClimate.METADATA.duplicate()
 			result.merge(climate_fields,true)
 		for i in range(n): biomes[i] = moisture_biome(climate.temperature[i],climate.precipitation[i],biome_fields.potential_evaporation[i],water[i],ice[i])
+		if result.has("forest_cover"):
+			for i in range(n):
+				if water[i]!=0:continue
+				var dry_support:=1.
+				for q in range(4):
+					var demand:float=result.surface_potential_evaporation[q][i]
+					if demand>20.:dry_support=minf(dry_support,result.surface_evaporation[q][i]/demand)
+				biomes[i]=forest_biome(climate.temperature[i],biomes[i],result.forest_cover[i],dry_support)
 		result.biome = biomes
 	return result

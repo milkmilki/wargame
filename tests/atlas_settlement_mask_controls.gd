@@ -14,6 +14,7 @@ func _initialize(): call_deferred("run")
 func run():
 	var scene := (load("res://atlas_military.tscn") as PackedScene).instantiate()
 	check(scene.settlement_mask==Mask.EURASIA,"formal scene uses the user-selected Eurasia rectangle")
+	check(scene.rainfall_model=="seasonal_circulation_v6","formal scene defaults to the atmosphere and finite-root-zone model")
 	scene.free()
 	var view := View.new(); root.add_child(view)
 	var controls=view.mask_controls

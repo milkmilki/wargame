@@ -28,7 +28,7 @@ func _initialize() -> void:
 	var start := Time.get_ticks_msec(); var failures := 0
 	var data: Dictionary = FileAccess.open(Source,FileAccess.READ).get_var(false).data
 	var old: Dictionary = data.environment
-	var env := World.generate({"seed":1,"terrain_model":"earth","settlement_model":Climate.VERSION},func(stage): print("RAIN_V5_STAGE ",stage))
+	var env := World.generate({"seed":1,"terrain_model":"earth","rainfall_model":"seasonal_circulation_v5","settlement_model":Climate.VERSION},func(stage): print("RAIN_V5_STAGE ",stage))
 	if env.has("error"): push_error(env.error); quit(1); return
 	if env.params.rainfall_model!="seasonal_circulation_v5" or env.params.settlement_model!=Climate.VERSION: failures += 1
 	for key in ["xyz","triangles","x","y","adj","areas"]:

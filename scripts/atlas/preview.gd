@@ -46,11 +46,11 @@ var weak_mask := PackedByteArray()
 const REFERENCE := "res://.dbg/atlas-native-reference/"
 const SYMBOL_PAD := 192
 @export_enum("planet","earth") var terrain_model: String = "planet"
-@export_enum("seasonal_circulation_v5","seasonal_circulation_v4","seasonal_circulation_v3","seasonal_circulation_v2","legacy_monsoon_global_v1","atlas_original") var rainfall_model: String = "seasonal_circulation_v5"
+@export_enum("seasonal_circulation_v6","seasonal_circulation_v5","seasonal_circulation_v4","seasonal_circulation_v3","seasonal_circulation_v2","legacy_monsoon_global_v1","atlas_original") var rainfall_model: String = "seasonal_circulation_v6"
 @export var settlement_mask: Dictionary = {} # Missing policy keeps legacy global generation.
 var mask_controls: Control
 var settlement_model: String = "" # Empty selects the rainfall model's default.
-const RAIN_MODELS := ["seasonal_circulation_v5","seasonal_circulation_v4","seasonal_circulation_v3","seasonal_circulation_v2","legacy_monsoon_global_v1","atlas_original"]
+const RAIN_MODELS := ["seasonal_circulation_v6","seasonal_circulation_v5","seasonal_circulation_v4","seasonal_circulation_v3","seasonal_circulation_v2","legacy_monsoon_global_v1","atlas_original"]
 var data: Dictionary = {}
 var display: Dictionary = {}
 var raster: Dictionary = {}
@@ -205,7 +205,8 @@ func make_ui() -> void:
 	button(row,"原生重建城市和道路",rebuild_roads)
 	var rain_row := HBoxContainer.new(); hud.add_child(rain_row)
 	var rain_label := Label.new(); rain_label.text = "地球降雨"; rain_row.add_child(rain_label)
-	rain_control.add_item("环流与内陆水汽 v5",0); rain_control.add_item("旧季节环流 v4（对照）",1); rain_control.add_item("旧季节环流 v3（对照）",2); rain_control.add_item("旧季节环流 v2（对照）",3); rain_control.add_item("旧季风湿润支持（对照）",4); rain_control.add_item("原版气候（对照）",5); rain_row.add_child(rain_control)
+	for label in ["环流、森林与蓄水 v6","旧环流与内陆水汽 v5（对照）","旧季节环流 v4（对照）","旧季节环流 v3（对照）","旧季节环流 v2（对照）","旧季风湿润支持（对照）","原版气候（对照）"]: rain_control.add_item(label)
+	rain_row.add_child(rain_control)
 	rain_control.item_selected.connect(func(index):
 		if generating: sync_rain_control(); return
 		rainfall_model = RAIN_MODELS[index]; settlement_model = ""
@@ -252,7 +253,7 @@ func stage_update(stage: String) -> void:
 
 func load_preset(model_name: String) -> void:
 	if generating: return
-	if model_name=="earth" and terrain_model!="earth": rainfall_model = "seasonal_circulation_v5"; settlement_model = ""
+	if model_name=="earth" and terrain_model!="earth": rainfall_model = "seasonal_circulation_v6"; settlement_model = ""
 	terrain_model = model_name
 	await load_native(int(seed_control.value))
 

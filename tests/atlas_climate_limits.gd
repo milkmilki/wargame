@@ -37,8 +37,11 @@ func _initialize() -> void:
 	var neutral := Circulation.zeros(n); var cold := neutral.duplicate(); cold.fill(-6.)
 	for y in range(size.y):
 		for x in range(24): land[y*size.x+x] = 0
-	var warm: Dictionary = Circulation.build_fields(height,land,size,{"spinup_steps":60,"sea_temperature_anomaly":neutral})
-	var cool: Dictionary = Circulation.build_fields(height,land,size,{"spinup_steps":60,"sea_temperature_anomaly":cold})
+	# This experiment prescribes fixed warm/cold boundaries. Disable the new
+	# interactive ocean response so downwelling does not warm the cold control.
+	var warm: Dictionary = Circulation.build_fields(height,land,size,{"spinup_steps":60,"sea_temperature_anomaly":neutral,"wind_upwelling":false})
+	var cool: Dictionary = Circulation.build_fields(height,land,size,{"spinup_steps":60,"sea_temperature_anomaly":cold,"wind_upwelling":false})
+	check(cool.sea_temperature_anomaly[0]==cold,"fixed SST experiment retains its prescribed cold boundary")
 	var warm_sum := 0.; var cool_sum := 0.
 	for y in range(20,24):
 		for x in range(24,29): warm_sum += warm.annual[y*size.x+x]; cool_sum += cool.annual[y*size.x+x]

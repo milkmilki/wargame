@@ -1,0 +1,374 @@
+{
+  "source_url": "https://psl.noaa.gov/thredds/fileServer/Datasets/gpcp/precip.mon.ltm.1991-2020.nc",
+  "source_sha256": "e72475e6687f1a6f940ce89e6645b80c241a47515b03e56d0009d3aa0cf6281c",
+  "version": "GPCP v2.3",
+  "period": "1991-2020",
+  "resolution_degrees": 2.5,
+  "units": "mm; calendar-day-weighted quarterly totals",
+  "comparison": "bilinear 1 degree reference; common source land mask, cosine latitude area weights; no observed rainfall in runtime",
+  "regions": {
+    "Amazon": {
+      "bounds_west_east_south_north": [
+        -75,
+        -50,
+        -10,
+        5
+      ],
+      "annual_mm": 2481.1402263700343,
+      "quarter_mm": [
+        699.6552909628044,
+        838.7769357872704,
+        468.4939891726742,
+        474.2140104472853
+      ]
+    },
+    "Congo": {
+      "bounds_west_east_south_north": [
+        15,
+        30,
+        -5,
+        5
+      ],
+      "annual_mm": 1728.4711069656134,
+      "quarter_mm": [
+        339.05058946873993,
+        475.46506833028167,
+        348.1459619600039,
+        565.8094872065881
+      ]
+    },
+    "MaritimeSEA": {
+      "bounds_west_east_south_north": [
+        95,
+        140,
+        -10,
+        10
+      ],
+      "annual_mm": 2675.5116896679688,
+      "quarter_mm": [
+        767.0831935418043,
+        722.1528130856036,
+        529.0171745137368,
+        657.2585085268239
+      ]
+    },
+    "Sahara": {
+      "bounds_west_east_south_north": [
+        -10,
+        30,
+        20,
+        30
+      ],
+      "annual_mm": 39.90137974206383,
+      "quarter_mm": [
+        11.140474972241478,
+        7.296260082177206,
+        9.858774261774037,
+        11.605870425871109
+      ]
+    },
+    "Arabia": {
+      "bounds_west_east_south_north": [
+        40,
+        55,
+        18,
+        30
+      ],
+      "annual_mm": 104.68531382569726,
+      "quarter_mm": [
+        40.36004827197642,
+        39.138763644379104,
+        6.415692411667803,
+        18.770809497673945
+      ]
+    },
+    "Gobi": {
+      "bounds_west_east_south_north": [
+        95,
+        110,
+        38,
+        47
+      ],
+      "annual_mm": 157.04895511622584,
+      "quarter_mm": [
+        6.240681595862018,
+        23.998346978429907,
+        98.66862210472041,
+        28.14130443721352
+      ]
+    },
+    "CentralAsia": {
+      "bounds_west_east_south_north": [
+        55,
+        85,
+        38,
+        48
+      ],
+      "annual_mm": 282.9478543796108,
+      "quarter_mm": [
+        79.33005765916623,
+        92.7803729705147,
+        56.66702252081623,
+        54.17040122911368
+      ]
+    },
+    "AustraliaInterior": {
+      "bounds_west_east_south_north": [
+        120,
+        140,
+        -30,
+        -20
+      ],
+      "annual_mm": 302.12904299807224,
+      "quarter_mm": [
+        156.86806516998996,
+        65.02227914257182,
+        31.168859842795907,
+        49.069838842714546
+      ]
+    },
+    "Atacama": {
+      "bounds_west_east_south_north": [
+        -72,
+        -68,
+        -28,
+        -18
+      ],
+      "annual_mm": 129.56275438492216,
+      "quarter_mm": [
+        64.23192538835386,
+        32.22825085038726,
+        16.238476606311764,
+        16.864101539869285
+      ]
+    },
+    "WesternEurope": {
+      "bounds_west_east_south_north": [
+        -10,
+        10,
+        45,
+        58
+      ],
+      "annual_mm": 1073.3334792277628,
+      "quarter_mm": [
+        305.7125755366487,
+        228.8418539892954,
+        244.80790917268325,
+        293.9711405291354
+      ]
+    },
+    "Mediterranean": {
+      "bounds_west_east_south_north": [
+        -10,
+        30,
+        35,
+        43
+      ],
+      "annual_mm": 710.0977704031727,
+      "quarter_mm": [
+        234.08963480681288,
+        181.52440257243254,
+        79.84792216164054,
+        214.6358108622868
+      ]
+    },
+    "EasternUS": {
+      "bounds_west_east_south_north": [
+        -95,
+        -75,
+        30,
+        45
+      ],
+      "annual_mm": 1276.3766526648324,
+      "quarter_mm": [
+        296.31159085072386,
+        337.70761114611497,
+        355.03668175163716,
+        287.32076891635654
+      ]
+    },
+    "India": {
+      "bounds_west_east_south_north": [
+        72,
+        88,
+        10,
+        28
+      ],
+      "annual_mm": 1159.9079321180811,
+      "quarter_mm": [
+        33.224873428455126,
+        87.8953884005726,
+        737.8833089421922,
+        300.9043613468613
+      ]
+    },
+    "SouthChina": {
+      "bounds_west_east_south_north": [
+        105,
+        122,
+        22,
+        34
+      ],
+      "annual_mm": 1430.6788568266056,
+      "quarter_mm": [
+        144.13486789039388,
+        413.7185414880951,
+        626.3541045112291,
+        246.4713429368875
+      ]
+    },
+    "NorthChina": {
+      "bounds_west_east_south_north": [
+        110,
+        122,
+        34,
+        42
+      ],
+      "annual_mm": 594.2372281792011,
+      "quarter_mm": [
+        28.287782293347604,
+        95.26680753494563,
+        355.2243360025812,
+        115.45830234832673
+      ]
+    },
+    "Japan": {
+      "bounds_west_east_south_north": [
+        130,
+        145,
+        30,
+        45
+      ],
+      "annual_mm": 1461.3871302402063,
+      "quarter_mm": [
+        240.53891686377125,
+        311.4912147297964,
+        514.1324044823258,
+        395.22459416431275
+      ]
+    },
+    "PacificNW": {
+      "bounds_west_east_south_north": [
+        -126,
+        -120,
+        42,
+        52
+      ],
+      "annual_mm": 1197.843123293352,
+      "quarter_mm": [
+        477.41049062329984,
+        272.03211656333303,
+        112.61973616115922,
+        335.7807799455601
+      ]
+    },
+    "Patagonia": {
+      "bounds_west_east_south_north": [
+        -74,
+        -65,
+        -50,
+        -40
+      ],
+      "annual_mm": 708.2562116726459,
+      "quarter_mm": [
+        114.97976618092555,
+        188.12854700081235,
+        254.8107328101287,
+        150.33716568077944
+      ]
+    },
+    "Siberia": {
+      "bounds_west_east_south_north": [
+        80,
+        130,
+        55,
+        65
+      ],
+      "annual_mm": 529.0682551143916,
+      "quarter_mm": [
+        79.52729303726431,
+        98.13897242637532,
+        202.83994283531814,
+        148.56204681543383
+      ]
+    },
+    "Eurasia": {
+      "bounds_west_east_south_north": [
+        -15,
+        145,
+        20,
+        55
+      ],
+      "annual_mm": 535.7102340871988,
+      "quarter_mm": [
+        85.73234462701494,
+        116.36060733413325,
+        216.13484192398712,
+        117.48244020206353
+      ]
+    },
+    "EastAfrica": {
+      "bounds_west_east_south_north": [
+        30,
+        50,
+        -10,
+        12
+      ],
+      "annual_mm": 796.1160847848678,
+      "quarter_mm": [
+        148.64837207328432,
+        257.4464117932642,
+        187.68248421705871,
+        202.33881670126055
+      ]
+    },
+    "EquatorialEastAfrica": {
+      "bounds_west_east_south_north": [
+        35,
+        42,
+        -5,
+        5
+      ],
+      "annual_mm": 620.0426072228558,
+      "quarter_mm": [
+        118.84305730911059,
+        244.336014632767,
+        78.22820126074839,
+        178.63533402022992
+      ]
+    },
+    "HornLowlands": {
+      "bounds_west_east_south_north": [
+        40,
+        51,
+        -2,
+        12
+      ],
+      "annual_mm": 379.77549523122144,
+      "quarter_mm": [
+        30.514569194870514,
+        153.38142160814206,
+        55.32881214080286,
+        140.55069228740598
+      ],
+      "max_elevation_m": 800
+    }
+  },
+  "grid_reference": {
+    "file": "res://tests/fixtures/atlas_climate_gpcp_quarters.f32",
+    "size": [
+      144,
+      72
+    ],
+    "north_center": 88.75,
+    "west_center": 1.25,
+    "cell_degrees": 2.5,
+    "quarter_units": "mm totals",
+    "sha256": "b31a8869ae375f486c843d1d5f9fc46ac21f8f97ae0053e729cb4359b16cf2da"
+  },
+  "baseline_model": "seasonal_circulation_v5 at 1c30cb4; coast mesh seed1",
+  "baseline_region_annual_mae_mm": 1337.2347826086957,
+  "baseline_region_quarter_mae_mm": 361.24565217391313,
+  "revision1_global_annual_mae_mm": 489.692085581352,
+  "revision1_global_quarter_mae_mm": 146.76690115674575
+}

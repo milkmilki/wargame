@@ -16,7 +16,7 @@ func _initialize() -> void:
 	# scorer was preserved byte-for-byte; current dispatch files may evolve.
 	for path in ["scripts/atlas/seasonal_circulation.gd","scripts/atlas/climate_settlement.gd"]:
 		var digest := HashingContext.new(); digest.start(HashingContext.HASH_SHA256)
-		var current_path: String = "scripts/atlas/climate_settlement_v5.gd" if path=="scripts/atlas/climate_settlement.gd" else path
+		var current_path: String = "scripts/atlas/climate_settlement_v5.gd" if path=="scripts/atlas/climate_settlement.gd" else "scripts/atlas/seasonal_circulation_v5.gd"
 		digest.update(FileAccess.get_file_as_bytes("res://"+current_path))
 		check(digest.finish().hex_encode()==metadata.sources[path],"diagnostics use outdated source: "+path)
 	print("ATLAS_CLIMATE_V5_CONSISTENCY failures=",failures); quit(1 if failures else 0)

@@ -45,7 +45,7 @@ func load_native(seed_value: int) -> void:
 	var source: String=source_fingerprint()+load("res://scripts/atlas/military_import.gd").source_fingerprint()
 	var cache_options := options.duplicate()
 	if terrain_model=="earth" and not cache_options.has("settlement_model"):
-		cache_options.settlement_model=Generator.World.SettlementClimate.VERSION if rainfall_model=="seasonal_circulation_v5" else "climate_capacity_v4" if rainfall_model in ["seasonal_circulation_v4","seasonal_circulation_v3"] else "climate_capacity_v2" if rainfall_model=="seasonal_circulation_v2" else "atlas_original"
+		cache_options.settlement_model=Generator.World.SettlementClimate.VERSION if rainfall_model in ["seasonal_circulation_v6","seasonal_circulation_v5"] else "climate_capacity_v4" if rainfall_model in ["seasonal_circulation_v4","seasonal_circulation_v3"] else "climate_capacity_v2" if rainfall_model=="seasonal_circulation_v2" else "atlas_original"
 	startup_cache_key=StartupCache.key_for(seed_value,threshold_control.value,cache_options,source) if use_cache else ""
 	begin_log("native_earth" if terrain_model=="earth" else "native",seed_value)
 	status.text="准备地图"; await get_tree().process_frame
