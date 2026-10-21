@@ -22,13 +22,14 @@ func _initialize() -> void:
 	check(logger.begin("res://atlas_military.tscn") == OK, "log opens")
 	logger.world_started(state, {"terrain_model":"earth"}, "native_atlas")
 	logger.world_started(state, {"terrain_model":"earth"}, "template_reload")
-	logger.close(state)
 	var entries: Array = []
 	for line in FileAccess.get_file_as_string(logger.path).split("\n"):
 		if not line.is_empty(): entries.append(JSON.parse_string(line))
 	check(entries[0].scene == "res://atlas_military.tscn" and entries[0].pid == OS.get_process_id(), "actual scene and PID")
 	check(entries[1].seed == state.world_seed and entries[1].world_index == 1 and entries[2].world_index == 2, "actual seed and world counter")
-	check(MapDefinition.validate(JSON.parse_string(FileAccess.get_file_as_string(entries[1].initial_map_template))).is_empty(), "reproducible initial Atlas template")
+	check(not FileAccess.file_exists(entries[1].initial_map_template), "older world template is rotated")
+	check(MapDefinition.validate(JSON.parse_string(FileAccess.get_file_as_string(entries[2].initial_map_template))).is_empty(), "latest initial Atlas template remains reproducible")
 	check(state.rng.state == rng_state, "logging leaves simulation RNG untouched")
+	logger.close(state) # Release retention ownership only after reading this run.
 	print("ATLAS_ENTRY_CONTRACT failures=", failures)
 	quit(1 if failures else 0)

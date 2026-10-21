@@ -104,7 +104,6 @@ var state: GameState
 var simulation: Simulation
 var military_payload: Dictionary = {}
 var overlay: Node2D
-var run_log := DebugRunLog.new()
 var history := PoliticalHistory.new()
 var selected_army := -1
 var command_target := -1

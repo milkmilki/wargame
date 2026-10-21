@@ -79,7 +79,7 @@ var chains: Dictionary = {}
 var province_lines: Array = []
 var default_owners := PackedInt32Array()
 var owner_control := SpinBox.new()
-var log_file: FileAccess
+var run_log := DebugRunLog.new()
 var generating := false
 var generation_index := 0
 var timing: Dictionary = {}
@@ -908,12 +908,12 @@ func export_screenshot() -> void:
 	get_viewport().get_texture().get_image().save_png(path); hud.show(); status.text = "截图："+ProjectSettings.globalize_path(path); log_event("screenshot",{"path":ProjectSettings.globalize_path(path)})
 
 func begin_log(model: String,seed_value: int) -> void:
-	if log_file: log_file.close()
-	var directory := "user://debug_runs/atlas_preview"; DirAccess.make_dir_recursive_absolute(directory)
-	var path := directory+"/atlas-%d-%d-%d.jsonl"%[OS.get_process_id(),Time.get_unix_time_from_system(),generation_index]
-	log_file = FileAccess.open(path,FileAccess.WRITE); active_seed = seed_value; active_model = model; generation_started = Time.get_ticks_msec()
+	if run_log.path.is_empty():
+		var scene: String = scene_file_path if not scene_file_path.is_empty() else get_script().resource_path
+		if run_log.begin(scene) != OK: return
+	active_seed = seed_value; active_model = model; generation_started = Time.get_ticks_msec()
 	log_event("start",{"upstream":"103afd3d998eac6750692a6813bf5aea03521448","godot":Engine.get_version_info(),"base_commit":"9d26b1b1ddbe7736ef62d781c1f01c4c77f8a464","code_commit":current_commit(),"source_fingerprint":source_fingerprint(),"code_version":"atlas-native-port-v1","city_threshold":threshold_control.value})
-	print("ATLAS_PREVIEW_LOG ",ProjectSettings.globalize_path(path))
+	print("ATLAS_PREVIEW_LOG ",ProjectSettings.globalize_path(run_log.path))
 
 static func current_commit() -> String:
 	# Local development metadata only; no shell, network, or simulation dependency.
@@ -943,7 +943,7 @@ static func source_fingerprint() -> String:
 
 func _exit_tree() -> void:
 	if generation_worker!=null and generation_worker.is_started(): generation_worker.wait_to_finish()
-	if log_file: log_file.close()
+	run_log.close(null)
 
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_PREDELETE: return
@@ -956,10 +956,10 @@ func _notification(what: int) -> void:
 			value.free()
 
 func log_event(event: String,extra: Dictionary = {}) -> void:
-	if not log_file: return
+	if run_log.path.is_empty(): return
 	var record := {"event":event,"pid":OS.get_process_id(),"seed":active_seed,"model":active_model,"world_index":generation_index,"scene":scene_file_path if not scene_file_path.is_empty() else "res://atlas_preview.tscn","elapsed_ms":Time.get_ticks_msec()-generation_started}
-	record.merge(extra,true); log_file.store_line(JSON.stringify(record)); log_file.flush()
+	record.merge(extra,true); run_log.record(event,record)
 
 func open_log(model: String,elapsed: int) -> void:
-	if not log_file: begin_log(model,int(data.seed))
+	if run_log.path.is_empty(): begin_log(model,int(data.seed))
 	log_event("ready",{"params":data.params,"options":data.options,"timing":timing,"cells":data.mesh.n,"regions":data.regions.count,"cities":data.cities.size(),"roads":data.roads.size(),"view_ms":elapsed})
